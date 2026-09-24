@@ -120,9 +120,7 @@ class BankAccount(AbstractAccount):
             return AccountStatus(status)
         except ValueError as exc:
             allowed = ", ".join(item.value for item in AccountStatus)
-            raise InvalidOperationError(
-                f"Unknown account status {status!r}; allowed: {allowed}."
-            ) from exc
+            raise InvalidOperationError(f"Unknown account status {status!r}; allowed: {allowed}.") from exc
 
     @staticmethod
     def _resolve_currency(currency: Currency | str) -> Currency:
@@ -132,9 +130,7 @@ class BankAccount(AbstractAccount):
             return Currency(str(currency).upper())
         except ValueError as exc:
             allowed = ", ".join(item.value for item in Currency)
-            raise InvalidOperationError(
-                f"Unsupported currency {currency!r}; allowed: {allowed}."
-            ) from exc
+            raise InvalidOperationError(f"Unsupported currency {currency!r}; allowed: {allowed}.") from exc
 
     def _ensure_operational(self) -> None:
         if self._status is AccountStatus.FROZEN:
@@ -146,9 +142,7 @@ class BankAccount(AbstractAccount):
     def _validate_amount(amount: object) -> Decimal:
         value = to_money(amount)
         if value <= 0:
-            raise InvalidOperationError(
-                f"amount must be greater than zero, got {value}."
-            )
+            raise InvalidOperationError(f"amount must be greater than zero, got {value}.")
         return value
 
     # public API

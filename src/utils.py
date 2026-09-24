@@ -27,13 +27,9 @@ def to_money(value: object, *, field: str = "amount") -> Decimal:
         try:
             money = Decimal(value.strip())
         except InvalidOperation as exc:
-            raise InvalidOperationError(
-                f"{field} must be a numeric string, got {value!r}."
-            ) from exc
+            raise InvalidOperationError(f"{field} must be a numeric string, got {value!r}.") from exc
     else:
-        raise InvalidOperationError(
-            f"{field} must be int, float, Decimal or str, got {type(value).__name__}."
-        )
+        raise InvalidOperationError(f"{field} must be int, float, Decimal or str, got {type(value).__name__}.")
 
     if not money.is_finite():
         raise InvalidOperationError(f"{field} must be a finite number.")

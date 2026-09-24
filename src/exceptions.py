@@ -38,6 +38,4 @@ class InsufficientFundsError(BankError):
     def __init__(self, requested: Decimal, available: Decimal) -> None:
         self.requested = requested
         self.available = available
-        super().__init__(
-            f"Insufficient funds: requested {requested}, available {available}."
-        )
+        super().__init__(f"Insufficient funds: requested {requested}, available {available}.")

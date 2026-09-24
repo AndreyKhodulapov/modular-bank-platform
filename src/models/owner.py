@@ -43,8 +43,7 @@ class Owner:
 
         if not isinstance(self.phone, str) or not self.PHONE_PATTERN.match(self.phone):
             raise InvalidOperationError(
-                f"Invalid phone number: {self.phone!r} "
-                "(expected 10-15 digits with optional leading '+')."
+                f"Invalid phone number: {self.phone!r} (expected 10-15 digits with optional leading '+')."
             )
 
     @staticmethod
