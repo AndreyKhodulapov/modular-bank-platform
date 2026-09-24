@@ -23,9 +23,9 @@ from models import (
     AccountStatus,
     AssetType,
     BankAccount,
+    Client,
     Currency,
     InvestmentAccount,
-    Owner,
     PremiumAccount,
     SavingsAccount,
 )
@@ -49,7 +49,7 @@ def attempt(description: str, action: Callable[[], Decimal], label: str = "balan
         print(f"  [ok]       {description}: {label} {value}")
 
 
-def run_accounts_basic(owner: Owner) -> list[AbstractAccount]:
+def run_accounts_basic(owner: Client) -> list[AbstractAccount]:
     print_stage(1, "Accounts Basic")
 
     print_step(1, "Creating accounts")
@@ -81,7 +81,7 @@ def run_accounts_basic(owner: Owner) -> list[AbstractAccount]:
     return [active, frozen]
 
 
-def run_accounts_advanced(owner: Owner) -> list[AbstractAccount]:
+def run_accounts_advanced(owner: Client) -> list[AbstractAccount]:
     print_stage(2, "Accounts Advanced")
 
     print_step(1, "Savings accounts: minimum balance and monthly interest")
@@ -160,7 +160,7 @@ def print_summary(accounts: list[AbstractAccount]) -> None:
 
 
 def main() -> None:
-    owner = Owner(
+    owner = Client(
         first_name="Ivan",
         last_name="Petrov",
         middle_name="Sergeevich",

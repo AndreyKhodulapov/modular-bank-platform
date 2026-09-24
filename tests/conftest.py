@@ -7,17 +7,17 @@ import pytest
 from models import (
     AccountStatus,
     BankAccount,
+    Client,
     Currency,
     InvestmentAccount,
-    Owner,
     PremiumAccount,
     SavingsAccount,
 )
 
 
 @pytest.fixture
-def owner() -> Owner:
-    return Owner(
+def owner() -> Client:
+    return Client(
         first_name="Anna",
         last_name="Smirnova",
         birth_date=date(1985, 3, 2),
@@ -27,12 +27,12 @@ def owner() -> Owner:
 
 
 @pytest.fixture
-def active_account(owner: Owner) -> BankAccount:
+def active_account(owner: Client) -> BankAccount:
     return BankAccount(owner=owner, currency=Currency.EUR, initial_balance=100)
 
 
 @pytest.fixture
-def frozen_account(owner: Owner) -> BankAccount:
+def frozen_account(owner: Client) -> BankAccount:
     return BankAccount(
         owner=owner,
         currency=Currency.EUR,
@@ -42,7 +42,7 @@ def frozen_account(owner: Owner) -> BankAccount:
 
 
 @pytest.fixture
-def closed_account(owner: Owner) -> BankAccount:
+def closed_account(owner: Client) -> BankAccount:
     return BankAccount(
         owner=owner,
         currency=Currency.EUR,
@@ -51,7 +51,7 @@ def closed_account(owner: Owner) -> BankAccount:
 
 
 @pytest.fixture
-def savings_account(owner: Owner) -> SavingsAccount:
+def savings_account(owner: Client) -> SavingsAccount:
     return SavingsAccount(
         owner=owner,
         currency="RUB",
@@ -62,7 +62,7 @@ def savings_account(owner: Owner) -> SavingsAccount:
 
 
 @pytest.fixture
-def premium_account(owner: Owner) -> PremiumAccount:
+def premium_account(owner: Client) -> PremiumAccount:
     return PremiumAccount(
         owner=owner,
         currency="USD",
@@ -73,5 +73,5 @@ def premium_account(owner: Owner) -> PremiumAccount:
 
 
 @pytest.fixture
-def investment_account(owner: Owner) -> InvestmentAccount:
+def investment_account(owner: Client) -> InvestmentAccount:
     return InvestmentAccount(owner=owner, currency="EUR", initial_balance=1000)

@@ -1,5 +1,6 @@
 """Helper functions shared across the platform."""
 
+import uuid
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Literal
 
@@ -77,3 +78,12 @@ def to_rate(value: object, *, field: str = "rate", allow_negative: bool = False)
     if not -1 <= rate <= 1:
         raise InvalidOperationError(f"{field} must be between -1 and 1, got {rate}.")
     return rate
+
+
+def resolve_identifier(value: str | None, *, field: str = "id") -> str:
+    """Return a stripped identifier, or a new UUID4 string when ``value`` is ``None``."""
+    if value is None:
+        return str(uuid.uuid4())
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidOperationError(f"{field} must be a non-empty string.")
+    return value.strip()

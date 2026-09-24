@@ -62,7 +62,7 @@ def test_rejects_invalid_constructor_input(owner, kwargs):
         BankAccount(owner=owner, **kwargs)
 
 
-def test_rejects_non_owner_instance():
+def test_rejects_owner_that_is_not_a_client():
     with pytest.raises(InvalidOperationError):
         BankAccount(owner="Ivan Petrov", currency="RUB")
 
@@ -140,7 +140,12 @@ def test_get_account_info_returns_serializable_snapshot(owner):
     assert account.get_account_info() == {
         "account_id": "A-1",
         "account_type": "BankAccount",
-        "owner": owner.to_dict(),
+        "owner": {
+            "client_id": owner.client_id,
+            "full_name": "Smirnova Anna",
+            "email": "anna@example.com",
+            "phone": "+79990001122",
+        },
         "status": "active",
         "currency": "KZT",
         "balance": "0.00",

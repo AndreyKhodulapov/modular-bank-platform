@@ -11,6 +11,13 @@ class AccountStatus(Enum):
     CLOSED = "closed"
 
 
+class ClientStatus(Enum):
+    """Access state of a bank client."""
+
+    ACTIVE = "active"
+    BLOCKED = "blocked"
+
+
 class Currency(Enum):
     """Currencies supported by the platform (ISO 4217 codes)."""
 

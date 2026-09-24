@@ -12,8 +12,9 @@ cannot mutate it arbitrarily.
 *In the project:* `AbstractAccount` stores `_balance` and `_status` as
 protected attributes and exposes them through read-only properties. The
 balance can only change via `deposit()` / `withdraw()`, which enforce every
-business rule. `Owner` is a frozen dataclass, so its data cannot be altered
-after creation. `Portfolio.holdings` returns a copy, so the allocation can only
+business rule. `Client` validates its personal data once and exposes it only
+through read-only properties; its status changes only through `block()` /
+`unblock()`, and `account_ids` returns a copy of the internal list. `Portfolio.holdings` returns a copy, so the allocation can only
 change through `add()` / `remove()`, and `InvestmentAccount` never hands out
 its `Portfolio` object at all.
 
@@ -60,7 +61,7 @@ implement the part that differs - how much money is actually available.
 
 - **S - Single Responsibility:** each module owns one concern -
   `exceptions.py` (error types), `utils.py` (money and rate normalisation),
-  `owner.py` (owner data), one module per account type, `portfolio.py`
+  `client.py` (client data and status), one module per account type, `portfolio.py`
   (asset allocation and growth projection, no knowledge of cash or accounts).
 - **O - Open/Closed:** a new account type extends `BankAccount` and overrides
   `withdraw()`, `get_account_info()` and `__str__()`; the shared checks in
@@ -77,7 +78,7 @@ implement the part that differs - how much money is actually available.
   `divest`, `project_yearly_growth`) live only on the classes that need them.
 - **D - Dependency Inversion:** high-level modules depend on abstractions,
   not on concrete implementations. Not applied in the project yet: `BankAccount`
-  depends on the concrete `Owner` class and `main.py` instantiates the concrete
+  depends on the concrete `Client` class and `main.py` instantiates the concrete
   account classes directly.
 
 ## Domain modelling
@@ -86,12 +87,18 @@ Representing business concepts as explicit types with their own invariants,
 instead of passing raw primitives around.
 
 *In the project:* `AccountStatus`, `Currency` and `AssetType` are enums rather
-than free strings; `Owner` and `Portfolio` are dedicated types with validation;
+than free strings; `Client` and `Portfolio` are dedicated types with validation;
 money is `Decimal` normalised by `to_money()` (floats converted through
 `str()` to avoid binary representation artefacts, rounded half-up to two
 decimal places), while rates go through `to_rate()` and keep their precision
 because `0.005` is a legitimate monthly rate. Errors carry structured data
 (`requested`, `available`, `limit`, `account_id`) instead of only text.
+
+The model distinguishes *entities* from *values*. `Client` and the accounts
+are entities: they have an identity (`client_id`, `account_id`) that stays the
+same while their state changes, so two clients with identical personal data
+are still different clients (`__eq__` / `__hash__` compare ids only). Money
+amounts and enum members are values: two equal amounts are interchangeable.
 
 ## Structured logging
 
@@ -108,9 +115,10 @@ functions, explicit dependencies, deterministic behaviour and precise
 exceptions.
 
 *In the project:* `to_money()` and `to_rate()` are pure functions; accounts take
-their collaborators (`Owner`, currency, status, limits, rates) through the
+their collaborators (`Client`, currency, status, limits, rates) through the
 constructor; `Portfolio` is tested on its own without any account; there is no
 clock inside the models, so `apply_monthly_interest()` is called explicitly and
-tests stay deterministic. Tests are split into `tests/unit/` (one module per
+tests stay deterministic; `Client` takes an optional `today` for the age check,
+so the 18th-birthday boundary is tested on fixed dates. Tests are split into `tests/unit/` (one module per
 model or helper) and `tests/integration/` (cross-type scenarios and a smoke
 test of the demo).

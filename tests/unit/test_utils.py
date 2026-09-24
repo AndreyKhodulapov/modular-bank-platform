@@ -1,9 +1,10 @@
+import uuid
 from decimal import Decimal
 
 import pytest
 
 from exceptions import InvalidOperationError
-from utils import to_money, to_rate
+from utils import resolve_identifier, to_money, to_rate
 
 
 @pytest.mark.parametrize(
@@ -78,3 +79,17 @@ def test_to_rate_stays_within_minus_one_and_one(value):
 def test_to_rate_rejects_unsupported_input(value):
     with pytest.raises(InvalidOperationError):
         to_rate(value)
+
+
+def test_resolve_identifier_generates_uuid4_for_none():
+    assert uuid.UUID(resolve_identifier(None)).version == 4
+
+
+def test_resolve_identifier_strips_value():
+    assert resolve_identifier("  ID-1 ") == "ID-1"
+
+
+@pytest.mark.parametrize("value", ["", "   ", 7, b"id"])
+def test_resolve_identifier_rejects_invalid_value(value):
+    with pytest.raises(InvalidOperationError, match="client_id"):
+        resolve_identifier(value, field="client_id")

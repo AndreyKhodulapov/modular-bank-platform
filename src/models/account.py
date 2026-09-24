@@ -1,6 +1,5 @@
 """Bank account models: the abstract base and its first concrete implementation."""
 
-import uuid
 from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any
@@ -12,9 +11,9 @@ from exceptions import (
     InvalidOperationError,
     LimitExceededError,
 )
+from models.client import Client
 from models.enums import AccountStatus, Currency
-from models.owner import Owner
-from utils import to_money
+from utils import resolve_identifier, to_money
 
 
 class AbstractAccount(ABC):
@@ -28,7 +27,7 @@ class AbstractAccount(ABC):
 
     def __init__(
         self,
-        owner: Owner,
+        owner: Client,
         account_id: str,
         status: AccountStatus = AccountStatus.ACTIVE,
     ) -> None:
@@ -42,7 +41,7 @@ class AbstractAccount(ABC):
         return self._account_id
 
     @property
-    def owner(self) -> Owner:
+    def owner(self) -> Client:
         return self._owner
 
     @property
@@ -89,31 +88,23 @@ class BankAccount(AbstractAccount):
 
     def __init__(
         self,
-        owner: Owner,
+        owner: Client,
         currency: Currency | str,
         account_id: str | None = None,
         status: AccountStatus | str = AccountStatus.ACTIVE,
         initial_balance: object = 0,
     ) -> None:
-        if not isinstance(owner, Owner):
-            raise InvalidOperationError("owner must be an Owner instance.")
+        if not isinstance(owner, Client):
+            raise InvalidOperationError("owner must be a Client instance.")
 
         super().__init__(
             owner=owner,
-            account_id=self._resolve_account_id(account_id),
+            account_id=resolve_identifier(account_id, field="account_id"),
             status=self._resolve_status(status),
         )
         self._currency = self._resolve_currency(currency)
 
         self._balance = to_money(initial_balance, field="initial_balance", require="non_negative")
-
-    @staticmethod
-    def _resolve_account_id(account_id: str | None) -> str:
-        if account_id is None:
-            return str(uuid.uuid4())
-        if not isinstance(account_id, str) or not account_id.strip():
-            raise InvalidOperationError("account_id must be a non-empty string.")
-        return account_id.strip()
 
     @staticmethod
     def _resolve_status(status: AccountStatus | str) -> AccountStatus:
@@ -181,7 +172,7 @@ class BankAccount(AbstractAccount):
         return {
             "account_id": self._account_id,
             "account_type": self.account_type,
-            "owner": self._owner.to_dict(),
+            "owner": self._owner.to_summary_dict(),
             "status": self._status.value,
             "currency": self._currency.value,
             "balance": str(self._balance),

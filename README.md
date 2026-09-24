@@ -7,12 +7,15 @@ no database, no external API and no third-party runtime dependency.
 
 ### Accounts Basic
 
-- `AbstractAccount` - abstract base with a unique id, owner, protected balance,
+- `AbstractAccount` - abstract base with a unique id, owner (a `Client`), protected balance,
   status and the abstract operations `deposit`, `withdraw`, `get_account_info`.
 - `BankAccount` - concrete account with input validation, status enforcement,
   automatic UUID4 generation, a `currency` attribute (RUB, USD, EUR, KZT, CNY)
   and per-operation limits `MAX_DEPOSIT` / `MAX_WITHDRAWAL`.
-- `Owner` - immutable, validated owner data with `full_name` and `to_dict()`.
+- `Client` - the account holder: validated personal data (full name, birth
+  date, email, phone) behind read-only properties, a UUID4 `client_id`, an
+  `active` / `blocked` status, the list of account numbers and an age check
+  (at least 18 years old). Clients are equal when their ids are equal.
 - Domain exceptions: `AccountFrozenError`, `AccountClosedError`,
   `InvalidOperationError`, `InsufficientFundsError`, `LimitExceededError`
   (all derive from `BankError`).
@@ -52,7 +55,7 @@ modular-bank-platform/
 │       ├── investment_account.py  # InvestmentAccount
 │       ├── portfolio.py           # Portfolio
 │       ├── enums.py               # AccountStatus, Currency, AssetType
-│       └── owner.py               # Owner
+│       └── client.py              # Client
 ├── tests/
 │   ├── conftest.py         # shared fixtures
 │   ├── unit/               # one module per model or helper
