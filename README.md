@@ -32,7 +32,7 @@ modular-bank-platform/
 │       └── owner.py        # Owner
 ├── tests/
 │   ├── conftest.py         # shared fixtures
-│   ├── unit/               # one module per source module
+│   ├── unit/               # models and helpers in isolation
 │   └── integration/        # end-to-end scenarios, demo script smoke test
 └── docs/
     └── oop_principles.md   # interview-style notes on the OOP concepts used

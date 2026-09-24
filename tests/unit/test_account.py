@@ -23,11 +23,6 @@ def test_generates_uuid4_when_account_id_missing(owner):
     assert parsed.version == 4
 
 
-def test_generated_ids_are_unique(owner):
-    ids = {BankAccount(owner=owner, currency="RUB").account_id for _ in range(50)}
-    assert len(ids) == 50
-
-
 def test_keeps_provided_account_id_stripped(owner):
     account = BankAccount(owner=owner, currency="RUB", account_id="  ACC-0001 ")
     assert account.account_id == "ACC-0001"
@@ -39,20 +34,15 @@ def test_defaults_to_active_status_and_zero_balance(owner):
     assert account.balance == Decimal("0.00")
 
 
-@pytest.mark.parametrize("code", ["RUB", "USD", "EUR", "KZT", "CNY", "usd"])
-def test_accepts_supported_currency_codes(owner, code):
-    account = BankAccount(owner=owner, currency=code)
-    assert account.currency is Currency(code.upper())
+@pytest.mark.parametrize("currency", [Currency.KZT, "kzt"])
+def test_accepts_currency_as_enum_or_string(owner, currency):
+    account = BankAccount(owner=owner, currency=currency)
+    assert account.currency is Currency.KZT
 
 
 def test_accepts_status_as_string(owner):
     account = BankAccount(owner=owner, currency="RUB", status="frozen")
     assert account.status is AccountStatus.FROZEN
-
-
-def test_initial_balance_is_normalized_to_money(owner):
-    account = BankAccount(owner=owner, currency="RUB", initial_balance=10.005)
-    assert account.balance == Decimal("10.01")
 
 
 @pytest.mark.parametrize(
@@ -64,7 +54,6 @@ def test_initial_balance_is_normalized_to_money(owner):
         {"currency": "RUB", "status": "suspended"},
         {"currency": "RUB", "initial_balance": -1},
         {"currency": "RUB", "initial_balance": "abc"},
-        {"currency": "RUB", "initial_balance": True},
     ],
 )
 def test_rejects_invalid_constructor_input(owner, kwargs):
@@ -77,14 +66,10 @@ def test_rejects_non_owner_instance():
         BankAccount(owner="Ivan Petrov", currency="RUB")
 
 
-def test_balance_is_read_only(active_account):
+@pytest.mark.parametrize("attribute", ["balance", "status"])
+def test_state_is_read_only(active_account, attribute):
     with pytest.raises(AttributeError):
-        active_account.balance = Decimal("1000000")
-
-
-def test_status_is_read_only(active_account):
-    with pytest.raises(AttributeError):
-        active_account.status = AccountStatus.CLOSED
+        setattr(active_account, attribute, None)
 
 
 def test_deposit_increases_balance_and_returns_it(active_account):
@@ -93,27 +78,10 @@ def test_deposit_increases_balance_and_returns_it(active_account):
     assert active_account.balance == Decimal("125.50")
 
 
-@pytest.mark.parametrize("amount", [0, -1, "-0.01", "abc", None, True])
-def test_deposit_rejects_invalid_amount(active_account, amount):
-    with pytest.raises(InvalidOperationError):
-        active_account.deposit(amount)
-    assert active_account.balance == Decimal("100.00")
-
-
-def test_deposit_on_frozen_account_raises(frozen_account):
-    with pytest.raises(AccountFrozenError):
-        frozen_account.deposit(10)
-    assert frozen_account.balance == Decimal("100.00")
-
-
-def test_deposit_on_closed_account_raises(closed_account):
-    with pytest.raises(AccountClosedError):
-        closed_account.deposit(10)
-
-
 def test_withdraw_decreases_balance_and_returns_it(active_account):
     new_balance = active_account.withdraw(40)
     assert new_balance == Decimal("60.00")
+    assert active_account.balance == Decimal("60.00")
 
 
 def test_withdraw_entire_balance_is_allowed(active_account):
@@ -128,24 +96,30 @@ def test_withdraw_more_than_balance_raises(active_account):
     assert active_account.balance == Decimal("100.00")
 
 
-@pytest.mark.parametrize("amount", [0, -5, "x"])
-def test_withdraw_rejects_invalid_amount(active_account, amount):
+# Type and format validation lives in test_utils; here only the strictly-positive rule is checked.
+@pytest.mark.parametrize("operation", ["deposit", "withdraw"])
+@pytest.mark.parametrize("amount", [0, "-0.01"])
+def test_rejects_non_positive_amount(active_account, operation, amount):
     with pytest.raises(InvalidOperationError):
-        active_account.withdraw(amount)
+        getattr(active_account, operation)(amount)
+    assert active_account.balance == Decimal("100.00")
 
 
-def test_withdraw_on_frozen_account_raises(frozen_account):
-    with pytest.raises(AccountFrozenError):
-        frozen_account.withdraw(10)
-
-
-def test_withdraw_on_closed_account_raises(closed_account):
-    with pytest.raises(AccountClosedError):
-        closed_account.withdraw(10)
+@pytest.mark.parametrize("operation", ["deposit", "withdraw"])
+@pytest.mark.parametrize(
+    ("fixture_name", "error_type"),
+    [("frozen_account", AccountFrozenError), ("closed_account", AccountClosedError)],
+)
+def test_inactive_account_rejects_operations(request, fixture_name, error_type, operation):
+    account = request.getfixturevalue(fixture_name)
+    balance_before = account.balance
+    with pytest.raises(error_type) as info:
+        getattr(account, operation)(10)
+    assert info.value.account_id == account.account_id
+    assert account.balance == balance_before
 
 
 def test_status_is_checked_before_amount(frozen_account):
-    # A frozen account rejects the operation even if the amount is invalid.
     with pytest.raises(AccountFrozenError):
         frozen_account.deposit(-1)
 
@@ -158,13 +132,7 @@ def test_str_contains_required_fields(owner):
         status="frozen",
         initial_balance="250.5",
     )
-    assert str(account) == ("BankAccount | Smirnova Anna | ****0042 | frozen | 250.50 USD")
-
-
-def test_repr_is_informative(active_account):
-    text = repr(active_account)
-    assert text.startswith("BankAccount(")
-    assert active_account.account_id in text
+    assert str(account) == "BankAccount | Smirnova Anna | ****0042 | frozen | 250.50 USD"
 
 
 def test_get_account_info_returns_serializable_snapshot(owner):

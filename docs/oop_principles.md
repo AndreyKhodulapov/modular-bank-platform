@@ -86,5 +86,5 @@ exceptions.
 *In the project:* `to_money()` is a pure function; `BankAccount` takes its
 collaborators (`Owner`, currency, status) through the constructor; errors
 carry structured data (`requested`, `available`, `account_id`) that tests
-assert on. Tests are split into `tests/unit/` (one module per source module)
+assert on. Tests are split into `tests/unit/` (models and helpers in isolation)
 and `tests/integration/` (end-to-end scenarios and a smoke test of the demo).

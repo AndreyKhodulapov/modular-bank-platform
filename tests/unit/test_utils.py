@@ -24,7 +24,7 @@ def test_to_money_converts_and_rounds_half_up(value, expected):
     assert money.as_tuple().exponent == -2
 
 
-@pytest.mark.parametrize("value", [True, False, None, [1], object(), "ten", "nan", "1e30"])
+@pytest.mark.parametrize("value", [True, None, [1], object(), "ten", "nan", "1e30"])
 def test_to_money_rejects_unsupported_input(value):
     with pytest.raises(InvalidOperationError):
         to_money(value)

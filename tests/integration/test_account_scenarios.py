@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from exceptions import AccountFrozenError, BankError, InsufficientFundsError
+from exceptions import AccountFrozenError, BankError
 from models import AccountStatus, BankAccount, Currency
 
 
@@ -43,27 +43,21 @@ def test_sequence_of_operations_keeps_exact_decimal_balance(owner):
     assert account.balance == Decimal("0.10")
 
 
-def test_failed_operations_never_change_balance(owner):
+def test_every_domain_error_is_a_bank_error_and_keeps_balance(owner):
     account = BankAccount(owner=owner, currency="CNY", initial_balance=50)
+    frozen = BankAccount(owner=owner, currency="CNY", status="frozen", initial_balance=50)
+    closed = BankAccount(owner=owner, currency="CNY", status="closed", initial_balance=50)
     attempts = [
         lambda: account.withdraw(60),
         lambda: account.deposit(-1),
         lambda: account.withdraw("abc"),
+        lambda: frozen.deposit(1),
+        lambda: closed.deposit(1),
     ]
     for attempt in attempts:
         with pytest.raises(BankError):
             attempt()
-    assert account.balance == Decimal("50.00")
-
-
-def test_insufficient_funds_reports_state(owner):
-    account = BankAccount(owner=owner, currency="KZT", initial_balance=10)
-    with pytest.raises(InsufficientFundsError) as info:
-        account.withdraw(10.01)
-    assert (info.value.requested, info.value.available) == (
-        Decimal("10.01"),
-        Decimal("10.00"),
-    )
+    assert (account.balance, frozen.balance, closed.balance) == (Decimal("50.00"),) * 3
 
 
 def test_demo_script_runs_without_errors():
