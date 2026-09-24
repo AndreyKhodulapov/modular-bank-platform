@@ -1,10 +1,12 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
 
 from exceptions import InvalidOperationError
-from utils import resolve_identifier, to_money, to_rate
+from models import AccountStatus, Currency
+from utils import ManualClock, resolve_identifier, to_enum, to_money, to_positive_decimal, to_rate
 
 
 @pytest.mark.parametrize(
@@ -93,3 +95,37 @@ def test_resolve_identifier_strips_value():
 def test_resolve_identifier_rejects_invalid_value(value):
     with pytest.raises(InvalidOperationError, match="client_id"):
         resolve_identifier(value, field="client_id")
+
+
+@pytest.mark.parametrize(
+    ("enum_type", "value", "expected"),
+    [
+        (Currency, Currency.USD, Currency.USD),
+        (Currency, "usd", Currency.USD),
+        (AccountStatus, "FROZEN", AccountStatus.FROZEN),
+    ],
+)
+def test_to_enum_accepts_member_or_value_in_any_case(enum_type, value, expected):
+    assert to_enum(enum_type, value, field="x") is expected
+
+
+def test_to_enum_rejects_unknown_value_and_lists_allowed():
+    with pytest.raises(InvalidOperationError, match="Unsupported currency 'GBP'; allowed: RUB, USD"):
+        to_enum(Currency, "GBP", field="currency")
+
+
+def test_to_positive_decimal_keeps_precision():
+    assert to_positive_decimal("0.1826", field="rate") == Decimal("0.1826")
+
+
+@pytest.mark.parametrize("value", [0, -1, "abc", None])
+def test_to_positive_decimal_rejects_non_positive_or_invalid(value):
+    with pytest.raises(InvalidOperationError):
+        to_positive_decimal(value, field="rate")
+
+
+def test_manual_clock_returns_the_moment_it_was_set_to():
+    clock = ManualClock(datetime(2026, 1, 1, 12, 0))
+    assert clock() == datetime(2026, 1, 1, 12, 0)
+    clock.moment = datetime(2026, 1, 2, 3, 0)
+    assert clock() == datetime(2026, 1, 2, 3, 0)

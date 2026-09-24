@@ -13,7 +13,7 @@ from exceptions import (
 )
 from models.client import Client
 from models.enums import AccountStatus, Currency
-from utils import resolve_identifier, to_money
+from utils import resolve_identifier, to_enum, to_money
 
 
 class AbstractAccount(ABC):
@@ -55,6 +55,37 @@ class AbstractAccount(ABC):
     @property
     def account_type(self) -> str:
         return type(self).__name__
+
+    @property
+    def total_value(self) -> Decimal:
+        """Everything the account is worth; subclasses holding more than cash override it."""
+        return self._balance
+
+    # status transitions: ACTIVE <-> FROZEN, and either of them -> CLOSED (final)
+
+    def freeze(self) -> None:
+        if self._status is not AccountStatus.ACTIVE:
+            raise InvalidOperationError(
+                f"Only an active account can be frozen; {self._account_id} is {self._status.value}."
+            )
+        self._status = AccountStatus.FROZEN
+
+    def unfreeze(self) -> None:
+        if self._status is not AccountStatus.FROZEN:
+            raise InvalidOperationError(
+                f"Only a frozen account can be unfrozen; {self._account_id} is {self._status.value}."
+            )
+        self._status = AccountStatus.ACTIVE
+
+    def close(self) -> None:
+        """Close the account for good; it must hold nothing and owe nothing."""
+        if self._status is AccountStatus.CLOSED:
+            raise InvalidOperationError(f"Account {self._account_id} is already closed.")
+        if self.total_value != 0:
+            raise InvalidOperationError(
+                f"Account {self._account_id} cannot be closed while its total value is {self.total_value}."
+            )
+        self._status = AccountStatus.CLOSED
 
     @abstractmethod
     def deposit(self, amount: object) -> Decimal:
@@ -100,31 +131,11 @@ class BankAccount(AbstractAccount):
         super().__init__(
             owner=owner,
             account_id=resolve_identifier(account_id, field="account_id"),
-            status=self._resolve_status(status),
+            status=to_enum(AccountStatus, status, field="account status"),
         )
-        self._currency = self._resolve_currency(currency)
+        self._currency = to_enum(Currency, currency, field="currency")
 
         self._balance = to_money(initial_balance, field="initial_balance", require="non_negative")
-
-    @staticmethod
-    def _resolve_status(status: AccountStatus | str) -> AccountStatus:
-        if isinstance(status, AccountStatus):
-            return status
-        try:
-            return AccountStatus(str(status).lower())
-        except ValueError as exc:
-            allowed = ", ".join(item.value for item in AccountStatus)
-            raise InvalidOperationError(f"Unknown account status {status!r}; allowed: {allowed}.") from exc
-
-    @staticmethod
-    def _resolve_currency(currency: Currency | str) -> Currency:
-        if isinstance(currency, Currency):
-            return currency
-        try:
-            return Currency(str(currency).upper())
-        except ValueError as exc:
-            allowed = ", ".join(item.value for item in Currency)
-            raise InvalidOperationError(f"Unsupported currency {currency!r}; allowed: {allowed}.") from exc
 
     def _ensure_operational(self) -> None:
         if self._status is AccountStatus.FROZEN:

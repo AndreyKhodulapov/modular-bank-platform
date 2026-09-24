@@ -36,6 +36,33 @@ Three subclasses of `BankAccount`; each overrides `withdraw()`,
   and the portfolio, `withdraw()` never touches invested money, and
   `project_yearly_growth(growth_rates)` estimates one year of growth.
 
+Every account can be frozen, unfrozen and closed (`freeze()`, `unfreeze()`,
+`close()`); closing requires a zero `total_value`, which for an investment
+account includes the portfolio.
+
+### Bank System
+
+- `Bank` - the entry point to the platform. It registers clients with a
+  password, opens accounts of a registered type (`basic`, `savings`,
+  `premium`, `investment`), closes, freezes and unfreezes them, runs deposits
+  and withdrawals, searches accounts by client, status, currency, type and
+  balance range, and reports `get_total_balance()` and
+  `get_clients_ranking()` in roubles.
+- `SecurityGuard` - stores salted password hashes, blocks a client after three
+  failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
+  a log of suspicious activities.
+- `CurrencyConverter` - converts amounts into roubles using fixed reference
+  rates (replaceable by passing another rate table).
+
+Security rules applied by the bank:
+
+| Rule | Behaviour |
+| --- | --- |
+| Login lockout | 3 wrong passwords in a row block the client; `unblock_client()` restores access |
+| Blocked client | cannot open, close or unfreeze accounts or move money |
+| Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw and unblock are refused; login, freeze and queries are allowed |
+| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more |
+
 ## Project structure
 
 ```
@@ -47,21 +74,25 @@ modular-bank-platform/
 ├── src/
 │   ├── main.py             # demonstration script, one function per stage
 │   ├── exceptions.py       # custom exception hierarchy
-│   ├── utils.py            # money and rate conversion helpers
+│   ├── utils.py            # value normalisation helpers, ManualClock
+│   ├── services/
+│   │   ├── bank.py         # Bank (facade over clients, accounts, security)
+│   │   ├── security.py     # SecurityGuard, SuspiciousActivity, SuspicionReason
+│   │   └── currency.py     # CurrencyConverter, reference rates to RUB
 │   └── models/
 │       ├── account.py             # AbstractAccount, BankAccount
 │       ├── savings_account.py     # SavingsAccount
 │       ├── premium_account.py     # PremiumAccount
 │       ├── investment_account.py  # InvestmentAccount
 │       ├── portfolio.py           # Portfolio
-│       ├── enums.py               # AccountStatus, Currency, AssetType
+│       ├── enums.py               # AccountStatus, ClientStatus, Currency, AssetType
 │       └── client.py              # Client
 ├── tests/
 │   ├── conftest.py         # shared fixtures
-│   ├── unit/               # one module per model or helper
-│   └── integration/        # cross-type scenarios, demo script smoke test
+│   ├── unit/               # one module per model, service or helper
+│   └── integration/        # account and bank scenarios, demo smoke test
 └── docs/
-    └── oop_principles.md   # interview-style notes on the OOP concepts used
+    └── oop_principles.md   # interview-style notes on OOP, patterns, security
 ```
 
 ## Setup
@@ -86,6 +117,10 @@ The script runs one stage per feature set and prints a banner before each:
 2. **Accounts Advanced** - savings accounts with interest and a minimum
    balance, premium accounts with overdraft and fee, investment accounts with
    a portfolio and a yearly growth projection.
+3. **Bank System** - three clients (a minor is refused), accounts of every
+   type, a successful login and a lockout after three wrong passwords,
+   freezing, the night window, closing, searches, totals and the ranking in
+   roubles, and the suspicious activity log.
 
 A final summary treats all created accounts through the common interface.
 

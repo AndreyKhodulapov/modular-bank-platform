@@ -73,3 +73,10 @@ def test_str_extends_base_representation(owner):
     assert (
         str(account) == "PremiumAccount | Smirnova Anna | ****0007 | active | 100.00 USD | overdraft 50.00 | fee 5.00"
     )
+
+
+def test_account_in_overdraft_cannot_be_closed(premium_account):
+    premium_account.withdraw(100)
+    assert premium_account.total_value == Decimal("-5.00")
+    with pytest.raises(InvalidOperationError):
+        premium_account.close()

@@ -167,3 +167,45 @@ def test_operation_above_limit_raises_before_funds_check(active_account, operati
     assert info.value.requested == over_limit
     assert info.value.limit == limit
     assert active_account.balance == Decimal("100.00")
+
+
+def test_freeze_and_unfreeze(active_account):
+    active_account.freeze()
+    assert active_account.status is AccountStatus.FROZEN
+    active_account.unfreeze()
+    assert active_account.status is AccountStatus.ACTIVE
+
+
+@pytest.mark.parametrize(
+    ("fixture", "transition"),
+    [
+        ("frozen_account", "freeze"),
+        ("closed_account", "freeze"),
+        ("active_account", "unfreeze"),
+        ("closed_account", "unfreeze"),
+        ("closed_account", "close"),
+    ],
+)
+def test_invalid_status_transition_is_rejected(request, fixture, transition):
+    account = request.getfixturevalue(fixture)
+    status = account.status
+    with pytest.raises(InvalidOperationError):
+        getattr(account, transition)()
+    assert account.status is status
+
+
+@pytest.mark.parametrize("status", ["active", "frozen"])
+def test_empty_account_can_be_closed(owner, status):
+    account = BankAccount(owner=owner, currency="RUB", status=status)
+    account.close()
+    assert account.status is AccountStatus.CLOSED
+
+
+def test_account_with_money_cannot_be_closed(active_account):
+    with pytest.raises(InvalidOperationError, match="total value is 100.00"):
+        active_account.close()
+    assert active_account.status is AccountStatus.ACTIVE
+
+
+def test_total_value_of_regular_account_is_its_balance(active_account):
+    assert active_account.total_value == active_account.balance == Decimal("100.00")

@@ -98,3 +98,8 @@ def test_demo_script_runs_without_errors():
     assert "[ok]       apply monthly interest: interest 150.00" in completed.stdout
     assert "[ok]       withdraw 2_500 USD (goes into overdraft): balance -1505.00" in completed.stdout
     assert "project yearly growth (stocks 10%, bonds 4%, etf 7%): growth 500.00" in completed.stdout
+    assert "STAGE 3: Bank System" in completed.stdout
+    assert "[rejected] register a 16-year-old client: InvalidOperationError" in completed.stdout
+    assert "[rejected] Oleg, wrong password #3: ClientBlockedError" in completed.stdout
+    assert "[rejected] withdraw 5_000 KZT: OperationTimeRestrictedError" in completed.stdout
+    assert "total balance: 1802100.00 RUB" in completed.stdout

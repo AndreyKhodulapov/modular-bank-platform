@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from exceptions import InsufficientFundsError, InvalidOperationError
 from models.enums import AssetType
-from utils import to_money, to_rate
+from utils import to_enum, to_money, to_rate
 
 
 class Portfolio:
@@ -21,13 +21,7 @@ class Portfolio:
 
     @staticmethod
     def resolve_asset_type(asset_type: AssetType | str) -> AssetType:
-        if isinstance(asset_type, AssetType):
-            return asset_type
-        try:
-            return AssetType(str(asset_type).lower())
-        except ValueError as exc:
-            allowed = ", ".join(item.value for item in AssetType)
-            raise InvalidOperationError(f"Unsupported asset type {asset_type!r}; allowed: {allowed}.") from exc
+        return to_enum(AssetType, asset_type, field="asset type")
 
     @property
     def holdings(self) -> dict[AssetType, Decimal]:
