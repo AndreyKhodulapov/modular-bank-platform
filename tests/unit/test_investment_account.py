@@ -92,3 +92,17 @@ def test_str_extends_base_representation(owner):
         str(account)
         == "InvestmentAccount | Smirnova Anna | ****0003 | active | 750.00 EUR | invested 250.00 | total 1000.00"
     )
+
+
+def test_account_with_invested_money_cannot_be_closed(investment_account):
+    investment_account.invest("bonds", 1000)
+    assert investment_account.balance == 0
+    with pytest.raises(InvalidOperationError, match="holds 1000.00 besides cash"):
+        investment_account.close()
+
+
+def test_frozen_account_with_portfolio_is_refused_as_frozen(investment_account):
+    investment_account.invest("bonds", 1000)
+    investment_account.freeze()
+    with pytest.raises(AccountFrozenError):
+        investment_account.close()

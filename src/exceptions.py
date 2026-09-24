@@ -56,3 +56,49 @@ class LimitExceededError(BankError):
         self.requested = requested
         self.limit = limit
         super().__init__(f"Operation limit exceeded: requested {requested}, limit {limit}.")
+
+
+class ClientNotFoundError(BankError):
+    """Raised when the bank has no client with the given id."""
+
+    def __init__(self, client_id: str) -> None:
+        self.client_id = client_id
+        super().__init__(f"Client {client_id} not found.")
+
+
+class AccountNotFoundError(BankError):
+    """Raised when the bank has no account with the given id."""
+
+    def __init__(self, account_id: str) -> None:
+        self.account_id = account_id
+        super().__init__(f"Account {account_id} not found.")
+
+
+class AuthenticationError(BankError):
+    """Raised when a client presents a wrong password.
+
+    ``attempts_left`` tells how many more failures the client may make before
+    being blocked.
+    """
+
+    def __init__(self, client_id: str, attempts_left: int) -> None:
+        self.client_id = client_id
+        self.attempts_left = attempts_left
+        super().__init__(f"Wrong password for client {client_id}; {attempts_left} attempt(s) left before blocking.")
+
+
+class ClientBlockedError(BankError):
+    """Raised when a blocked client tries to log in or to operate."""
+
+    def __init__(self, client_id: str) -> None:
+        self.client_id = client_id
+        super().__init__(f"Client {client_id} is blocked; operation rejected.")
+
+
+class OperationTimeRestrictedError(BankError):
+    """Raised when an operation is attempted inside the restricted night window."""
+
+    def __init__(self, action: str, window: str) -> None:
+        self.action = action
+        self.window = window
+        super().__init__(f"Operation {action!r} is not allowed between {window}.")

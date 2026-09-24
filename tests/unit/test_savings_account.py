@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 
 from exceptions import AccountClosedError, AccountFrozenError, InsufficientFundsError, InvalidOperationError
-from models import SavingsAccount
+from models import AccountStatus, SavingsAccount
 
 
 def test_stores_min_balance_and_rate_as_decimal(savings_account):
@@ -91,3 +91,9 @@ def test_str_extends_base_representation(owner):
         monthly_rate="0.015",
     )
     assert str(account) == "SavingsAccount | Smirnova Anna | ****0001 | active | 1000.00 RUB | min 100.00 | 1.50%/month"
+
+
+def test_closing_pays_out_the_cash_below_min_balance(owner):
+    account = SavingsAccount(owner=owner, currency="RUB", initial_balance=100, min_balance=100)
+    assert account.close() == Decimal("100.00")
+    assert (account.status, account.withdrawable) == (AccountStatus.CLOSED, Decimal("0.00"))

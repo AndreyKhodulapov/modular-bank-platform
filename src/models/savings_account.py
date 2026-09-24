@@ -5,8 +5,8 @@ from typing import Any
 
 from exceptions import InsufficientFundsError, InvalidOperationError
 from models.account import BankAccount
+from models.client import Client
 from models.enums import AccountStatus, Currency
-from models.owner import Owner
 from utils import to_money, to_rate
 
 
@@ -20,7 +20,7 @@ class SavingsAccount(BankAccount):
 
     def __init__(
         self,
-        owner: Owner,
+        owner: Client,
         currency: Currency | str,
         account_id: str | None = None,
         status: AccountStatus | str = AccountStatus.ACTIVE,
@@ -49,8 +49,8 @@ class SavingsAccount(BankAccount):
 
     @property
     def withdrawable(self) -> Decimal:
-        """Amount that can leave the account without breaking ``min_balance``."""
-        return self._balance - self._min_balance
+        """Amount that can leave the account without breaking ``min_balance``, never negative."""
+        return max(self._balance - self._min_balance, Decimal("0.00"))
 
     def apply_monthly_interest(self) -> Decimal:
         """Credit one month of interest and return the credited amount."""

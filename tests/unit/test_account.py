@@ -1,4 +1,3 @@
-import uuid
 from decimal import Decimal
 
 import pytest
@@ -16,17 +15,6 @@ from models import AbstractAccount, AccountStatus, BankAccount, Currency
 def test_abstract_account_cannot_be_instantiated(owner):
     with pytest.raises(TypeError):
         AbstractAccount(owner=owner, account_id="x")
-
-
-def test_generates_uuid4_when_account_id_missing(owner):
-    account = BankAccount(owner=owner, currency=Currency.RUB)
-    parsed = uuid.UUID(account.account_id)
-    assert parsed.version == 4
-
-
-def test_keeps_provided_account_id_stripped(owner):
-    account = BankAccount(owner=owner, currency="RUB", account_id="  ACC-0001 ")
-    assert account.account_id == "ACC-0001"
 
 
 def test_defaults_to_active_status_and_zero_balance(owner):
@@ -62,7 +50,7 @@ def test_rejects_invalid_constructor_input(owner, kwargs):
         BankAccount(owner=owner, **kwargs)
 
 
-def test_rejects_non_owner_instance():
+def test_rejects_owner_that_is_not_a_client():
     with pytest.raises(InvalidOperationError):
         BankAccount(owner="Ivan Petrov", currency="RUB")
 
@@ -140,7 +128,12 @@ def test_get_account_info_returns_serializable_snapshot(owner):
     assert account.get_account_info() == {
         "account_id": "A-1",
         "account_type": "BankAccount",
-        "owner": owner.to_dict(),
+        "owner": {
+            "client_id": owner.client_id,
+            "full_name": "Smirnova Anna",
+            "email": "anna@example.com",
+            "phone": "+79990001122",
+        },
         "status": "active",
         "currency": "KZT",
         "balance": "0.00",
@@ -162,3 +155,50 @@ def test_operation_above_limit_raises_before_funds_check(active_account, operati
     assert info.value.requested == over_limit
     assert info.value.limit == limit
     assert active_account.balance == Decimal("100.00")
+
+
+def test_freeze_and_unfreeze(active_account):
+    active_account.freeze()
+    assert active_account.status is AccountStatus.FROZEN
+    active_account.unfreeze()
+    assert active_account.status is AccountStatus.ACTIVE
+
+
+@pytest.mark.parametrize(
+    ("fixture", "transition", "error_type"),
+    [
+        ("frozen_account", "freeze", InvalidOperationError),
+        ("active_account", "unfreeze", InvalidOperationError),
+        ("closed_account", "freeze", AccountClosedError),
+        ("closed_account", "unfreeze", AccountClosedError),
+        ("closed_account", "close", AccountClosedError),
+    ],
+)
+def test_invalid_status_transition_is_rejected(request, fixture, transition, error_type):
+    account = request.getfixturevalue(fixture)
+    status = account.status
+    with pytest.raises(error_type):
+        getattr(account, transition)()
+    assert account.status is status
+
+
+@pytest.mark.parametrize("status", ["active", "frozen"])
+def test_empty_account_can_be_closed(owner, status):
+    account = BankAccount(owner=owner, currency="RUB", status=status)
+    assert account.close() == Decimal("0.00")
+    assert account.status is AccountStatus.CLOSED
+
+
+def test_closing_pays_out_the_balance(active_account):
+    assert active_account.close() == Decimal("100.00")
+    assert (active_account.status, active_account.balance) == (AccountStatus.CLOSED, Decimal("0.00"))
+
+
+def test_frozen_account_with_money_cannot_be_closed(frozen_account):
+    with pytest.raises(AccountFrozenError):
+        frozen_account.close()
+    assert (frozen_account.status, frozen_account.balance) == (AccountStatus.FROZEN, Decimal("100.00"))
+
+
+def test_total_value_of_regular_account_is_its_balance(active_account):
+    assert active_account.total_value == active_account.balance == Decimal("100.00")

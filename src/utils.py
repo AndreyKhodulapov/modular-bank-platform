@@ -1,6 +1,9 @@
 """Helper functions shared across the platform."""
 
+import uuid
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from enum import Enum
 from typing import Literal
 
 from exceptions import InvalidOperationError
@@ -77,3 +80,47 @@ def to_rate(value: object, *, field: str = "rate", allow_negative: bool = False)
     if not -1 <= rate <= 1:
         raise InvalidOperationError(f"{field} must be between -1 and 1, got {rate}.")
     return rate
+
+
+def resolve_identifier(value: str | None, *, field: str = "id") -> str:
+    """Return a stripped identifier, or a new UUID4 string when ``value`` is ``None``."""
+    if value is None:
+        return str(uuid.uuid4())
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidOperationError(f"{field} must be a non-empty string.")
+    return value.strip()
+
+
+def to_enum[E: Enum](enum_type: type[E], value: E | str, *, field: str) -> E:
+    """Return the ``enum_type`` member for ``value``; strings match member values in any case."""
+    if isinstance(value, enum_type):
+        return value
+    text = str(value).casefold()
+    for member in enum_type:
+        if str(member.value).casefold() == text:
+            return member
+    allowed = ", ".join(str(member.value) for member in enum_type)
+    raise InvalidOperationError(f"Unsupported {field} {value!r}; allowed: {allowed}.")
+
+
+def to_positive_decimal(value: object, *, field: str) -> Decimal:
+    """Convert a numeric input into a ``Decimal`` greater than zero, keeping its precision."""
+    number = _to_decimal(value, field)
+    if number <= 0:
+        raise InvalidOperationError(f"{field} must be greater than zero, got {number}.")
+    return number
+
+
+class ManualClock:
+    """A clock that shows a moment set by hand.
+
+    Anything that asks for the current time accepts a zero-argument callable
+    (``datetime.now`` in production). Passing a ``ManualClock`` instead lets
+    the demo and the tests move time explicitly, e.g. into the night window.
+    """
+
+    def __init__(self, moment: datetime) -> None:
+        self.moment = moment
+
+    def __call__(self) -> datetime:
+        return self.moment

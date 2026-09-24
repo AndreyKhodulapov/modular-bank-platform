@@ -6,8 +6,8 @@ from typing import Any
 
 from exceptions import InsufficientFundsError
 from models.account import BankAccount
+from models.client import Client
 from models.enums import AccountStatus, AssetType, Currency
-from models.owner import Owner
 from models.portfolio import Portfolio
 from utils import to_money
 
@@ -22,7 +22,7 @@ class InvestmentAccount(BankAccount):
 
     def __init__(
         self,
-        owner: Owner,
+        owner: Client,
         currency: Currency | str,
         account_id: str | None = None,
         status: AccountStatus | str = AccountStatus.ACTIVE,

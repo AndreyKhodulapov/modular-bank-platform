@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from exceptions import InsufficientFundsError, InvalidOperationError, LimitExceededError
+from exceptions import AccountFrozenError, InsufficientFundsError, InvalidOperationError, LimitExceededError
 from models import BankAccount, PremiumAccount
 
 
@@ -73,3 +73,17 @@ def test_str_extends_base_representation(owner):
     assert (
         str(account) == "PremiumAccount | Smirnova Anna | ****0007 | active | 100.00 USD | overdraft 50.00 | fee 5.00"
     )
+
+
+def test_account_in_overdraft_cannot_be_closed(premium_account):
+    premium_account.withdraw(100)
+    assert premium_account.total_value == Decimal("-5.00")
+    with pytest.raises(InvalidOperationError, match="owes 5.00"):
+        premium_account.close()
+
+
+def test_frozen_account_in_overdraft_is_refused_as_frozen(premium_account):
+    premium_account.withdraw(100)
+    premium_account.freeze()
+    with pytest.raises(AccountFrozenError):
+        premium_account.close()

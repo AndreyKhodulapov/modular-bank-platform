@@ -11,10 +11,12 @@ accounts it created; the final section treats all of them polymorphically.
 Stages:
 1. Accounts Basic - a regular account, status enforcement, validation.
 2. Accounts Advanced - savings, premium and investment accounts.
+3. Bank System - clients, login lockout, freezing, the night window,
+   search, totals in roubles and the suspicious activity log.
 """
 
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from exceptions import BankError
@@ -23,12 +25,14 @@ from models import (
     AccountStatus,
     AssetType,
     BankAccount,
+    Client,
     Currency,
     InvestmentAccount,
-    Owner,
     PremiumAccount,
     SavingsAccount,
 )
+from services import Bank, SecurityGuard
+from utils import ManualClock
 
 
 def print_stage(number: int, title: str) -> None:
@@ -40,16 +44,17 @@ def print_step(number: int, title: str) -> None:
     print(f"\n{number}. {title}")
 
 
-def attempt(description: str, action: Callable[[], Decimal], label: str = "balance") -> None:
+def attempt(description: str, action: Callable[[], object], label: str | None = "balance") -> None:
     try:
         value = action()
     except BankError as error:
         print(f"  [rejected] {description}: {type(error).__name__}: {error}")
     else:
-        print(f"  [ok]       {description}: {label} {value}")
+        suffix = f": {label} {value}" if label else ""
+        print(f"  [ok]       {description}{suffix}")
 
 
-def run_accounts_basic(owner: Owner) -> list[AbstractAccount]:
+def run_accounts_basic(owner: Client) -> list[AbstractAccount]:
     print_stage(1, "Accounts Basic")
 
     print_step(1, "Creating accounts")
@@ -81,7 +86,7 @@ def run_accounts_basic(owner: Owner) -> list[AbstractAccount]:
     return [active, frozen]
 
 
-def run_accounts_advanced(owner: Owner) -> list[AbstractAccount]:
+def run_accounts_advanced(owner: Client) -> list[AbstractAccount]:
     print_stage(2, "Accounts Advanced")
 
     print_step(1, "Savings accounts: minimum balance and monthly interest")
@@ -147,6 +152,134 @@ def run_accounts_advanced(owner: Owner) -> list[AbstractAccount]:
     return [savings, savings_frozen, premium, premium_no_overdraft, investment, investment_small]
 
 
+def run_bank_system() -> list[AbstractAccount]:
+    print_stage(3, "Bank System")
+    # the bank reads time from this clock, so the demo can step into the night window
+    clock = ManualClock(datetime(2026, 9, 24, 14, 0))
+    bank = Bank(security=SecurityGuard(clock=clock))
+
+    print_step(1, "Registering clients")
+    maria = Client(
+        first_name="Maria",
+        last_name="Volkova",
+        birth_date=date(1988, 11, 3),
+        email="maria.volkova@example.com",
+        phone="+79035550101",
+    )
+    oleg = Client(
+        first_name="Oleg",
+        last_name="Sokolov",
+        middle_name="Igorevich",
+        birth_date=date(1975, 2, 14),
+        email="oleg.sokolov@example.com",
+        phone="+79035550202",
+    )
+    alina = Client(
+        first_name="Alina",
+        last_name="Nurlanova",
+        birth_date=date(2001, 7, 21),
+        email="alina.n@example.kz",
+        phone="+77015550303",
+    )
+    for client, password in ((maria, "maria-pass-1"), (oleg, "oleg-pass-22"), (alina, "alina-pass-333")):
+        bank.add_client(client, password)
+        print(f"  {client}")
+    teenager = {"first_name": "Timur", "last_name": "Volkov", "email": "timur@example.com", "phone": "+79035550404"}
+    attempt(
+        "register a 16-year-old client",
+        lambda: Client(**teenager, birth_date=date(date.today().year - 16, 1, 1)),
+        label=None,
+    )
+
+    print_step(2, "Opening accounts")
+    maria_current = bank.open_account(maria.client_id, currency="RUB", initial_balance=150_000)
+    maria_savings = bank.open_account(
+        maria.client_id, "savings", currency="RUB", initial_balance=300_000, min_balance=50_000, monthly_rate="0.01"
+    )
+    oleg_premium = bank.open_account(
+        oleg.client_id, "premium", currency="USD", initial_balance=6_000, overdraft_limit=1_000, withdrawal_fee=2
+    )
+    oleg_investment = bank.open_account(oleg.client_id, "investment", currency="EUR", initial_balance=2_000)
+    # Bank has no invest(): a direct model call, outside the night window and blocking checks
+    oleg_investment.invest("etf", 1_500)
+    alina_current = bank.open_account(alina.client_id, currency="KZT", initial_balance=400_000)
+    alina_spare = bank.open_account(alina.client_id, currency="CNY")
+    for account in (maria_current, maria_savings, oleg_premium, oleg_investment, alina_current, alina_spare):
+        print(f"  {account}")
+    attempt("open a 'crypto' account", lambda: bank.open_account(maria.client_id, "crypto", currency="RUB"))
+
+    print_step(3, "Authentication and lockout after three failures")
+    attempt("Maria logs in", lambda: bank.authenticate_client(maria.client_id, "maria-pass-1"), label="client")
+    for number in range(1, 4):
+        attempt(
+            f"Oleg, wrong password #{number}",
+            lambda: bank.authenticate_client(oleg.client_id, "guess-123"),
+            label="client",
+        )
+    attempt("Oleg, right password", lambda: bank.authenticate_client(oleg.client_id, "oleg-pass-22"), label="client")
+    attempt("withdraw 100 USD (blocked client)", lambda: bank.withdraw(oleg_premium.account_id, 100))
+    attempt("unknown client logs in", lambda: bank.authenticate_client("no-such-id", "whatever-1"), label="client")
+    attempt("unblock Oleg", lambda: bank.unblock_client(oleg.client_id), label="client")
+    attempt("Oleg, right password", lambda: bank.authenticate_client(oleg.client_id, "oleg-pass-22"), label="client")
+
+    print_step(4, "Freezing and unfreezing")
+    attempt("freeze Maria's current account", lambda: bank.freeze_account(maria_current.account_id), "account")
+    attempt("deposit 1_000 RUB (frozen)", lambda: bank.deposit(maria_current.account_id, 1_000))
+    attempt("unfreeze", lambda: bank.unfreeze_account(maria_current.account_id), "account")
+    attempt("deposit 1_000 RUB", lambda: bank.deposit(maria_current.account_id, 1_000))
+    attempt("deposit 6_000 USD (540_000 RUB, large)", lambda: bank.deposit(oleg_premium.account_id, 6_000))
+
+    print_step(5, "Night window 00:00-05:00")
+    clock.moment = datetime(2026, 9, 25, 2, 30)
+    print(f"  clock: {clock():%Y-%m-%d %H:%M}")
+    attempt("withdraw 5_000 KZT", lambda: bank.withdraw(alina_current.account_id, 5_000))
+    attempt("open a savings account", lambda: bank.open_account(alina.client_id, "savings", currency="KZT"))
+    attempt("freeze Alina's account", lambda: bank.freeze_account(alina_current.account_id), "account")
+    attempt("Alina logs in", lambda: bank.authenticate_client(alina.client_id, "alina-pass-333"), label="client")
+    clock.moment = datetime(2026, 9, 25, 5, 0)
+    print(f"  clock: {clock():%Y-%m-%d %H:%M}")
+    attempt("unfreeze Alina's account", lambda: bank.unfreeze_account(alina_current.account_id), "account")
+    attempt("withdraw 5_000 KZT", lambda: bank.withdraw(alina_current.account_id, 5_000))
+
+    print_step(6, "Closing accounts")
+    attempt(
+        "close Oleg's investment account (money in the portfolio)",
+        lambda: bank.close_account(oleg_investment.account_id),
+    )
+    attempt(
+        "close Maria's savings (min_balance does not hold money back)",
+        lambda: bank.close_account(maria_savings.account_id),
+        "payout",
+    )
+    attempt("close Alina's empty CNY account", lambda: bank.close_account(alina_spare.account_id), "payout")
+    attempt("deposit 10 CNY (closed)", lambda: bank.deposit(alina_spare.account_id, 10))
+
+    print_step(7, "Searching accounts")
+    searches = {
+        "Maria's accounts": {"client_id": maria.client_id},
+        "RUB accounts with balance >= 200_000": {"currency": "RUB", "min_balance": 200_000},
+        "premium accounts": {"account_type": "premium"},
+        "closed accounts": {"status": "closed"},
+    }
+    for title, filters in searches.items():
+        found = bank.search_accounts(**filters)
+        print(f"  {title}: {len(found)}")
+        for account in found:
+            print(f"    {account}")
+
+    print_step(8, f"Totals in {bank.base_currency.value}")
+    print(f"  total balance: {bank.get_total_balance()} {bank.base_currency.value}")
+    for place, (client, total) in enumerate(bank.get_clients_ranking(), start=1):
+        print(f"  {place}. {client.full_name:<28} {total:>14} {bank.base_currency.value}")
+
+    print_step(9, "Suspicious activity log")
+    for activity in bank.suspicious_activities:
+        subject = activity.client_id if activity.client_id else "-"
+        print(f"  {activity.timestamp:%m-%d %H:%M} {activity.reason.value:<27} {subject[:8]:<8} {activity.details}")
+
+    return bank.search_accounts()
+
+
 def print_summary(accounts: list[AbstractAccount]) -> None:
     """Treat every account through the common interface, whatever its type."""
     print(f"\n{' SUMMARY ':=^72}")
@@ -160,7 +293,7 @@ def print_summary(accounts: list[AbstractAccount]) -> None:
 
 
 def main() -> None:
-    owner = Owner(
+    owner = Client(
         first_name="Ivan",
         last_name="Petrov",
         middle_name="Sergeevich",
@@ -168,7 +301,7 @@ def main() -> None:
         email="ivan.petrov@example.com",
         phone="+79161234567",
     )
-    accounts = run_accounts_basic(owner) + run_accounts_advanced(owner)
+    accounts = run_accounts_basic(owner) + run_accounts_advanced(owner) + run_bank_system()
     print_summary(accounts)
 
 
