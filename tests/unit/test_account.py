@@ -8,6 +8,7 @@ from exceptions import (
     AccountFrozenError,
     InsufficientFundsError,
     InvalidOperationError,
+    LimitExceededError,
 )
 from models import AbstractAccount, AccountStatus, BankAccount, Currency
 
@@ -144,3 +145,20 @@ def test_get_account_info_returns_serializable_snapshot(owner):
         "currency": "KZT",
         "balance": "0.00",
     }
+
+
+def test_operation_at_limit_is_allowed(active_account):
+    assert active_account.deposit(BankAccount.MAX_DEPOSIT) == Decimal("1000100.00")
+
+
+@pytest.mark.parametrize(
+    ("operation", "limit"),
+    [("deposit", BankAccount.MAX_DEPOSIT), ("withdraw", BankAccount.MAX_WITHDRAWAL)],
+)
+def test_operation_above_limit_raises_before_funds_check(active_account, operation, limit):
+    over_limit = limit + Decimal("0.01")
+    with pytest.raises(LimitExceededError) as info:
+        getattr(active_account, operation)(over_limit)
+    assert info.value.requested == over_limit
+    assert info.value.limit == limit
+    assert active_account.balance == Decimal("100.00")

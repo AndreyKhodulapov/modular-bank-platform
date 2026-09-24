@@ -33,9 +33,26 @@ class AccountClosedError(BankError):
 
 
 class InsufficientFundsError(BankError):
-    """Raised when a withdrawal exceeds the available balance."""
+    """Raised when a debit exceeds the funds available for it.
 
-    def __init__(self, requested: Decimal, available: Decimal) -> None:
+    ``available`` is the largest amount the same operation would accept.
+    ``hint`` optionally explains why it is smaller than the balance (for
+    example that part of the money is locked in a portfolio).
+    """
+
+    def __init__(self, requested: Decimal, available: Decimal, hint: str | None = None) -> None:
         self.requested = requested
         self.available = available
-        super().__init__(f"Insufficient funds: requested {requested}, available {available}.")
+        message = f"Insufficient funds: requested {requested}, available {available}."
+        if hint:
+            message = f"{message} {hint}"
+        super().__init__(message)
+
+
+class LimitExceededError(BankError):
+    """Raised when a single operation exceeds the per-operation limit of the account."""
+
+    def __init__(self, requested: Decimal, limit: Decimal) -> None:
+        self.requested = requested
+        self.limit = limit
+        super().__init__(f"Operation limit exceeded: requested {requested}, limit {limit}.")

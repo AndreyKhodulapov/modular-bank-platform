@@ -19,3 +19,11 @@ class Currency(Enum):
     EUR = "EUR"
     KZT = "KZT"
     CNY = "CNY"
+
+
+class AssetType(Enum):
+    """Virtual asset classes an investment portfolio can hold."""
+
+    STOCKS = "stocks"
+    BONDS = "bonds"
+    ETF = "etf"
