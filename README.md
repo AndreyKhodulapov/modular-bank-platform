@@ -1,7 +1,6 @@
 # Modular Bank Platform
 
-An object-oriented prototype of a modular banking platform, built step by step
-as part of the ML mentorship OOP homework. All data lives in memory; there is
+An object-oriented prototype of a modular banking platform. All data lives in memory; there is
 no database, no external API and no third-party runtime dependency.
 
 ## Current scope (Day 1)

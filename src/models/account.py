@@ -161,7 +161,7 @@ class BankAccount(AbstractAccount):
             )
         return value
 
-    # --- public API --------------------------------------------------------
+    # public API
 
     @property
     def currency(self) -> Currency:
