@@ -70,7 +70,7 @@ Security rules applied by the bank:
 Known limitations:
 
 - `invest()`, `divest()` and `apply_monthly_interest()` are not part of
-  `Bank` yet and are called on the account itself, so the night window,
+  `Bank` and are called on the account itself, so the night window,
   blocking and the suspicious activity log do not cover them. The bank demo
   invests on Oleg's account this way.
 

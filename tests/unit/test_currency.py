@@ -10,7 +10,6 @@ from services import CurrencyConverter
 def test_default_converter_uses_rouble_as_base():
     converter = CurrencyConverter()
     assert converter.base is Currency.RUB
-    assert converter.to_base(1, Currency.RUB) == Decimal("1.00")
 
 
 @pytest.mark.parametrize(

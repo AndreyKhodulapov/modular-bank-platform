@@ -121,6 +121,8 @@ class Bank:
 
     def authenticate_client(self, client_id: str, password: str) -> Client:
         """Return the client when ``password`` is right; the third failure in a row blocks them."""
+        if not isinstance(password, str):
+            raise InvalidOperationError("password must be a string.")
         client = self._clients.get(client_id)
         if client is None:
             self._security.flag(
@@ -151,12 +153,12 @@ class Bank:
         reserved = sorted(self.RESERVED_ACCOUNT_PARAMS & params.keys())
         if reserved:
             raise InvalidOperationError(f"The bank sets {', '.join(reserved)} of a new account itself.")
-        self._guard("open_account", client)
         try:
             inspect.signature(account_class).bind(owner=client, **params)
         except TypeError as error:
             # an unknown or missing constructor argument, e.g. min_balance for a basic account
             raise InvalidOperationError(f"Invalid parameters for {account_class.__name__}: {error}.") from error
+        self._guard("open_account", client)
         account = account_class(owner=client, **params)
         self._accounts[account.account_id] = account
         client.add_account_id(account.account_id)

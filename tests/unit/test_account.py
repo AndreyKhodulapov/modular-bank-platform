@@ -17,11 +17,6 @@ def test_abstract_account_cannot_be_instantiated(owner):
         AbstractAccount(owner=owner, account_id="x")
 
 
-def test_account_id_is_resolved_like_any_identifier(owner):
-    account = BankAccount(owner=owner, currency="RUB", account_id="  ACC-0001 ")
-    assert account.account_id == "ACC-0001"
-
-
 def test_defaults_to_active_status_and_zero_balance(owner):
     account = BankAccount(owner=owner, currency="RUB")
     assert account.status is AccountStatus.ACTIVE

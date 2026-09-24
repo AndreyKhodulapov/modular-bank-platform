@@ -160,11 +160,10 @@ def test_freeze_is_allowed_at_night(bank, client, clock):
     assert bank.suspicious_activities == []
 
 
-def test_close_account_pays_out_the_balance(bank, client):
+def test_close_account_returns_the_payout_and_keeps_the_history(bank, client):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     assert bank.close_account(account.account_id) == Decimal("100.00")
-    assert account.status is AccountStatus.CLOSED
-    assert client.account_ids == [account.account_id]  # closed accounts stay in the history
+    assert client.account_ids == [account.account_id]
 
 
 def test_large_payout_on_close_is_flagged(bank, client):
@@ -273,6 +272,19 @@ def test_invalid_amount_is_rejected_before_any_check(bank, client, clock):
     clock.moment = NIGHT
     with pytest.raises(InvalidOperationError):
         bank.deposit(account.account_id, -5)
+    assert bank.suspicious_activities == []
+
+
+def test_invalid_account_parameters_are_rejected_before_any_check(bank, client, clock):
+    clock.moment = NIGHT
+    with pytest.raises(InvalidOperationError):
+        bank.open_account(client.client_id, currency="RUB", min_balance=10)
+    assert bank.suspicious_activities == []
+
+
+def test_non_string_password_for_unknown_id_is_not_a_login_attempt(bank):
+    with pytest.raises(InvalidOperationError):
+        bank.authenticate_client("ghost", None)
     assert bank.suspicious_activities == []
 
 

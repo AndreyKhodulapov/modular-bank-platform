@@ -200,7 +200,7 @@ def run_bank_system() -> list[AbstractAccount]:
         oleg.client_id, "premium", currency="USD", initial_balance=6_000, overdraft_limit=1_000, withdrawal_fee=2
     )
     oleg_investment = bank.open_account(oleg.client_id, "investment", currency="EUR", initial_balance=2_000)
-    # Bank has no invest() yet: a direct model call, outside the night window and blocking checks
+    # Bank has no invest(): a direct model call, outside the night window and blocking checks
     oleg_investment.invest("etf", 1_500)
     alina_current = bank.open_account(alina.client_id, currency="KZT", initial_balance=400_000)
     alina_spare = bank.open_account(alina.client_id, currency="CNY")
