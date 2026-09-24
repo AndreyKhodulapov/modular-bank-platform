@@ -83,11 +83,13 @@ class AbstractAccount(ABC):
         """Close the account for good, pay out its cash and return the paid-out amount.
 
         Closing is a settlement, so ``min_balance`` does not hold the cash
-        back. It is refused while the account owes money, holds anything
-        besides cash (``total_value`` above the balance) or is frozen with
-        money on it: a freeze must not be bypassed by closing.
+        back. It is refused while the account is frozen with anything on it
+        (a freeze must not be bypassed by closing), owes money or holds
+        anything besides cash (``total_value`` above the balance).
         """
         self._ensure_not_closed()
+        if self._status is AccountStatus.FROZEN and self.total_value != 0:
+            raise AccountFrozenError(self._account_id)
         if self._balance < 0:
             raise InvalidOperationError(f"Account {self._account_id} cannot be closed while it owes {-self._balance}.")
         if self.total_value != self._balance:
@@ -95,8 +97,6 @@ class AbstractAccount(ABC):
                 f"Account {self._account_id} cannot be closed while it holds "
                 f"{self.total_value - self._balance} besides cash."
             )
-        if self._status is AccountStatus.FROZEN and self._balance > 0:
-            raise AccountFrozenError(self._account_id)
         payout = self._balance
         self._balance = Decimal("0.00")
         self._status = AccountStatus.CLOSED

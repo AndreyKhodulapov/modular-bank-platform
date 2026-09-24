@@ -47,8 +47,7 @@ class SecurityGuard:
 
     - stores password hashes (PBKDF2-HMAC-SHA256 with a random salt), never
       the passwords themselves;
-    - blocks a client after ``MAX_FAILED_ATTEMPTS`` failed logins in a row
-      (the counter itself is kept by ``Client``, next to the status);
+    - blocks a client after ``MAX_FAILED_ATTEMPTS`` failed logins in a row;
     - forbids restricted operations inside ``[NIGHT_START, NIGHT_END)``;
     - keeps an append-only log of suspicious activities.
 

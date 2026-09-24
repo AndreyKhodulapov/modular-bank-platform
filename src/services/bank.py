@@ -82,7 +82,7 @@ class Bank:
 
     @classmethod
     def _resolve_account_class(cls, account_type: str) -> type[BankAccount]:
-        account_class = cls.ACCOUNT_TYPES.get(str(account_type).lower())
+        account_class = cls.ACCOUNT_TYPES.get(account_type.lower())
         if account_class is None:
             allowed = ", ".join(cls.ACCOUNT_TYPES)
             raise InvalidOperationError(f"Unsupported account type {account_type!r}; allowed: {allowed}.")
@@ -208,9 +208,9 @@ class Bank:
     ) -> Decimal:
         self._guard(action, account.owner, account)
         value = to_money(amount, require="positive")
+        before = account.balance
         balance = self._run_on_account(action, account, lambda: operation(value))
-        # only executed operations are reviewed: a rejected one has not moved any money
-        self._review_amount(action, account, value)
+        self._review_amount(action, account, abs(balance - before))
         return balance
 
     def search_accounts(

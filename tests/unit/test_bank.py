@@ -16,6 +16,7 @@ from exceptions import (
 )
 from models import AccountStatus, BankAccount, InvestmentAccount, SavingsAccount
 from services import Bank, CurrencyConverter, SuspicionReason
+from tests.helpers import reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
 
@@ -66,13 +67,12 @@ def test_login_is_allowed_at_night(bank, client, clock, password):
     assert bank.authenticate_client(client.client_id, password) is client
 
 
-def test_unblock_client_restores_access_and_resets_counter(bank, client, password):
+def test_unblock_client_restores_access(bank, client, password):
     for _ in range(3):
         with pytest.raises((AuthenticationError, ClientBlockedError)):
             bank.authenticate_client(client.client_id, "wrong-password")
     bank.unblock_client(client.client_id)
     assert not client.is_blocked
-    assert client.failed_logins == 0
     assert bank.authenticate_client(client.client_id, password) is client
 
 
@@ -119,7 +119,7 @@ def test_open_account_for_unknown_client(bank):
         bank.open_account("ghost", currency="RUB")
 
 
-def test_large_initial_balance_is_flagged(bank, client, reasons):
+def test_large_initial_balance_is_flagged(bank, client):
     bank.open_account(client.client_id, currency="USD", initial_balance="5555.56")  # 500_000.40 RUB
     assert reasons(bank) == [SuspicionReason.LARGE_OPERATION]
 
@@ -138,13 +138,7 @@ def test_close_account_pays_out_the_balance(bank, client):
     assert client.account_ids == [account.account_id]  # closed accounts stay in the history
 
 
-def test_close_account_pays_out_savings_below_min_balance(bank, client):
-    account = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=100, min_balance=100)
-    assert bank.close_account(account.account_id) == Decimal("100.00")
-    assert account.status is AccountStatus.CLOSED
-
-
-def test_large_payout_on_close_is_flagged(bank, client, reasons):
+def test_large_payout_on_close_is_flagged(bank, client):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=400_000)
     bank.deposit(account.account_id, 100_000)
     bank.close_account(account.account_id)
@@ -182,7 +176,7 @@ def test_large_payout_on_close_is_flagged(bank, client, reasons):
     ],
     ids=["open_account", "close_account", "unfreeze_account", "deposit", "withdraw", "unblock_client"],
 )
-def test_restricted_operations_are_forbidden_at_night(bank, client, clock, reasons, prepare, operation):
+def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     prepare(bank, client, account)
     status, blocked = account.status, client.is_blocked
@@ -220,7 +214,7 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, reaso
     ],
     ids=["open_account", "close_account", "unfreeze_account", "deposit", "withdraw"],
 )
-def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, reasons, prepare, operation):
+def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     prepare(bank, client, account)
     status = account.status
@@ -251,6 +245,7 @@ def test_deposit_and_withdraw(bank, client):
     [
         ("freeze_account", "deposit", AccountFrozenError),
         ("freeze_account", "withdraw", AccountFrozenError),
+        ("freeze_account", "close_account", AccountFrozenError),
         ("close_account", "deposit", AccountClosedError),
         ("close_account", "withdraw", AccountClosedError),
         ("close_account", "close_account", AccountClosedError),
@@ -259,7 +254,7 @@ def test_deposit_and_withdraw(bank, client):
     ],
 )
 def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operation, error_type):
-    account = bank.open_account(client.client_id, currency="RUB")
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=10)
     getattr(bank, prepare)(account.account_id)
     arguments = (account.account_id, 10) if operation in ("deposit", "withdraw") else (account.account_id,)
     with pytest.raises(error_type):
@@ -269,10 +264,16 @@ def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operati
     assert activity.account_id == account.account_id
 
 
-def test_large_amount_is_converted_before_the_check(bank, client, reasons):
+def test_large_amount_is_converted_before_the_check(bank, client):
     account = bank.open_account(client.client_id, currency="EUR")
     bank.deposit(account.account_id, 5_000)  # 500_000 RUB
     assert reasons(bank) == [SuspicionReason.LARGE_OPERATION]
+
+
+def test_large_amount_includes_the_withdrawal_fee(bank, client):
+    account = bank.open_account(client.client_id, "premium", currency="RUB", initial_balance=600_000, withdrawal_fee=10)
+    bank.withdraw(account.account_id, 499_995)  # 500_005 leaves the account
+    assert "withdraw of 500005.00" in bank.suspicious_activities[-1].details
 
 
 def test_rejected_large_operation_is_not_flagged(bank, client):

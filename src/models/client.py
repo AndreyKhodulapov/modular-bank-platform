@@ -15,8 +15,8 @@ class Client:
     Personal data is validated once and exposed through read-only properties.
     Only the status, the failed login counter and the list of account numbers
     change over the client's lifetime, and only through dedicated methods.
-    The counter lives next to the status so that unblocking always resets it. Two clients are equal when
-    they share a ``client_id``, not when their personal data coincides.
+    Two clients are equal when they share a ``client_id``, not when their
+    personal data coincides.
     """
 
     MIN_AGE = 18

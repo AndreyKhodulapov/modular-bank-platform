@@ -14,7 +14,7 @@ from models import (
     PremiumAccount,
     SavingsAccount,
 )
-from services import Bank, SecurityGuard, SuspicionReason
+from services import Bank, SecurityGuard
 from utils import ManualClock
 
 
@@ -121,9 +121,3 @@ def password() -> str:
 def client(bank: Bank, owner: Client, password: str) -> Client:
     """``owner`` registered in ``bank`` with ``password``."""
     return bank.add_client(owner, password)
-
-
-@pytest.fixture
-def reasons() -> Callable[[Bank | SecurityGuard], list[SuspicionReason]]:
-    """Reasons of the recorded suspicious activities, in order, of a bank or a guard."""
-    return lambda source: [activity.reason for activity in source.suspicious_activities]

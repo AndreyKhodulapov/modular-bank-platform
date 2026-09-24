@@ -17,7 +17,7 @@ class CurrencyConverter:
     roubles, fixed on purpose because the platform has no market data feed.
     """
 
-    DEFAULT_RATES: dict[Currency | str, str] = {
+    DEFAULT_RATES: dict[Currency, str] = {
         Currency.RUB: "1",
         Currency.USD: "90",
         Currency.EUR: "100",

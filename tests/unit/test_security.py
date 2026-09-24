@@ -5,6 +5,7 @@ import pytest
 
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, OperationTimeRestrictedError
 from services import SecurityGuard, SuspicionReason
+from tests.helpers import reasons
 
 
 @pytest.fixture
@@ -34,7 +35,7 @@ def test_right_password_passes_and_logs_nothing(guard, owner, password):
 
 
 @pytest.mark.parametrize("candidate", ["wrong-password", None, b"correct-horse-1"])
-def test_wrong_password_counts_and_reports_attempts_left(guard, owner, reasons, candidate):
+def test_wrong_password_counts_and_reports_attempts_left(guard, owner, candidate):
     with pytest.raises(AuthenticationError) as info:
         guard.authenticate(owner, candidate)
     assert info.value.attempts_left == 2
@@ -42,7 +43,7 @@ def test_wrong_password_counts_and_reports_attempts_left(guard, owner, reasons, 
     assert reasons(guard) == [SuspicionReason.FAILED_LOGIN]
 
 
-def test_third_failure_blocks_the_client(guard, owner, reasons):
+def test_third_failure_blocks_the_client(guard, owner):
     for _ in range(2):
         with pytest.raises(AuthenticationError):
             guard.authenticate(owner, "wrong-password")
@@ -52,7 +53,7 @@ def test_third_failure_blocks_the_client(guard, owner, reasons):
     assert reasons(guard) == [SuspicionReason.FAILED_LOGIN] * 3 + [SuspicionReason.CLIENT_BLOCKED]
 
 
-def test_blocked_client_is_rejected_even_with_right_password(guard, owner, password, reasons):
+def test_blocked_client_is_rejected_even_with_right_password(guard, owner, password):
     owner.block()
     with pytest.raises(ClientBlockedError):
         guard.authenticate(owner, password)
@@ -96,7 +97,7 @@ def test_unknown_credentials_count_as_wrong_password(security, owner, password):
         (time(5, 0), False),
     ],
 )
-def test_night_window_boundaries(security, clock, reasons, moment, night):
+def test_night_window_boundaries(security, clock, moment, night):
     clock.moment = datetime.combine(clock.moment.date(), moment)
     if night:
         with pytest.raises(OperationTimeRestrictedError):
@@ -119,7 +120,7 @@ def test_ensure_daytime_rejects_and_logs_night_action(security, clock):
     ("amount", "flagged"),
     [(Decimal("499999.99"), False), (Decimal("500000.00"), True)],
 )
-def test_review_amount_flags_from_threshold(security, reasons, amount, flagged):
+def test_review_amount_flags_from_threshold(security, amount, flagged):
     security.review_amount(amount, "deposit", client_id="C", account_id="A")
     assert reasons(security) == ([SuspicionReason.LARGE_OPERATION] if flagged else [])
 

@@ -84,12 +84,12 @@ def test_rejects_invalid_fields(field, value):
     ],
 )
 def test_client_must_be_at_least_18(birth_date, today, accepted):
-    data = {**VALID, "birth_date": birth_date, "today": today}
+    fields = {**VALID, "birth_date": birth_date, "today": today}
     if accepted:
-        assert Client(**data).birth_date == birth_date
+        assert Client(**fields).birth_date == birth_date
     else:
         with pytest.raises(InvalidOperationError, match="at least 18"):
-            Client(**data)
+            Client(**fields)
 
 
 def test_block_and_unblock():

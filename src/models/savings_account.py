@@ -49,8 +49,8 @@ class SavingsAccount(BankAccount):
 
     @property
     def withdrawable(self) -> Decimal:
-        """Amount that can leave the account without breaking ``min_balance``."""
-        return self._balance - self._min_balance
+        """Amount that can leave the account without breaking ``min_balance``; zero once it is closed."""
+        return max(self._balance - self._min_balance, Decimal("0.00"))
 
     def apply_monthly_interest(self) -> Decimal:
         """Credit one month of interest and return the credited amount."""
