@@ -17,7 +17,7 @@ class Owner:
     """
 
     EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
-    PHONE_PATTERN = re.compile(r"\+?\d{10,15}")
+    PHONE_PATTERN = re.compile(r"\+?[0-9]{10,15}")
 
     first_name: str
     last_name: str

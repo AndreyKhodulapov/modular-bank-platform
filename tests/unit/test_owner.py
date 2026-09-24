@@ -64,6 +64,7 @@ def test_owner_is_immutable():
         ("phone", "123"),
         ("phone", "phone"),
         ("phone", "+79161234567\n"),
+        ("phone", "\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669\u0660"),  # Arabic-Indic digits
     ],
 )
 def test_owner_rejects_invalid_fields(field, value):

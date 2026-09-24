@@ -14,7 +14,8 @@ def to_money(value: object, *, field: str = "amount") -> Decimal:
 
     Floats are converted through ``str()`` so that binary representation
     artefacts (``Decimal(0.1) == 0.1000000000000000055...``) never leak into
-    the account balance. The result is rounded half-up to two decimal places.
+    the account balance. The result is rounded half-up to two decimal places;
+    a negative zero produced by rounding (``"-0.004"``) is normalised to ``0.00``.
     """
     if isinstance(value, bool):
         raise InvalidOperationError(f"{field} must be a number, not bool.")
@@ -35,6 +36,6 @@ def to_money(value: object, *, field: str = "amount") -> Decimal:
         raise InvalidOperationError(f"{field} must be a finite number.")
 
     try:
-        return money.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return +money.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except InvalidOperation as exc:
         raise InvalidOperationError(f"{field} is too large: {value!r}.") from exc

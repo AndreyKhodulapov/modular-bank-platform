@@ -16,12 +16,14 @@ from utils import to_money
         (1.005, Decimal("1.01")),
         ("2.345", Decimal("2.35")),
         (-3, Decimal("-3.00")),
+        ("-0", Decimal("0.00")),
+        (-0.004, Decimal("0.00")),
     ],
 )
 def test_to_money_converts_and_rounds_half_up(value, expected):
     money = to_money(value)
     assert money == expected
-    assert money.as_tuple().exponent == -2
+    assert money.as_tuple() == expected.as_tuple()
 
 
 @pytest.mark.parametrize("value", [True, None, [1], object(), "ten", "nan", "1e30"])
