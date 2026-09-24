@@ -39,7 +39,6 @@ def test_sequence_of_operations_keeps_exact_decimal_balance(owner):
         account.deposit(0.1)
     for _ in range(3):
         account.withdraw(0.3)
-    # Floats would accumulate rounding noise here; Decimal stays exact.
     assert account.balance == Decimal("0.10")
 
 

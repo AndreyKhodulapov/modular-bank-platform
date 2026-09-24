@@ -9,13 +9,15 @@ creating an active and a frozen account, rejecting operations on the frozen
 one, and performing a valid deposit and withdrawal on the active one.
 """
 
+from collections.abc import Callable
 from datetime import date
+from decimal import Decimal
 
 from exceptions import BankError
 from models import AccountStatus, BankAccount, Currency, Owner
 
 
-def attempt(description: str, action) -> None:
+def attempt(description: str, action: Callable[[], Decimal]) -> None:
     try:
         new_balance = action()
     except BankError as error:

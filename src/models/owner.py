@@ -1,8 +1,8 @@
 """Account owner model."""
 
 import re
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any
 
 from exceptions import InvalidOperationError
@@ -21,7 +21,7 @@ class Owner:
 
     first_name: str
     last_name: str
-    middle_name: str | None = field(default=None)
+    middle_name: str | None = None
     birth_date: date
     email: str
     phone: str
@@ -33,7 +33,7 @@ class Owner:
             self._validate_name("middle_name", self.middle_name)
 
         # datetime is a subclass of date but cannot be compared with a plain date
-        if type(self.birth_date) is not date:
+        if not isinstance(self.birth_date, date) or isinstance(self.birth_date, datetime):
             raise InvalidOperationError("birth_date must be a datetime.date.")
         if self.birth_date > date.today():
             raise InvalidOperationError("birth_date cannot be in the future.")

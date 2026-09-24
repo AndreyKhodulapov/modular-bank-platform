@@ -45,7 +45,7 @@ and cannot be instantiated; `BankAccount` provides the implementation.
 
 ## SOLID
 
-- **S – Single Responsibility:** each module owns one concern —
+- **S – Single Responsibility:** each module owns one concern -
   `exceptions.py` (error types), `utils.py` (money normalisation),
   `owner.py` (owner data), `account.py` (account behaviour).
 - **O – Open/Closed:** new account types extend `AbstractAccount` without
@@ -54,9 +54,10 @@ and cannot be instantiated; `BankAccount` provides the implementation.
   `AbstractAccount` is expected; it never weakens the base contract.
 - **I – Interface Segregation:** the abstract interface is minimal (three
   methods); nothing forces subclasses to implement operations they do not need.
-- **D – Dependency Inversion:** `BankAccount` depends on the `Owner`
-  abstraction and on enums, not on concrete strings or dictionaries; client
-  code depends on `AbstractAccount`, not on `BankAccount`.
+- **D – Dependency Inversion:** high-level modules depend on abstractions,
+  not on concrete implementations. Not applied in the project yet: `BankAccount`
+  depends on the concrete `Owner` class and `main.py` instantiates `BankAccount`
+  directly.
 
 ## Domain modelling
 
@@ -65,7 +66,7 @@ instead of passing raw primitives around.
 
 *In the project:* `AccountStatus` and `Currency` are enums rather than free
 strings; `Owner` is a dedicated type with validation; money is `Decimal`
-normalised by `to_money()` — floats are converted through `str()` to avoid
+normalised by `to_money()` - floats are converted through `str()` to avoid
 binary representation artefacts, and every value is rounded half-up to two
 decimal places.
 

@@ -54,7 +54,6 @@ class AbstractAccount(ABC):
 
     @property
     def account_type(self) -> str:
-        """Human-readable account type derived from the concrete class name."""
         return type(self).__name__
 
     @abstractmethod
@@ -105,7 +104,6 @@ class BankAccount(AbstractAccount):
 
     @staticmethod
     def _resolve_account_id(account_id: str | None) -> str:
-        """Use the provided number or generate a UUID4 when none is given."""
         if account_id is None:
             return str(uuid.uuid4())
         if not isinstance(account_id, str) or not account_id.strip():
@@ -117,7 +115,7 @@ class BankAccount(AbstractAccount):
         if isinstance(status, AccountStatus):
             return status
         try:
-            return AccountStatus(status)
+            return AccountStatus(str(status).lower())
         except ValueError as exc:
             allowed = ", ".join(item.value for item in AccountStatus)
             raise InvalidOperationError(f"Unknown account status {status!r}; allowed: {allowed}.") from exc

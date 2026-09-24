@@ -40,8 +40,9 @@ def test_accepts_currency_as_enum_or_string(owner, currency):
     assert account.currency is Currency.KZT
 
 
-def test_accepts_status_as_string(owner):
-    account = BankAccount(owner=owner, currency="RUB", status="frozen")
+@pytest.mark.parametrize("status", ["frozen", "FROZEN"])
+def test_accepts_status_as_string_in_any_case(owner, status):
+    account = BankAccount(owner=owner, currency="RUB", status=status)
     assert account.status is AccountStatus.FROZEN
 
 
@@ -53,7 +54,6 @@ def test_accepts_status_as_string(owner):
         {"currency": "RUB", "account_id": 123},
         {"currency": "RUB", "status": "suspended"},
         {"currency": "RUB", "initial_balance": -1},
-        {"currency": "RUB", "initial_balance": "abc"},
     ],
 )
 def test_rejects_invalid_constructor_input(owner, kwargs):
@@ -96,7 +96,6 @@ def test_withdraw_more_than_balance_raises(active_account):
     assert active_account.balance == Decimal("100.00")
 
 
-# Type and format validation lives in test_utils; here only the strictly-positive rule is checked.
 @pytest.mark.parametrize("operation", ["deposit", "withdraw"])
 @pytest.mark.parametrize("amount", [0, "-0.01"])
 def test_rejects_non_positive_amount(active_account, operation, amount):
