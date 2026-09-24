@@ -139,9 +139,9 @@ amounts and enum members are values: two equal amounts are interchangeable.
   `ACCOUNT_TYPES` and instantiates it, so callers never name concrete classes.
 - **Template Method** - a base class fixes the algorithm and subclasses
   override one step. `AbstractAccount.close()` always runs the same checks and
-  calls the `total_value` step: the base returns the balance, while
-  `InvestmentAccount` adds the portfolio, so an account with invested money
-  cannot be closed.
+  pays out the cash; it calls the `total_value` step to find anything held
+  besides cash: the base returns the balance, while `InvestmentAccount` adds
+  the portfolio, so an account with invested money cannot be closed.
 - **Dependency Injection** - an object receives its collaborators instead of
   creating them. `SecurityGuard(clock=...)` and
   `Bank(security=..., converter=...)`; the defaults (`datetime.now`, reference
@@ -161,8 +161,9 @@ amounts and enum members are values: two equal amounts are interchangeable.
   compared with `hmac.compare_digest()`, which takes the same time wherever the
   first differing byte is, so timing does not leak information.
 - **Brute force is limited.** The third wrong password in a row blocks the
-  client; a successful login resets the counter; only `unblock_client()`
-  gives access back.
+  client; a successful login resets the counter. The counter is kept by
+  `Client` next to the status, so unblocking resets it by whatever path it
+  happens and the two can never disagree.
 - **Risky time is closed.** Between 00:00 and 05:00 the bank refuses
   operations that move money or give access back; freezing (a protective
   action) and logins stay available.

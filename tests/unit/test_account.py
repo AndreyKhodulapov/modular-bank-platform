@@ -190,14 +190,19 @@ def test_invalid_status_transition_is_rejected(request, fixture, transition, err
 @pytest.mark.parametrize("status", ["active", "frozen"])
 def test_empty_account_can_be_closed(owner, status):
     account = BankAccount(owner=owner, currency="RUB", status=status)
-    account.close()
+    assert account.close() == Decimal("0.00")
     assert account.status is AccountStatus.CLOSED
 
 
-def test_account_with_money_cannot_be_closed(active_account):
-    with pytest.raises(InvalidOperationError, match="total value is 100.00"):
-        active_account.close()
-    assert active_account.status is AccountStatus.ACTIVE
+def test_closing_pays_out_the_balance(active_account):
+    assert active_account.close() == Decimal("100.00")
+    assert (active_account.status, active_account.balance) == (AccountStatus.CLOSED, Decimal("0.00"))
+
+
+def test_frozen_account_with_money_cannot_be_closed(frozen_account):
+    with pytest.raises(AccountFrozenError):
+        frozen_account.close()
+    assert (frozen_account.status, frozen_account.balance) == (AccountStatus.FROZEN, Decimal("100.00"))
 
 
 def test_total_value_of_regular_account_is_its_balance(active_account):

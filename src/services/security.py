@@ -47,7 +47,8 @@ class SecurityGuard:
 
     - stores password hashes (PBKDF2-HMAC-SHA256 with a random salt), never
       the passwords themselves;
-    - counts failed logins and blocks a client after ``MAX_FAILED_ATTEMPTS``;
+    - blocks a client after ``MAX_FAILED_ATTEMPTS`` failed logins in a row
+      (the counter itself is kept by ``Client``, next to the status);
     - forbids restricted operations inside ``[NIGHT_START, NIGHT_END)``;
     - keeps an append-only log of suspicious activities.
 
@@ -65,7 +66,6 @@ class SecurityGuard:
     def __init__(self, clock: Callable[[], datetime] = datetime.now) -> None:
         self._clock = clock
         self._passwords: dict[str, _PasswordHash] = {}
-        self._failed_attempts: dict[str, int] = {}
         self._log: list[SuspiciousActivity] = []
 
     def now(self) -> datetime:
@@ -102,9 +102,6 @@ class SecurityGuard:
         # constant-time comparison does not reveal how many leading bytes matched
         return hmac.compare_digest(stored.digest, self._hash(password, stored.salt))
 
-    def failed_attempts(self, client_id: str) -> int:
-        return self._failed_attempts.get(client_id, 0)
-
     def authenticate(self, client: Client, password: object) -> None:
         """Check ``password``; the ``MAX_FAILED_ATTEMPTS``-th failure in a row blocks the client.
 
@@ -117,11 +114,10 @@ class SecurityGuard:
             raise ClientBlockedError(client_id)
 
         if self._password_matches(client_id, password):
-            self._failed_attempts.pop(client_id, None)
+            client.reset_failed_logins()
             return
 
-        failures = self.failed_attempts(client_id) + 1
-        self._failed_attempts[client_id] = failures
+        failures = client.record_failed_login()
         self.flag(
             SuspicionReason.FAILED_LOGIN,
             f"failed login attempt {failures} of {self.MAX_FAILED_ATTEMPTS}",
@@ -136,9 +132,6 @@ class SecurityGuard:
             )
             raise ClientBlockedError(client_id)
         raise AuthenticationError(client_id, attempts_left=self.MAX_FAILED_ATTEMPTS - failures)
-
-    def reset_failed_attempts(self, client_id: str) -> None:
-        self._failed_attempts.pop(client_id, None)
 
     def review_amount(
         self, amount_in_base: Decimal, action: str, *, client_id: str | None = None, account_id: str | None = None

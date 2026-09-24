@@ -10,6 +10,7 @@ from exceptions import (
     AuthenticationError,
     ClientBlockedError,
     ClientNotFoundError,
+    InsufficientFundsError,
     InvalidOperationError,
     OperationTimeRestrictedError,
 )
@@ -65,13 +66,13 @@ def test_login_is_allowed_at_night(bank, client, clock, password):
     assert bank.authenticate_client(client.client_id, password) is client
 
 
-def test_unblock_client_restores_access_and_resets_counter(bank, client, security, password):
+def test_unblock_client_restores_access_and_resets_counter(bank, client, password):
     for _ in range(3):
         with pytest.raises((AuthenticationError, ClientBlockedError)):
             bank.authenticate_client(client.client_id, "wrong-password")
     bank.unblock_client(client.client_id)
     assert not client.is_blocked
-    assert security.failed_attempts(client.client_id) == 0
+    assert client.failed_logins == 0
     assert bank.authenticate_client(client.client_id, password) is client
 
 
@@ -102,6 +103,8 @@ def test_open_account_defaults_to_basic(bank, client):
         ("basic", {"currency": "RUB", "min_balance": 10}),  # unknown argument for this type
         ("basic", {}),  # currency is missing
         ("basic", {"currency": "RUB", "owner": "someone else"}),
+        ("basic", {"currency": "RUB", "account_id": "A-1"}),  # the bank issues numbers
+        ("basic", {"currency": "RUB", "status": "closed"}),  # a new account is always active
         ("basic", {"currency": "GBP"}),
     ],
 )
@@ -109,13 +112,6 @@ def test_open_account_rejects_invalid_request(bank, client, account_type, params
     with pytest.raises(InvalidOperationError):
         bank.open_account(client.client_id, account_type, **params)
     assert client.account_ids == []
-
-
-def test_open_account_rejects_duplicate_account_id(bank, client):
-    bank.open_account(client.client_id, currency="RUB", account_id="A-1")
-    with pytest.raises(InvalidOperationError, match="already exists"):
-        bank.open_account(client.client_id, currency="RUB", account_id="A-1")
-    assert client.account_ids == ["A-1"]
 
 
 def test_open_account_for_unknown_client(bank):
@@ -135,10 +131,25 @@ def test_freeze_is_allowed_at_night(bank, client, clock):
     assert bank.suspicious_activities == []
 
 
-def test_close_empty_account(bank, client):
-    account = bank.open_account(client.client_id, currency="RUB")
-    assert bank.close_account(account.account_id).status is AccountStatus.CLOSED
+def test_close_account_pays_out_the_balance(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    assert bank.close_account(account.account_id) == Decimal("100.00")
+    assert account.status is AccountStatus.CLOSED
     assert client.account_ids == [account.account_id]  # closed accounts stay in the history
+
+
+def test_close_account_pays_out_savings_below_min_balance(bank, client):
+    account = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=100, min_balance=100)
+    assert bank.close_account(account.account_id) == Decimal("100.00")
+    assert account.status is AccountStatus.CLOSED
+
+
+def test_large_payout_on_close_is_flagged(bank, client, reasons):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=400_000)
+    bank.deposit(account.account_id, 100_000)
+    bank.close_account(account.account_id)
+    assert reasons(bank) == [SuspicionReason.LARGE_OPERATION]
+    assert "close_account of 500000.00" in bank.suspicious_activities[0].details
 
 
 @pytest.mark.parametrize(
@@ -262,6 +273,13 @@ def test_large_amount_is_converted_before_the_check(bank, client, reasons):
     account = bank.open_account(client.client_id, currency="EUR")
     bank.deposit(account.account_id, 5_000)  # 500_000 RUB
     assert reasons(bank) == [SuspicionReason.LARGE_OPERATION]
+
+
+def test_rejected_large_operation_is_not_flagged(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB")
+    with pytest.raises(InsufficientFundsError):
+        bank.withdraw(account.account_id, 600_000)
+    assert bank.suspicious_activities == []
 
 
 def test_invalid_amount_is_rejected_before_review(bank, client):

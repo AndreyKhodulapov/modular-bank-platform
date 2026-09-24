@@ -47,6 +47,7 @@ class Bank:
         "premium": PremiumAccount,
         "investment": InvestmentAccount,
     }
+    RESERVED_ACCOUNT_PARAMS = frozenset({"owner", "account_id", "status"})
 
     def __init__(
         self,
@@ -130,24 +131,25 @@ class Bank:
         return client
 
     def unblock_client(self, client_id: str) -> Client:
-        """Give a blocked client access back and reset their failed login counter."""
+        """Give a blocked client access back; ``Client.unblock`` also resets the failed login counter."""
         client = self.get_client(client_id)
         self._security.ensure_daytime("unblock_client", client_id=client_id)
         client.unblock()
-        self._security.reset_failed_attempts(client_id)
         return client
 
     def open_account(self, client_id: str, account_type: str = "basic", **params: object) -> BankAccount:
         """Open an account of a registered type for the client.
 
         ``params`` are passed to the account constructor (``currency``,
-        ``initial_balance``, ``min_balance`` and so on); the owner is always
-        the client.
+        ``initial_balance``, ``min_balance`` and so on). The bank decides the
+        rest: the owner is the client, the number is generated and a new
+        account is always active.
         """
         client = self.get_client(client_id)
         account_class = self._resolve_account_class(account_type)
-        if "owner" in params:
-            raise InvalidOperationError("The owner of a new account is always the client it is opened for.")
+        reserved = sorted(self.RESERVED_ACCOUNT_PARAMS & params.keys())
+        if reserved:
+            raise InvalidOperationError(f"The bank sets {', '.join(reserved)} of a new account itself.")
         self._guard("open_account", client)
         try:
             inspect.signature(account_class).bind(owner=client, **params)
@@ -155,8 +157,6 @@ class Bank:
             # an unknown or missing constructor argument, e.g. min_balance for a basic account
             raise InvalidOperationError(f"Invalid parameters for {account_class.__name__}: {error}.") from error
         account = account_class(owner=client, **params)
-        if account.account_id in self._accounts:
-            raise InvalidOperationError(f"Account {account.account_id} already exists.")
         self._accounts[account.account_id] = account
         client.add_account_id(account.account_id)
         self._review_amount("open_account", account, account.total_value)
@@ -175,12 +175,13 @@ class Bank:
             )
             raise
 
-    def close_account(self, account_id: str) -> BankAccount:
-        """Close an account that holds nothing and owes nothing."""
+    def close_account(self, account_id: str) -> Decimal:
+        """Close an account and return the cash paid out to the client."""
         account = self.get_account(account_id)
         self._guard("close_account", account.owner, account)
-        self._run_on_account("close_account", account, account.close)
-        return account
+        payout = self._run_on_account("close_account", account, account.close)
+        self._review_amount("close_account", account, payout)
+        return payout
 
     def freeze_account(self, account_id: str) -> BankAccount:
         """Freeze an active account; allowed at any time, since freezing only protects money."""
@@ -207,8 +208,10 @@ class Bank:
     ) -> Decimal:
         self._guard(action, account.owner, account)
         value = to_money(amount, require="positive")
+        balance = self._run_on_account(action, account, lambda: operation(value))
+        # only executed operations are reviewed: a rejected one has not moved any money
         self._review_amount(action, account, value)
-        return self._run_on_account(action, account, lambda: operation(value))
+        return balance
 
     def search_accounts(
         self,

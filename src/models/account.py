@@ -79,14 +79,28 @@ class AbstractAccount(ABC):
             raise InvalidOperationError(f"Account {self._account_id} is not frozen.")
         self._status = AccountStatus.ACTIVE
 
-    def close(self) -> None:
-        """Close the account for good; it must hold nothing and owe nothing."""
+    def close(self) -> Decimal:
+        """Close the account for good, pay out its cash and return the paid-out amount.
+
+        Closing is a settlement, so ``min_balance`` does not hold the cash
+        back. It is refused while the account owes money, holds anything
+        besides cash (``total_value`` above the balance) or is frozen with
+        money on it: a freeze must not be bypassed by closing.
+        """
         self._ensure_not_closed()
-        if self.total_value != 0:
+        if self._balance < 0:
+            raise InvalidOperationError(f"Account {self._account_id} cannot be closed while it owes {-self._balance}.")
+        if self.total_value != self._balance:
             raise InvalidOperationError(
-                f"Account {self._account_id} cannot be closed while its total value is {self.total_value}."
+                f"Account {self._account_id} cannot be closed while it holds "
+                f"{self.total_value - self._balance} besides cash."
             )
+        if self._status is AccountStatus.FROZEN and self._balance > 0:
+            raise AccountFrozenError(self._account_id)
+        payout = self._balance
+        self._balance = Decimal("0.00")
         self._status = AccountStatus.CLOSED
+        return payout
 
     @abstractmethod
     def deposit(self, amount: object) -> Decimal:

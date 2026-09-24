@@ -97,5 +97,5 @@ def test_str_extends_base_representation(owner):
 def test_account_with_invested_money_cannot_be_closed(investment_account):
     investment_account.invest("bonds", 1000)
     assert investment_account.balance == 0
-    with pytest.raises(InvalidOperationError, match="total value is 1000.00"):
+    with pytest.raises(InvalidOperationError, match="holds 1000.00 besides cash"):
         investment_account.close()

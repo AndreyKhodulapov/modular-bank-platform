@@ -101,6 +101,17 @@ def test_block_and_unblock():
     assert client.status is ClientStatus.ACTIVE
 
 
+def test_failed_logins_are_counted_and_reset_by_unblock():
+    client = Client(**VALID)
+    assert [client.record_failed_login() for _ in range(3)] == [1, 2, 3]
+    client.reset_failed_logins()
+    assert client.failed_logins == 0
+    client.record_failed_login()
+    client.block()
+    client.unblock()
+    assert client.failed_logins == 0
+
+
 def test_repeated_block_or_unblock_is_rejected():
     client = Client(**VALID)
     with pytest.raises(InvalidOperationError):

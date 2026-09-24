@@ -13,8 +13,9 @@ class Client:
     """A person served by the bank: personal data, access status and account numbers.
 
     Personal data is validated once and exposed through read-only properties.
-    Only the status and the list of account numbers change over the client's
-    lifetime, and only through dedicated methods. Two clients are equal when
+    Only the status, the failed login counter and the list of account numbers
+    change over the client's lifetime, and only through dedicated methods.
+    The counter lives next to the status so that unblocking always resets it. Two clients are equal when
     they share a ``client_id``, not when their personal data coincides.
     """
 
@@ -48,6 +49,7 @@ class Client:
         self._phone = self._validate_contact("phone", phone, self.PHONE_PATTERN, self.PHONE_FORMAT)
         self._client_id = resolve_identifier(client_id, field="client_id")
         self._status = ClientStatus.ACTIVE
+        self._failed_logins = 0
         self._account_ids: list[str] = []
 
     @staticmethod
@@ -142,9 +144,24 @@ class Client:
         self._status = ClientStatus.BLOCKED
 
     def unblock(self) -> None:
+        """Give access back and forget the failed logins that led to the block."""
         if not self.is_blocked:
             raise InvalidOperationError(f"Client {self._client_id} is not blocked.")
         self._status = ClientStatus.ACTIVE
+        self._failed_logins = 0
+
+    @property
+    def failed_logins(self) -> int:
+        """Failed logins in a row since the last successful login or unblock."""
+        return self._failed_logins
+
+    def record_failed_login(self) -> int:
+        """Count one more failed login and return the new count; blocking is the caller's decision."""
+        self._failed_logins += 1
+        return self._failed_logins
+
+    def reset_failed_logins(self) -> None:
+        self._failed_logins = 0
 
     @property
     def account_ids(self) -> list[str]:

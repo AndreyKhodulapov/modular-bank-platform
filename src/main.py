@@ -200,6 +200,7 @@ def run_bank_system() -> list[AbstractAccount]:
         oleg.client_id, "premium", currency="USD", initial_balance=6_000, overdraft_limit=1_000, withdrawal_fee=2
     )
     oleg_investment = bank.open_account(oleg.client_id, "investment", currency="EUR", initial_balance=2_000)
+    # Bank has no invest() yet: a direct model call, outside the night window and blocking checks
     oleg_investment.invest("etf", 1_500)
     alina_current = bank.open_account(alina.client_id, currency="KZT", initial_balance=400_000)
     alina_spare = bank.open_account(alina.client_id, currency="CNY")
@@ -241,8 +242,16 @@ def run_bank_system() -> list[AbstractAccount]:
     attempt("withdraw 5_000 KZT", lambda: bank.withdraw(alina_current.account_id, 5_000))
 
     print_step(6, "Closing accounts")
-    attempt("close Maria's savings (not empty)", lambda: bank.close_account(maria_savings.account_id), "account")
-    attempt("close Alina's empty CNY account", lambda: bank.close_account(alina_spare.account_id), "account")
+    attempt(
+        "close Oleg's investment account (money in the portfolio)",
+        lambda: bank.close_account(oleg_investment.account_id),
+    )
+    attempt(
+        "close Maria's savings (min_balance does not hold money back)",
+        lambda: bank.close_account(maria_savings.account_id),
+        "payout",
+    )
+    attempt("close Alina's empty CNY account", lambda: bank.close_account(alina_spare.account_id), "payout")
     attempt("deposit 10 CNY (closed)", lambda: bank.deposit(alina_spare.account_id, 10))
 
     print_step(7, "Searching accounts")

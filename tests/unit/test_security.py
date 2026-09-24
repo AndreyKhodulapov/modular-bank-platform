@@ -38,7 +38,7 @@ def test_wrong_password_counts_and_reports_attempts_left(guard, owner, reasons, 
     with pytest.raises(AuthenticationError) as info:
         guard.authenticate(owner, candidate)
     assert info.value.attempts_left == 2
-    assert guard.failed_attempts(owner.client_id) == 1
+    assert owner.failed_logins == 1
     assert reasons(guard) == [SuspicionReason.FAILED_LOGIN]
 
 
@@ -59,12 +59,23 @@ def test_blocked_client_is_rejected_even_with_right_password(guard, owner, passw
     assert reasons(guard) == [SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
 
 
+def test_client_unblocked_directly_gets_all_attempts_again(guard, owner):
+    for _ in range(3):
+        with pytest.raises((AuthenticationError, ClientBlockedError)):
+            guard.authenticate(owner, "wrong-password")
+    owner.unblock()  # bypassing the bank must not leave the counter at the limit
+    with pytest.raises(AuthenticationError) as info:
+        guard.authenticate(owner, "wrong-password")
+    assert info.value.attempts_left == 2
+    assert not owner.is_blocked
+
+
 def test_success_resets_the_failure_counter(guard, owner, password):
     for _ in range(2):
         with pytest.raises(AuthenticationError):
             guard.authenticate(owner, "wrong-password")
     guard.authenticate(owner, password)
-    assert guard.failed_attempts(owner.client_id) == 0
+    assert owner.failed_logins == 0
     with pytest.raises(AuthenticationError):
         guard.authenticate(owner, "wrong-password")
     assert not owner.is_blocked

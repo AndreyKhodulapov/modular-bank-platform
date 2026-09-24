@@ -37,8 +37,9 @@ Three subclasses of `BankAccount`; each overrides `withdraw()`,
   `project_yearly_growth(growth_rates)` estimates one year of growth.
 
 Every account can be frozen, unfrozen and closed (`freeze()`, `unfreeze()`,
-`close()`); closing requires a zero `total_value`, which for an investment
-account includes the portfolio.
+`close()`). Closing is a settlement: the cash is paid out and returned, even
+below a savings `min_balance`. It is refused while the account is in
+overdraft, holds money in a portfolio or is frozen with money on it.
 
 ### Bank System
 
@@ -62,6 +63,13 @@ Security rules applied by the bank:
 | Blocked client | cannot open, close or unfreeze accounts or move money |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw and unblock are refused; login, freeze and queries are allowed |
 | Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more |
+
+Known limitations:
+
+- `invest()`, `divest()` and `apply_monthly_interest()` are not part of
+  `Bank` yet and are called on the account itself, so the night window,
+  blocking and the suspicious activity log do not cover them. The bank demo
+  invests on Oleg's account this way.
 
 ## Project structure
 
