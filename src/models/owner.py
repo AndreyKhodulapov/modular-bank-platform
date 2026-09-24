@@ -7,9 +7,6 @@ from typing import Any
 
 from exceptions import InvalidOperationError
 
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_PHONE_PATTERN = re.compile(r"^\+?\d{10,15}$")
-
 
 @dataclass(frozen=True, kw_only=True)
 class Owner:
@@ -18,6 +15,9 @@ class Owner:
     The class is frozen: once an owner is created its data cannot be altered
     by accident, which keeps the account's ``owner`` attribute trustworthy.
     """
+
+    EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    PHONE_PATTERN = re.compile(r"^\+?\d{10,15}$")
 
     first_name: str
     last_name: str
@@ -32,15 +32,16 @@ class Owner:
         if self.middle_name is not None:
             self._validate_name("middle_name", self.middle_name)
 
-        if not isinstance(self.birth_date, date):
+        # datetime is a subclass of date but cannot be compared with a plain date
+        if type(self.birth_date) is not date:
             raise InvalidOperationError("birth_date must be a datetime.date.")
         if self.birth_date > date.today():
             raise InvalidOperationError("birth_date cannot be in the future.")
 
-        if not isinstance(self.email, str) or not _EMAIL_PATTERN.match(self.email):
+        if not isinstance(self.email, str) or not self.EMAIL_PATTERN.match(self.email):
             raise InvalidOperationError(f"Invalid email address: {self.email!r}.")
 
-        if not isinstance(self.phone, str) or not _PHONE_PATTERN.match(self.phone):
+        if not isinstance(self.phone, str) or not self.PHONE_PATTERN.match(self.phone):
             raise InvalidOperationError(
                 f"Invalid phone number: {self.phone!r} "
                 "(expected 10-15 digits with optional leading '+')."
@@ -69,6 +70,3 @@ class Owner:
             "email": self.email,
             "phone": self.phone,
         }
-
-    def __str__(self) -> str:
-        return self.full_name

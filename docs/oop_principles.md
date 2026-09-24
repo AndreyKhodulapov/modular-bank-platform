@@ -1,6 +1,6 @@
 # OOP principles applied in this project
 
-Short, interview-ready definitions of the concepts listed in the assignment,
+Short, interview-ready definitions of the concepts used in this project,
 each followed by the place in the code where it is applied.
 
 ## Encapsulation
@@ -74,8 +74,8 @@ decimal places.
 Emitting log records as key-value data (not free text) so they can be
 filtered, aggregated and shipped to monitoring systems.
 
-*In the project:* not yet implemented; it is scheduled for the audit and
-transaction stages of the assignment.
+*In the project:* not implemented yet; it will arrive together with the
+audit and transaction features.
 
 ## Preparing modules for unit testing
 

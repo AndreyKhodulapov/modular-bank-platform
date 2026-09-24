@@ -36,8 +36,6 @@ class AbstractAccount(ABC):
         self._status = status
         self._balance = Decimal("0.00")
 
-    # --- read-only state -------------------------------------------------
-
     @property
     def account_id(self) -> str:
         return self._account_id
@@ -58,8 +56,6 @@ class AbstractAccount(ABC):
     def account_type(self) -> str:
         """Human-readable account type derived from the concrete class name."""
         return type(self).__name__
-
-    # --- operations every account must provide ---------------------------
 
     @abstractmethod
     def deposit(self, amount: object) -> Decimal:
@@ -107,8 +103,6 @@ class BankAccount(AbstractAccount):
             raise InvalidOperationError("initial_balance cannot be negative.")
         self._balance = balance
 
-    # --- constructor helpers ---------------------------------------------
-
     @staticmethod
     def _resolve_account_id(account_id: str | None) -> str:
         """Use the provided number or generate a UUID4 when none is given."""
@@ -116,7 +110,7 @@ class BankAccount(AbstractAccount):
             return str(uuid.uuid4())
         if not isinstance(account_id, str) or not account_id.strip():
             raise InvalidOperationError("account_id must be a non-empty string.")
-        return account_id
+        return account_id.strip()
 
     @staticmethod
     def _resolve_status(status: AccountStatus | str) -> AccountStatus:
@@ -142,10 +136,7 @@ class BankAccount(AbstractAccount):
                 f"Unsupported currency {currency!r}; allowed: {allowed}."
             ) from exc
 
-    # --- guards shared by the operations ----------------------------------
-
     def _ensure_operational(self) -> None:
-        """Reject any money movement unless the account is active."""
         if self._status is AccountStatus.FROZEN:
             raise AccountFrozenError(self._account_id)
         if self._status is AccountStatus.CLOSED:
@@ -153,7 +144,6 @@ class BankAccount(AbstractAccount):
 
     @staticmethod
     def _validate_amount(amount: object) -> Decimal:
-        """Normalize ``amount`` to money and require it to be strictly positive."""
         value = to_money(amount)
         if value <= 0:
             raise InvalidOperationError(

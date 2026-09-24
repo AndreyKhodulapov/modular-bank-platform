@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -15,10 +15,9 @@ VALID = {
 }
 
 
-def test_full_name_and_str_without_middle_name():
+def test_full_name_without_middle_name():
     owner = Owner(**VALID)
     assert owner.full_name == "Petrov Ivan"
-    assert str(owner) == "Petrov Ivan"
 
 
 def test_full_name_with_middle_name():
@@ -41,7 +40,7 @@ def test_to_dict_serializes_birth_date_as_iso_string():
 def test_owner_is_immutable():
     owner = Owner(**VALID)
     with pytest.raises(FrozenInstanceError):
-        owner.first_name = "Petr"  # type: ignore[misc]
+        owner.first_name = "Petr"
 
 
 @pytest.mark.parametrize(
@@ -52,6 +51,7 @@ def test_owner_is_immutable():
         ("last_name", None),
         ("middle_name", ""),
         ("birth_date", "1990-01-01"),
+        ("birth_date", datetime(1990, 1, 1)),
         ("birth_date", date.today() + timedelta(days=1)),
         ("email", "not-an-email"),
         ("email", ""),

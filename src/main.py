@@ -1,10 +1,10 @@
-"""Day 1 demonstration script.
+"""Demonstration script.
 
 Run from the repository root:
 
     python src/main.py
 
-The script walks through the scenario required by the assignment:
+The script walks through the core account scenario:
 creating an active and a frozen account, rejecting operations on the frozen
 one, and performing a valid deposit and withdrawal on the active one.
 """
@@ -16,13 +16,12 @@ from models import AccountStatus, BankAccount, Currency, Owner
 
 
 def attempt(description: str, action) -> None:
-    """Run ``action`` and print either its result or the domain error raised."""
     try:
-        result = action()
+        new_balance = action()
     except BankError as error:
         print(f"  [rejected] {description}: {type(error).__name__}: {error}")
     else:
-        print(f"  [ok]       {description}: balance is now {result}")
+        print(f"  [ok]       {description}: balance is now {new_balance}")
 
 
 def main() -> None:

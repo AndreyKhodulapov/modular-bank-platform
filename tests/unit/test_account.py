@@ -11,12 +11,10 @@ from exceptions import (
 )
 from models import AbstractAccount, AccountStatus, BankAccount, Currency
 
-# --- construction ---------------------------------------------------------
-
 
 def test_abstract_account_cannot_be_instantiated(owner):
     with pytest.raises(TypeError):
-        AbstractAccount(owner=owner, account_id="x")  # type: ignore[abstract]
+        AbstractAccount(owner=owner, account_id="x")
 
 
 def test_generates_uuid4_when_account_id_missing(owner):
@@ -30,8 +28,8 @@ def test_generated_ids_are_unique(owner):
     assert len(ids) == 50
 
 
-def test_keeps_provided_account_id(owner):
-    account = BankAccount(owner=owner, currency="RUB", account_id="ACC-0001")
+def test_keeps_provided_account_id_stripped(owner):
+    account = BankAccount(owner=owner, currency="RUB", account_id="  ACC-0001 ")
     assert account.account_id == "ACC-0001"
 
 
@@ -76,23 +74,17 @@ def test_rejects_invalid_constructor_input(owner, kwargs):
 
 def test_rejects_non_owner_instance():
     with pytest.raises(InvalidOperationError):
-        BankAccount(owner="Ivan Petrov", currency="RUB")  # type: ignore[arg-type]
-
-
-# --- encapsulation --------------------------------------------------------
+        BankAccount(owner="Ivan Petrov", currency="RUB")
 
 
 def test_balance_is_read_only(active_account):
     with pytest.raises(AttributeError):
-        active_account.balance = Decimal("1000000")  # type: ignore[misc]
+        active_account.balance = Decimal("1000000")
 
 
 def test_status_is_read_only(active_account):
     with pytest.raises(AttributeError):
-        active_account.status = AccountStatus.CLOSED  # type: ignore[misc]
-
-
-# --- deposit --------------------------------------------------------------
+        active_account.status = AccountStatus.CLOSED
 
 
 def test_deposit_increases_balance_and_returns_it(active_account):
@@ -117,9 +109,6 @@ def test_deposit_on_frozen_account_raises(frozen_account):
 def test_deposit_on_closed_account_raises(closed_account):
     with pytest.raises(AccountClosedError):
         closed_account.deposit(10)
-
-
-# --- withdraw -------------------------------------------------------------
 
 
 def test_withdraw_decreases_balance_and_returns_it(active_account):
@@ -161,9 +150,6 @@ def test_status_is_checked_before_amount(frozen_account):
         frozen_account.deposit(-1)
 
 
-# --- representation -------------------------------------------------------
-
-
 def test_str_contains_required_fields(owner):
     account = BankAccount(
         owner=owner,
@@ -172,9 +158,7 @@ def test_str_contains_required_fields(owner):
         status="frozen",
         initial_balance="250.5",
     )
-    assert str(account) == (
-        "BankAccount | Smirnova Anna | ****0042 | frozen | 250.50 USD"
-    )
+    assert str(account) == ("BankAccount | Smirnova Anna | ****0042 | frozen | 250.50 USD")
 
 
 def test_repr_is_informative(active_account):

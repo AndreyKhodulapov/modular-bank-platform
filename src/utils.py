@@ -4,8 +4,6 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from exceptions import InvalidOperationError
 
-MONEY_QUANTUM = Decimal("0.01")
-
 
 def to_money(value: object, *, field: str = "amount") -> Decimal:
     """Convert an arbitrary numeric input into a two-decimal ``Decimal``.
@@ -22,12 +20,12 @@ def to_money(value: object, *, field: str = "amount") -> Decimal:
         raise InvalidOperationError(f"{field} must be a number, not bool.")
 
     if isinstance(value, Decimal | int):
-        result = Decimal(value)
+        money = Decimal(value)
     elif isinstance(value, float):
-        result = Decimal(str(value))
+        money = Decimal(str(value))
     elif isinstance(value, str):
         try:
-            result = Decimal(value.strip())
+            money = Decimal(value.strip())
         except InvalidOperation as exc:
             raise InvalidOperationError(
                 f"{field} must be a numeric string, got {value!r}."
@@ -37,7 +35,10 @@ def to_money(value: object, *, field: str = "amount") -> Decimal:
             f"{field} must be int, float, Decimal or str, got {type(value).__name__}."
         )
 
-    if not result.is_finite():
+    if not money.is_finite():
         raise InvalidOperationError(f"{field} must be a finite number.")
 
-    return result.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    try:
+        return money.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation as exc:
+        raise InvalidOperationError(f"{field} is too large: {value!r}.") from exc

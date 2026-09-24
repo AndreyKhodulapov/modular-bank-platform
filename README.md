@@ -3,7 +3,7 @@
 An object-oriented prototype of a modular banking platform. All data lives in memory; there is
 no database, no external API and no third-party runtime dependency.
 
-## Current scope (Day 1)
+## Current scope
 
 - `AbstractAccount` – abstract base with a unique id, owner, protected balance,
   status and the abstract operations `deposit`, `withdraw`, `get_account_info`.
@@ -23,7 +23,7 @@ modular-bank-platform/
 ├── requirements.txt        # runtime dependencies (none, stdlib only)
 ├── requirements-dev.txt    # pytest, ruff
 ├── src/
-│   ├── main.py             # Day 1 demonstration script
+│   ├── main.py             # demonstration script
 │   ├── exceptions.py       # custom exception hierarchy
 │   ├── utils.py            # money conversion helper
 │   └── models/

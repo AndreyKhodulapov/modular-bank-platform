@@ -10,10 +10,8 @@ import pytest
 from exceptions import AccountFrozenError, BankError, InsufficientFundsError
 from models import AccountStatus, BankAccount, Currency
 
-ROOT = Path(__file__).resolve().parents[2]
 
-
-def test_day_one_scenario(owner):
+def test_frozen_and_active_accounts_scenario(owner):
     active = BankAccount(owner=owner, currency=Currency.RUB, initial_balance="1000")
     frozen = BankAccount(
         owner=owner,
@@ -69,12 +67,13 @@ def test_insufficient_funds_reports_state(owner):
 
 
 def test_demo_script_runs_without_errors():
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "src" / "main.py")],
+    root = Path(__file__).resolve().parents[2]
+    completed = subprocess.run(
+        [sys.executable, str(root / "src" / "main.py")],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    assert "[rejected] deposit 100 USD: AccountFrozenError" in result.stdout
-    assert "[ok]       withdraw 300 RUB" in result.stdout
+    assert completed.returncode == 0, completed.stderr
+    assert "[rejected] deposit 100 USD: AccountFrozenError" in completed.stdout
+    assert "[ok]       withdraw 300 RUB" in completed.stdout
