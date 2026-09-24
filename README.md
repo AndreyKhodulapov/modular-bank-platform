@@ -54,6 +54,9 @@ overdraft, holds money in a portfolio or is frozen with money on it.
   a log of suspicious activities.
 - `CurrencyConverter` - converts amounts into roubles using fixed reference
   rates (replaceable by passing another rate table).
+- Domain exceptions: `ClientNotFoundError`, `AccountNotFoundError`,
+  `AuthenticationError` (carries `attempts_left`), `ClientBlockedError`,
+  `OperationTimeRestrictedError` (all derive from `BankError`).
 
 Security rules applied by the bank:
 

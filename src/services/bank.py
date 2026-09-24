@@ -82,7 +82,7 @@ class Bank:
 
     @classmethod
     def _resolve_account_class(cls, account_type: str) -> type[BankAccount]:
-        account_class = cls.ACCOUNT_TYPES.get(account_type.lower())
+        account_class = cls.ACCOUNT_TYPES.get(str(account_type).lower())
         if account_class is None:
             allowed = ", ".join(cls.ACCOUNT_TYPES)
             raise InvalidOperationError(f"Unsupported account type {account_type!r}; allowed: {allowed}.")
@@ -131,9 +131,10 @@ class Bank:
         return client
 
     def unblock_client(self, client_id: str) -> Client:
-        """Give a blocked client access back; ``Client.unblock`` also resets the failed login counter."""
         client = self.get_client(client_id)
-        self._security.ensure_daytime("unblock_client", client_id=client_id)
+        # only a real unblock is a night-restricted action; an active client gets the model's error
+        if client.is_blocked:
+            self._security.ensure_daytime("unblock_client", client_id=client_id)
         client.unblock()
         return client
 
@@ -206,8 +207,8 @@ class Bank:
     def _move_money(
         self, action: str, account: BankAccount, operation: Callable[[Decimal], Decimal], amount: object
     ) -> Decimal:
-        self._guard(action, account.owner, account)
         value = to_money(amount, require="positive")
+        self._guard(action, account.owner, account)
         before = account.balance
         balance = self._run_on_account(action, account, lambda: operation(value))
         self._review_amount(action, account, abs(balance - before))

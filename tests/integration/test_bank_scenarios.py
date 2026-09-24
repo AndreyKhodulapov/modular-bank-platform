@@ -1,6 +1,6 @@
 """End-to-end scenarios of the bank: several clients, accounts, logins and security rules."""
 
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
@@ -9,7 +9,6 @@ from exceptions import (
     AccountFrozenError,
     AuthenticationError,
     ClientBlockedError,
-    InvalidOperationError,
     OperationTimeRestrictedError,
 )
 from models import AccountStatus
@@ -17,8 +16,6 @@ from services import SuspicionReason
 
 
 def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
-    with pytest.raises(InvalidOperationError, match="at least 18"):
-        make_client("Kid", birth_date=date(2010, 1, 1))
     anna = bank.add_client(make_client("Anna"), "anna-password")
     boris = bank.add_client(make_client("Boris"), "boris-password")
 

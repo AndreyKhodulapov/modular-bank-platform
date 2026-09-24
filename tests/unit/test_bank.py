@@ -20,6 +20,35 @@ from tests.helpers import reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
 
+# (prepare, operation) pairs for the operations refused at night and for a blocked client
+RESTRICTED_OPERATIONS = [
+    pytest.param(
+        lambda bank, client, account: None,
+        lambda bank, client, account: bank.open_account(client.client_id, currency="RUB"),
+        id="open_account",
+    ),
+    pytest.param(
+        lambda bank, client, account: None,
+        lambda bank, client, account: bank.close_account(account.account_id),
+        id="close_account",
+    ),
+    pytest.param(
+        lambda bank, client, account: bank.freeze_account(account.account_id),
+        lambda bank, client, account: bank.unfreeze_account(account.account_id),
+        id="unfreeze_account",
+    ),
+    pytest.param(
+        lambda bank, client, account: None,
+        lambda bank, client, account: bank.deposit(account.account_id, 10),
+        id="deposit",
+    ),
+    pytest.param(
+        lambda bank, client, account: None,
+        lambda bank, client, account: bank.withdraw(account.account_id, 10),
+        id="withdraw",
+    ),
+]
+
 
 def test_add_client_registers_and_returns_it(bank, owner, password):
     assert bank.add_client(owner, password) is owner
@@ -105,7 +134,7 @@ def test_open_account_defaults_to_basic(bank, client):
         ("basic", {"currency": "RUB", "owner": "someone else"}),
         ("basic", {"currency": "RUB", "account_id": "A-1"}),  # the bank issues numbers
         ("basic", {"currency": "RUB", "status": "closed"}),  # a new account is always active
-        ("basic", {"currency": "GBP"}),
+        (None, {"currency": "RUB"}),
     ],
 )
 def test_open_account_rejects_invalid_request(bank, client, account_type, params):
@@ -149,32 +178,13 @@ def test_large_payout_on_close_is_flagged(bank, client):
 @pytest.mark.parametrize(
     ("prepare", "operation"),
     [
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.open_account(client.client_id, currency="RUB"),
-        ),
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.close_account(account.account_id),
-        ),
-        (
-            lambda bank, client, account: bank.freeze_account(account.account_id),
-            lambda bank, client, account: bank.unfreeze_account(account.account_id),
-        ),
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.deposit(account.account_id, 10),
-        ),
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.withdraw(account.account_id, 10),
-        ),
-        (
+        *RESTRICTED_OPERATIONS,
+        pytest.param(
             lambda bank, client, account: client.block(),
             lambda bank, client, account: bank.unblock_client(client.client_id),
+            id="unblock_client",
         ),
     ],
-    ids=["open_account", "close_account", "unfreeze_account", "deposit", "withdraw", "unblock_client"],
 )
 def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
@@ -188,32 +198,7 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepa
     assert client.account_ids == [account.account_id]
 
 
-@pytest.mark.parametrize(
-    ("prepare", "operation"),
-    [
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.open_account(client.client_id, currency="RUB"),
-        ),
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.close_account(account.account_id),
-        ),
-        (
-            lambda bank, client, account: bank.freeze_account(account.account_id),
-            lambda bank, client, account: bank.unfreeze_account(account.account_id),
-        ),
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.deposit(account.account_id, 10),
-        ),
-        (
-            lambda bank, client, account: None,
-            lambda bank, client, account: bank.withdraw(account.account_id, 10),
-        ),
-    ],
-    ids=["open_account", "close_account", "unfreeze_account", "deposit", "withdraw"],
-)
+@pytest.mark.parametrize(("prepare", "operation"), RESTRICTED_OPERATIONS)
 def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     prepare(bank, client, account)
@@ -283,10 +268,18 @@ def test_rejected_large_operation_is_not_flagged(bank, client):
     assert bank.suspicious_activities == []
 
 
-def test_invalid_amount_is_rejected_before_review(bank, client):
+def test_invalid_amount_is_rejected_before_any_check(bank, client, clock):
     account = bank.open_account(client.client_id, currency="RUB")
+    clock.moment = NIGHT
     with pytest.raises(InvalidOperationError):
         bank.deposit(account.account_id, -5)
+    assert bank.suspicious_activities == []
+
+
+def test_unblocking_an_active_client_is_not_a_night_operation(bank, client, clock):
+    clock.moment = NIGHT
+    with pytest.raises(InvalidOperationError, match="not blocked"):
+        bank.unblock_client(client.client_id)
     assert bank.suspicious_activities == []
 
 

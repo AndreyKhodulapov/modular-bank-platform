@@ -22,7 +22,6 @@ class Client:
     MIN_AGE = 18
     EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
     PHONE_PATTERN = re.compile(r"\+?[0-9]{10,15}")
-    PHONE_FORMAT = "10-15 digits with optional leading '+'"
 
     def __init__(
         self,
@@ -45,8 +44,14 @@ class Client:
         self._last_name = self._validate_name("last_name", last_name)
         self._middle_name = None if middle_name is None else self._validate_name("middle_name", middle_name)
         self._birth_date = self._validate_birth_date(birth_date, today if today is not None else date.today())
-        self._email = self._validate_contact("email", email, self.EMAIL_PATTERN)
-        self._phone = self._validate_contact("phone", phone, self.PHONE_PATTERN, self.PHONE_FORMAT)
+        if not isinstance(email, str) or not self.EMAIL_PATTERN.fullmatch(email):
+            raise InvalidOperationError(f"Invalid email address: {email!r}.")
+        if not isinstance(phone, str) or not self.PHONE_PATTERN.fullmatch(phone):
+            raise InvalidOperationError(
+                f"Invalid phone number: {phone!r} (expected 10-15 digits with optional leading '+')."
+            )
+        self._email = email
+        self._phone = phone
         self._client_id = resolve_identifier(client_id, field="client_id")
         self._status = ClientStatus.ACTIVE
         self._failed_logins = 0
@@ -74,13 +79,6 @@ class Client:
         if age < cls.MIN_AGE:
             raise InvalidOperationError(f"Client must be at least {cls.MIN_AGE} years old, got {age}.")
         return birth_date
-
-    @staticmethod
-    def _validate_contact(field: str, value: object, pattern: re.Pattern[str], expected: str | None = None) -> str:
-        if not isinstance(value, str) or not pattern.fullmatch(value):
-            hint = f" (expected {expected})" if expected else ""
-            raise InvalidOperationError(f"Invalid {field}: {value!r}{hint}.")
-        return value
 
     @staticmethod
     def _full_years(birth_date: date, on: date) -> int:

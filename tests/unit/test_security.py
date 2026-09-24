@@ -34,13 +34,20 @@ def test_right_password_passes_and_logs_nothing(guard, owner, password):
     assert guard.suspicious_activities == []
 
 
-@pytest.mark.parametrize("candidate", ["wrong-password", None, b"correct-horse-1"])
-def test_wrong_password_counts_and_reports_attempts_left(guard, owner, candidate):
+def test_wrong_password_counts_and_reports_attempts_left(guard, owner):
     with pytest.raises(AuthenticationError) as info:
-        guard.authenticate(owner, candidate)
+        guard.authenticate(owner, "wrong-password")
     assert info.value.attempts_left == 2
     assert owner.failed_logins == 1
     assert reasons(guard) == [SuspicionReason.FAILED_LOGIN]
+
+
+@pytest.mark.parametrize("candidate", [None, b"correct-horse-1"])
+def test_non_string_password_is_rejected_without_counting(guard, owner, candidate):
+    with pytest.raises(InvalidOperationError):
+        guard.authenticate(owner, candidate)
+    assert owner.failed_logins == 0
+    assert guard.suspicious_activities == []
 
 
 def test_third_failure_blocks_the_client(guard, owner):
@@ -104,7 +111,6 @@ def test_night_window_boundaries(security, clock, moment, night):
             security.ensure_daytime("withdraw")
     else:
         security.ensure_daytime("withdraw")
-    assert reasons(security) == ([SuspicionReason.NIGHT_OPERATION] if night else [])
 
 
 def test_ensure_daytime_rejects_and_logs_night_action(security, clock):

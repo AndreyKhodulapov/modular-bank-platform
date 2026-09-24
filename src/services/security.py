@@ -94,19 +94,21 @@ class SecurityGuard:
         salt = secrets.token_bytes(16)
         self._passwords[client_id] = _PasswordHash(salt=salt, digest=self._hash(password, salt))
 
-    def _password_matches(self, client_id: str, password: object) -> bool:
+    def _password_matches(self, client_id: str, password: str) -> bool:
         stored = self._passwords.get(client_id)
-        if stored is None or not isinstance(password, str):
+        if stored is None:
             return False
         # constant-time comparison does not reveal how many leading bytes matched
         return hmac.compare_digest(stored.digest, self._hash(password, stored.salt))
 
-    def authenticate(self, client: Client, password: object) -> None:
+    def authenticate(self, client: Client, password: str) -> None:
         """Check ``password``; the ``MAX_FAILED_ATTEMPTS``-th failure in a row blocks the client.
 
         Raises ``ClientBlockedError`` for a blocked client (even with the right
         password) and ``AuthenticationError`` for a wrong password.
         """
+        if not isinstance(password, str):
+            raise InvalidOperationError("password must be a string.")
         client_id = client.client_id
         if client.is_blocked:
             self.flag(SuspicionReason.BLOCKED_CLIENT_ACTIVITY, "login attempt by a blocked client", client_id=client_id)
