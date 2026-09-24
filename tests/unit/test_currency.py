@@ -10,7 +10,7 @@ from services import CurrencyConverter
 def test_default_converter_uses_rouble_as_base():
     converter = CurrencyConverter()
     assert converter.base is Currency.RUB
-    assert converter.rates[Currency.USD] == Decimal("90")
+    assert converter.to_base(1, Currency.RUB) == Decimal("1.00")
 
 
 @pytest.mark.parametrize(
@@ -24,12 +24,6 @@ def test_default_converter_uses_rouble_as_base():
 )
 def test_to_base(amount, currency, expected):
     assert CurrencyConverter().to_base(amount, currency) == expected
-
-
-def test_rates_property_is_a_copy():
-    converter = CurrencyConverter()
-    converter.rates[Currency.USD] = Decimal("1")
-    assert converter.rates[Currency.USD] == Decimal("90")
 
 
 def test_custom_base_currency():

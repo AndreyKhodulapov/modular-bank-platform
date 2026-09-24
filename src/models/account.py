@@ -63,24 +63,25 @@ class AbstractAccount(ABC):
 
     # status transitions: ACTIVE <-> FROZEN, and either of them -> CLOSED (final)
 
+    def _ensure_not_closed(self) -> None:
+        if self._status is AccountStatus.CLOSED:
+            raise AccountClosedError(self._account_id)
+
     def freeze(self) -> None:
-        if self._status is not AccountStatus.ACTIVE:
-            raise InvalidOperationError(
-                f"Only an active account can be frozen; {self._account_id} is {self._status.value}."
-            )
+        self._ensure_not_closed()
+        if self._status is AccountStatus.FROZEN:
+            raise InvalidOperationError(f"Account {self._account_id} is already frozen.")
         self._status = AccountStatus.FROZEN
 
     def unfreeze(self) -> None:
-        if self._status is not AccountStatus.FROZEN:
-            raise InvalidOperationError(
-                f"Only a frozen account can be unfrozen; {self._account_id} is {self._status.value}."
-            )
+        self._ensure_not_closed()
+        if self._status is AccountStatus.ACTIVE:
+            raise InvalidOperationError(f"Account {self._account_id} is not frozen.")
         self._status = AccountStatus.ACTIVE
 
     def close(self) -> None:
         """Close the account for good; it must hold nothing and owe nothing."""
-        if self._status is AccountStatus.CLOSED:
-            raise InvalidOperationError(f"Account {self._account_id} is already closed.")
+        self._ensure_not_closed()
         if self.total_value != 0:
             raise InvalidOperationError(
                 f"Account {self._account_id} cannot be closed while its total value is {self.total_value}."

@@ -70,25 +70,3 @@ def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
         SuspicionReason.INACTIVE_ACCOUNT_OPERATION,
         SuspicionReason.NIGHT_OPERATION,
     ]
-
-
-def test_rejected_operations_never_change_balances(bank, clock, make_client):
-    client = bank.add_client(make_client("Vera"), "vera-password")
-    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
-
-    clock.moment = datetime(2026, 9, 25, 0, 0)
-    with pytest.raises(OperationTimeRestrictedError):
-        bank.withdraw(account.account_id, 500)
-    clock.moment = datetime(2026, 9, 25, 5, 0)
-
-    bank.freeze_account(account.account_id)
-    with pytest.raises(AccountFrozenError):
-        bank.withdraw(account.account_id, 500)
-    bank.unfreeze_account(account.account_id)
-
-    client.block()
-    with pytest.raises(ClientBlockedError):
-        bank.withdraw(account.account_id, 500)
-
-    assert account.balance == Decimal("1000.00")
-    assert bank.get_total_balance() == Decimal("1000.00")

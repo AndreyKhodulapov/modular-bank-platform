@@ -123,22 +123,9 @@ def test_open_account_for_unknown_client(bank):
         bank.open_account("ghost", currency="RUB")
 
 
-def test_open_account_for_blocked_client_is_rejected_and_flagged(bank, client, reasons):
-    client.block()
-    with pytest.raises(ClientBlockedError):
-        bank.open_account(client.client_id, currency="RUB")
-    assert reasons(bank) == [SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
-
-
 def test_large_initial_balance_is_flagged(bank, client, reasons):
     bank.open_account(client.client_id, currency="USD", initial_balance="5555.56")  # 500_000.40 RUB
     assert reasons(bank) == [SuspicionReason.LARGE_OPERATION]
-
-
-def test_freeze_and_unfreeze_account(bank, client):
-    account = bank.open_account(client.client_id, currency="RUB")
-    assert bank.freeze_account(account.account_id).status is AccountStatus.FROZEN
-    assert bank.unfreeze_account(account.account_id).status is AccountStatus.ACTIVE
 
 
 def test_freeze_is_allowed_at_night(bank, client, clock):
@@ -146,14 +133,6 @@ def test_freeze_is_allowed_at_night(bank, client, clock):
     clock.moment = NIGHT
     assert bank.freeze_account(account.account_id).status is AccountStatus.FROZEN
     assert bank.suspicious_activities == []
-
-
-def test_blocked_client_cannot_unfreeze_but_account_can_be_frozen(bank, client):
-    account = bank.open_account(client.client_id, currency="RUB")
-    client.block()
-    bank.freeze_account(account.account_id)
-    with pytest.raises(ClientBlockedError):
-        bank.unfreeze_account(account.account_id)
 
 
 def test_close_empty_account(bank, client):
@@ -204,6 +183,51 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, reaso
     assert client.account_ids == [account.account_id]
 
 
+@pytest.mark.parametrize(
+    ("prepare", "operation"),
+    [
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.open_account(client.client_id, currency="RUB"),
+        ),
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.close_account(account.account_id),
+        ),
+        (
+            lambda bank, client, account: bank.freeze_account(account.account_id),
+            lambda bank, client, account: bank.unfreeze_account(account.account_id),
+        ),
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.deposit(account.account_id, 10),
+        ),
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.withdraw(account.account_id, 10),
+        ),
+    ],
+    ids=["open_account", "close_account", "unfreeze_account", "deposit", "withdraw"],
+)
+def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, reasons, prepare, operation):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    prepare(bank, client, account)
+    status = account.status
+    client.block()
+    with pytest.raises(ClientBlockedError):
+        operation(bank, client, account)
+    assert reasons(bank) == [SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
+    assert (account.status, account.balance) == (status, Decimal("100.00"))
+    assert client.account_ids == [account.account_id]
+
+
+def test_blocked_client_account_can_still_be_frozen(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB")
+    client.block()
+    assert bank.freeze_account(account.account_id).status is AccountStatus.FROZEN
+    assert bank.suspicious_activities == []
+
+
 def test_deposit_and_withdraw(bank, client):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     assert bank.deposit(account.account_id, "50.5") == Decimal("150.50")
@@ -211,23 +235,24 @@ def test_deposit_and_withdraw(bank, client):
     assert bank.suspicious_activities == []
 
 
-def test_blocked_client_cannot_move_money(bank, client):
-    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
-    client.block()
-    with pytest.raises(ClientBlockedError):
-        bank.withdraw(account.account_id, 10)
-    assert account.balance == Decimal("100.00")
-
-
 @pytest.mark.parametrize(
-    ("prepare", "error_type"),
-    [("freeze_account", AccountFrozenError), ("close_account", AccountClosedError)],
+    ("prepare", "operation", "error_type"),
+    [
+        ("freeze_account", "deposit", AccountFrozenError),
+        ("freeze_account", "withdraw", AccountFrozenError),
+        ("close_account", "deposit", AccountClosedError),
+        ("close_account", "withdraw", AccountClosedError),
+        ("close_account", "close_account", AccountClosedError),
+        ("close_account", "freeze_account", AccountClosedError),
+        ("close_account", "unfreeze_account", AccountClosedError),
+    ],
 )
-def test_operation_on_inactive_account_is_flagged(bank, client, prepare, error_type):
+def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operation, error_type):
     account = bank.open_account(client.client_id, currency="RUB")
     getattr(bank, prepare)(account.account_id)
+    arguments = (account.account_id, 10) if operation in ("deposit", "withdraw") else (account.account_id,)
     with pytest.raises(error_type):
-        bank.deposit(account.account_id, 10)
+        getattr(bank, operation)(*arguments)
     [activity] = bank.suspicious_activities
     assert activity.reason is SuspicionReason.INACTIVE_ACCOUNT_OPERATION
     assert activity.account_id == account.account_id

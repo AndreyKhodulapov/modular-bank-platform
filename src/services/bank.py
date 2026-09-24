@@ -153,7 +153,7 @@ class Bank:
             inspect.signature(account_class).bind(owner=client, **params)
         except TypeError as error:
             # an unknown or missing constructor argument, e.g. min_balance for a basic account
-            raise InvalidOperationError(f"Invalid parameters for a {account_type} account: {error}.") from error
+            raise InvalidOperationError(f"Invalid parameters for {account_class.__name__}: {error}.") from error
         account = account_class(owner=client, **params)
         if account.account_id in self._accounts:
             raise InvalidOperationError(f"Account {account.account_id} already exists.")
@@ -162,23 +162,36 @@ class Bank:
         self._review_amount("open_account", account, account.total_value)
         return account
 
+    def _run_on_account[T](self, action: str, account: BankAccount, operation: Callable[[], T]) -> T:
+        """Run ``operation`` and record it as suspicious when the account turns out frozen or closed."""
+        try:
+            return operation()
+        except (AccountFrozenError, AccountClosedError):
+            self._security.flag(
+                SuspicionReason.INACTIVE_ACCOUNT_OPERATION,
+                f"{action} on a {account.status.value} account",
+                client_id=account.owner.client_id,
+                account_id=account.account_id,
+            )
+            raise
+
     def close_account(self, account_id: str) -> BankAccount:
         """Close an account that holds nothing and owes nothing."""
         account = self.get_account(account_id)
         self._guard("close_account", account.owner, account)
-        account.close()
+        self._run_on_account("close_account", account, account.close)
         return account
 
     def freeze_account(self, account_id: str) -> BankAccount:
         """Freeze an active account; allowed at any time, since freezing only protects money."""
         account = self.get_account(account_id)
-        account.freeze()
+        self._run_on_account("freeze_account", account, account.freeze)
         return account
 
     def unfreeze_account(self, account_id: str) -> BankAccount:
         account = self.get_account(account_id)
         self._guard("unfreeze_account", account.owner, account)
-        account.unfreeze()
+        self._run_on_account("unfreeze_account", account, account.unfreeze)
         return account
 
     def deposit(self, account_id: str, amount: object) -> Decimal:
@@ -195,16 +208,7 @@ class Bank:
         self._guard(action, account.owner, account)
         value = to_money(amount, require="positive")
         self._review_amount(action, account, value)
-        try:
-            return operation(value)
-        except (AccountFrozenError, AccountClosedError):
-            self._security.flag(
-                SuspicionReason.INACTIVE_ACCOUNT_OPERATION,
-                f"{action} on a {account.status.value} account",
-                client_id=account.owner.client_id,
-                account_id=account.account_id,
-            )
-            raise
+        return self._run_on_account(action, account, lambda: operation(value))
 
     def search_accounts(
         self,

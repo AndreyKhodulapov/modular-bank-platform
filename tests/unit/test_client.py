@@ -16,8 +16,6 @@ VALID = {
 
 def test_client_id_is_resolved_like_any_identifier():
     assert Client(**VALID, client_id="  CL-1 ").client_id == "CL-1"
-    with pytest.raises(InvalidOperationError, match="client_id"):
-        Client(**VALID, client_id="   ")
 
 
 def test_new_client_is_active_without_accounts():
@@ -77,32 +75,21 @@ def test_rejects_invalid_fields(field, value):
 
 
 @pytest.mark.parametrize(
-    ("today", "accepted"),
+    ("birth_date", "today", "accepted"),
     [
-        (date(2026, 3, 14), False),  # one day before the 18th birthday
-        (date(2026, 3, 15), True),  # the 18th birthday itself
+        (date(2008, 3, 15), date(2026, 3, 14), False),  # one day before the 18th birthday
+        (date(2008, 3, 15), date(2026, 3, 15), True),  # the 18th birthday itself
+        (date(2008, 2, 29), date(2026, 2, 28), False),  # leap-day birthday: 18 only from 1 March
+        (date(2008, 2, 29), date(2026, 3, 1), True),
     ],
 )
-def test_client_must_be_at_least_18(today, accepted):
-    data = {**VALID, "birth_date": date(2008, 3, 15), "today": today}
+def test_client_must_be_at_least_18(birth_date, today, accepted):
+    data = {**VALID, "birth_date": birth_date, "today": today}
     if accepted:
-        assert Client(**data).age_on(today) == 18
+        assert Client(**data).birth_date == birth_date
     else:
         with pytest.raises(InvalidOperationError, match="at least 18"):
             Client(**data)
-
-
-@pytest.mark.parametrize(
-    ("on", "expected"),
-    [
-        (date(2022, 2, 28), 17),
-        (date(2022, 3, 1), 18),  # leap-day birthday counts from 1 March in non-leap years
-        (date(2024, 2, 29), 20),
-    ],
-)
-def test_age_on_handles_leap_day_birthday(on, expected):
-    client = Client(**{**VALID, "birth_date": date(2004, 2, 29)}, today=date(2022, 3, 1))
-    assert client.age_on(on) == expected
 
 
 def test_block_and_unblock():

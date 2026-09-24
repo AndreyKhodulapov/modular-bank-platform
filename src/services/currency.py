@@ -54,11 +54,6 @@ class CurrencyConverter:
     def base(self) -> Currency:
         return self._base
 
-    @property
-    def rates(self) -> dict[Currency, Decimal]:
-        """A copy of the rates; mutating it does not affect the converter."""
-        return dict(self._rates)
-
     def to_base(self, amount: object, currency: Currency | str) -> Decimal:
         """Return ``amount`` of ``currency`` expressed in the base currency."""
         rate = self._rates[to_enum(Currency, currency, field="currency")]

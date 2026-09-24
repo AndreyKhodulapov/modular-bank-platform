@@ -128,11 +128,6 @@ class Client:
     def contacts(self) -> dict[str, str]:
         return {"email": self._email, "phone": self._phone}
 
-    def age_on(self, on: date) -> int:
-        """Return the number of full years the client has lived by ``on``."""
-        self._ensure_plain_date("on", on)
-        return self._full_years(self._birth_date, on)
-
     @property
     def status(self) -> ClientStatus:
         return self._status

@@ -71,17 +71,10 @@ class SecurityGuard:
     def now(self) -> datetime:
         return self._clock()
 
-    @classmethod
-    def _is_night_at(cls, moment: datetime) -> bool:
-        return cls.NIGHT_START <= moment.time() < cls.NIGHT_END
-
-    def is_night(self) -> bool:
-        return self._is_night_at(self.now())
-
     def ensure_daytime(self, action: str, *, client_id: str | None = None, account_id: str | None = None) -> None:
         """Reject ``action`` and record the attempt when it happens in the night window."""
         moment = self.now()
-        if not self._is_night_at(moment):
+        if not self.NIGHT_START <= moment.time() < self.NIGHT_END:
             return
         window = f"{self.NIGHT_START:%H:%M} and {self.NIGHT_END:%H:%M}"
         self.flag(
@@ -149,17 +142,16 @@ class SecurityGuard:
 
     def review_amount(
         self, amount_in_base: Decimal, action: str, *, client_id: str | None = None, account_id: str | None = None
-    ) -> bool:
+    ) -> None:
         """Record ``action`` if its amount reaches the threshold; the operation itself is not stopped."""
         if amount_in_base < self.LARGE_OPERATION_THRESHOLD:
-            return False
+            return
         self.flag(
             SuspicionReason.LARGE_OPERATION,
             f"{action} of {amount_in_base} in base currency (threshold {self.LARGE_OPERATION_THRESHOLD})",
             client_id=client_id,
             account_id=account_id,
         )
-        return True
 
     def flag(
         self,

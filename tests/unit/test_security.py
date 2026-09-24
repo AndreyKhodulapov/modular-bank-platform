@@ -85,9 +85,14 @@ def test_unknown_credentials_count_as_wrong_password(security, owner, password):
         (time(5, 0), False),
     ],
 )
-def test_night_window_boundaries(security, clock, moment, night):
+def test_night_window_boundaries(security, clock, reasons, moment, night):
     clock.moment = datetime.combine(clock.moment.date(), moment)
-    assert security.is_night() is night
+    if night:
+        with pytest.raises(OperationTimeRestrictedError):
+            security.ensure_daytime("withdraw")
+    else:
+        security.ensure_daytime("withdraw")
+    assert reasons(security) == ([SuspicionReason.NIGHT_OPERATION] if night else [])
 
 
 def test_ensure_daytime_rejects_and_logs_night_action(security, clock):
@@ -99,17 +104,12 @@ def test_ensure_daytime_rejects_and_logs_night_action(security, clock):
     assert (activity.timestamp, activity.client_id, activity.account_id) == (clock.moment, "C", "A")
 
 
-def test_ensure_daytime_allows_daytime_action(security):
-    security.ensure_daytime("withdraw")
-    assert security.suspicious_activities == []
-
-
 @pytest.mark.parametrize(
     ("amount", "flagged"),
     [(Decimal("499999.99"), False), (Decimal("500000.00"), True)],
 )
 def test_review_amount_flags_from_threshold(security, reasons, amount, flagged):
-    assert security.review_amount(amount, "deposit", client_id="C", account_id="A") is flagged
+    security.review_amount(amount, "deposit", client_id="C", account_id="A")
     assert reasons(security) == ([SuspicionReason.LARGE_OPERATION] if flagged else [])
 
 

@@ -170,19 +170,19 @@ def test_freeze_and_unfreeze(active_account):
 
 
 @pytest.mark.parametrize(
-    ("fixture", "transition"),
+    ("fixture", "transition", "error_type"),
     [
-        ("frozen_account", "freeze"),
-        ("closed_account", "freeze"),
-        ("active_account", "unfreeze"),
-        ("closed_account", "unfreeze"),
-        ("closed_account", "close"),
+        ("frozen_account", "freeze", InvalidOperationError),
+        ("active_account", "unfreeze", InvalidOperationError),
+        ("closed_account", "freeze", AccountClosedError),
+        ("closed_account", "unfreeze", AccountClosedError),
+        ("closed_account", "close", AccountClosedError),
     ],
 )
-def test_invalid_status_transition_is_rejected(request, fixture, transition):
+def test_invalid_status_transition_is_rejected(request, fixture, transition, error_type):
     account = request.getfixturevalue(fixture)
     status = account.status
-    with pytest.raises(InvalidOperationError):
+    with pytest.raises(error_type):
         getattr(account, transition)()
     assert account.status is status
 
