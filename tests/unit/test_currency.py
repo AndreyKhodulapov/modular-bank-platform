@@ -45,3 +45,22 @@ def test_custom_base_currency():
 def test_rejects_invalid_rates(rates):
     with pytest.raises(InvalidOperationError):
         CurrencyConverter(rates)
+
+
+@pytest.mark.parametrize(
+    ("amount", "source", "target", "expected"),
+    [
+        (100, "USD", "USD", Decimal("100.00")),
+        (100, "USD", "RUB", Decimal("9000.00")),
+        (9000, "RUB", "USD", Decimal("100.00")),
+        (100, "EUR", "USD", Decimal("111.11")),  # cross rate 100 / 90
+        (1, "USD", "KZT", Decimal("500.00")),
+    ],
+)
+def test_convert(amount, source, target, expected):
+    assert CurrencyConverter().convert(amount, source, target) == expected
+
+
+def test_convert_rejects_unknown_currency():
+    with pytest.raises(InvalidOperationError):
+        CurrencyConverter().convert(1, "USD", "GBP")

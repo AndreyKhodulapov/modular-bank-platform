@@ -22,6 +22,7 @@ class PremiumAccount(BankAccount):
 
     MAX_DEPOSIT = BankAccount.MAX_DEPOSIT * 10
     MAX_WITHDRAWAL = BankAccount.MAX_WITHDRAWAL * 10
+    ALLOWS_NEGATIVE_BALANCE = True
 
     def __init__(
         self,

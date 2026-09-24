@@ -44,7 +44,11 @@ charges a fee and dips into overdraft on a premium account, and only spends
 free cash on an investment account. The demo's summary and the integration
 test iterate over a `list[AbstractAccount]` without checking concrete types.
 Subclasses extend rather than replace behaviour: `get_account_info()` and
-`__str__()` call `super()` and append their own fields.
+`__str__()` call `super()` and append their own fields. Polymorphism also
+works through class attributes: `TransactionProcessor` asks
+`account.ALLOWS_NEGATIVE_BALANCE` instead of checking
+`isinstance(account, PremiumAccount)`, so a new account type with an
+overdraft needs no change in the processor.
 
 ## Abstraction
 
@@ -66,7 +70,9 @@ inheriting from them ("is-a"). Parts can be replaced or tested separately.
 
 *In the project:* `InvestmentAccount` has a `Portfolio`; `Bank` has a
 `SecurityGuard` and a `CurrencyConverter` and delegates security and
-conversion to them. `Client` is deliberately not composed of a separate
+conversion to them. `TransactionProcessor` has a `Bank` and a `FeePolicy`
+and moves money only through the bank's public methods, so every bank rule
+also applies to transactions. `Client` is deliberately not composed of a separate
 personal-data object: the client is the person, so a single class holds the
 data together with the client-specific rules (age check, status, account
 numbers).
@@ -79,7 +85,9 @@ numbers).
   `portfolio.py` (asset allocation and growth projection, no knowledge of cash
   or accounts). In the service layer `Bank` only coordinates, `SecurityGuard`
   owns passwords, lockout, the night window and the audit log, and
-  `CurrencyConverter` owns exchange rates.
+  `CurrencyConverter` owns exchange rates. For transactions, `Transaction`
+  owns its data and status rules, `TransactionQueue` only orders,
+  `FeePolicy` only prices, and `TransactionProcessor` executes.
 - **O - Open/Closed:** a new account type extends `BankAccount` and overrides
   `withdraw()`, `get_account_info()` and `__str__()`; the shared checks in
   `_prepare_withdrawal()` and the limit constants are reused, not modified.
@@ -107,7 +115,8 @@ numbers).
 Representing business concepts as explicit types with their own invariants,
 instead of passing raw primitives around.
 
-*In the project:* `AccountStatus`, `ClientStatus`, `Currency`, `AssetType` and
+*In the project:* `AccountStatus`, `ClientStatus`, `Currency`, `AssetType`,
+`TransactionType`, `TransactionStatus`, `TransactionPriority` and
 `SuspicionReason` are enums rather
 than free strings; `Client` and `Portfolio` are dedicated types with validation;
 money is `Decimal` normalised by `to_money()` (floats converted through
@@ -143,12 +152,19 @@ amounts and enum members are values: two equal amounts are interchangeable.
   besides cash: the base returns the balance, while `InvestmentAccount` adds
   the portfolio, so an account with invested money cannot be closed.
 - **Dependency Injection** - an object receives its collaborators instead of
-  creating them. `SecurityGuard(clock=...)` and
-  `Bank(security=..., converter=...)`; the defaults (`datetime.now`, reference
+  creating them. `SecurityGuard(clock=...)`, `TransactionQueue(clock=...)`,
+  `Bank(security=..., converter=...)` and
+  `TransactionProcessor(bank, fee_policy=...)`; the defaults (`datetime.now`, reference
   rates) are used only when nothing is passed.
 - **Value Object** - an immutable object defined by its values, not identity.
-  `SuspiciousActivity` (a frozen dataclass), money as `Decimal` and the enum
-  members.
+  `SuspiciousActivity` and `TransactionErrorRecord` (frozen dataclasses),
+  money as `Decimal` and the enum members.
+- **Strategy** - an interchangeable algorithm behind a fixed interface.
+  `FeePolicy.calculate()` prices a transaction; `TransactionProcessor(bank,
+  fee_policy=...)` accepts any tariff without changing its own code.
+- **State machine** - an object whose allowed actions depend on its state.
+  `Transaction` keeps a table of allowed status transitions and refuses any
+  other move with `InvalidTransactionStateError`.
 - **Fake (test double)** - a simplified working replacement of a dependency.
   `ManualClock` (`src/utils.py`) is a clock whose time is set by hand; the demo
   and the tests use it to step into the night window.
@@ -172,6 +188,37 @@ amounts and enum members are values: two equal amounts are interchangeable.
   frozen or closed accounts and amounts of at least 500 000 RUB go to an
   append-only log.
 
+## Transaction processing
+
+- **State machine.** A transaction's status can only follow
+  `PENDING -> PROCESSING -> COMPLETED | FAILED`, `PROCESSING -> PENDING`
+  (retry) and `PENDING -> CANCELLED`. Final statuses have no way out, so a
+  completed transaction can never be executed again or cancelled.
+- **Idempotency.** Running the same operation twice must not double its
+  effect. `start()` is allowed only from `PENDING`, so a transaction that
+  was already processed is rejected instead of moving money a second time.
+- **Priority queue on a heap.** `heapq` gives O(log n) insertion and
+  removal of the most urgent item. The key is `(-priority, sequence)`: the
+  sequence number keeps first-in-first-out order within a priority and
+  makes the order deterministic. Delayed transactions wait in a second heap
+  keyed by time, so a future urgent item never blocks ready ones.
+- **Lazy deletion.** Removing an arbitrary element from a heap is O(n);
+  instead, `cancel()` only marks the transaction and forgets its entry, and
+  stale entries are skipped when they reach the top.
+- **Atomicity and compensation.** A transfer has two steps (debit, credit)
+  and must not stop halfway. All checks run before money moves; if the
+  credit still fails, a compensating operation returns the debit. This is
+  the idea behind the Saga pattern for operations that span several
+  services, where one database transaction is not available.
+- **Retries with exponential backoff.** Only temporary errors are retried
+  (the night window ends, money may arrive); permanent ones (a frozen
+  account, bad input) fail at once, because retrying them only adds load.
+  Each retry waits twice as long as the previous one, and `max_attempts`
+  bounds the total.
+- **Money and currencies.** Amounts stay `Decimal`; conversion between two
+  foreign currencies goes through the base currency (a cross rate) and is
+  rounded once, at the end, so rounding errors do not accumulate.
+
 ## Structured logging
 
 Emitting log records as key-value data (not free text) so they can be
@@ -179,7 +226,10 @@ filtered, aggregated and shipped to monitoring systems.
 
 *In the project:* the suspicious activity log already stores structured
 records - `SuspiciousActivity` has a timestamp, a `SuspicionReason` enum and
-the client and account ids - so it can be filtered by field. The records are
+the client and account ids - so it can be filtered by field. The
+processor's error log works the same way: `TransactionErrorRecord` keeps
+the time, transaction id, attempt number, error type and whether a retry
+follows. The records are
 kept in memory and are not yet sent through the `logging` module.
 
 ## Preparing modules for unit testing

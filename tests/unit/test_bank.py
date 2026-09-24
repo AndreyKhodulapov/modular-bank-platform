@@ -389,3 +389,22 @@ def test_account_type_registry_is_open_for_extension(bank, client, monkeypatch):
     account = bank.open_account(client.client_id, "student", currency="RUB")
     assert type(account) is StudentAccount
     assert bank.search_accounts(account_type="student") == [account]
+
+
+def test_ensure_operational_returns_an_active_account(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB")
+    assert bank.ensure_operational("transfer", account.account_id) is account
+    assert bank.suspicious_activities == []
+
+
+def test_ensure_operational_flags_a_frozen_account(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB")
+    bank.freeze_account(account.account_id)
+    with pytest.raises(AccountFrozenError):
+        bank.ensure_operational("transfer", account.account_id)
+    assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]
+
+
+def test_now_and_converter_come_from_the_collaborators(bank, clock):
+    assert bank.now() == clock.moment
+    assert bank.converter.base.value == "RUB"

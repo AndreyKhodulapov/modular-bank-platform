@@ -13,10 +13,12 @@ Stages:
 2. Accounts Advanced - savings, premium and investment accounts.
 3. Bank System - clients, login lockout, freezing, the night window,
    search, totals in roubles and the suspicious activity log.
+4. Transactions - ten transactions go through the priority queue and the
+   processor: fees, conversion, rules, delays, cancellation and retries.
 """
 
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from exceptions import BankError
@@ -30,8 +32,9 @@ from models import (
     InvestmentAccount,
     PremiumAccount,
     SavingsAccount,
+    Transaction,
 )
-from services import Bank, SecurityGuard
+from services import Bank, ProcessingReport, SecurityGuard, TransactionProcessor, TransactionQueue
 from utils import ManualClock
 
 
@@ -280,6 +283,160 @@ def run_bank_system() -> list[AbstractAccount]:
     return bank.search_accounts()
 
 
+def run_transactions() -> list[AbstractAccount]:
+    print_stage(4, "Transactions")
+    clock = ManualClock(datetime(2026, 9, 24, 14, 0))
+    bank = Bank(security=SecurityGuard(clock=clock))
+    queue = TransactionQueue(clock=clock)
+    # a long retry delay lets a transaction refused at night succeed in the morning
+    processor = TransactionProcessor(bank, retry_delay=timedelta(hours=2))
+
+    print_step(1, "Clients and accounts")
+    maria = Client(
+        first_name="Maria",
+        last_name="Volkova",
+        birth_date=date(1988, 11, 3),
+        email="maria.volkova@example.com",
+        phone="+79035550101",
+    )
+    oleg = Client(
+        first_name="Oleg",
+        last_name="Sokolov",
+        birth_date=date(1975, 2, 14),
+        email="oleg.sokolov@example.com",
+        phone="+79035550202",
+    )
+    alina = Client(
+        first_name="Alina",
+        last_name="Nurlanova",
+        birth_date=date(2001, 7, 21),
+        email="alina.n@example.kz",
+        phone="+77015550303",
+    )
+    for client, password in ((maria, "maria-pass-1"), (oleg, "oleg-pass-22"), (alina, "alina-pass-333")):
+        bank.add_client(client, password)
+    maria_rub = bank.open_account(maria.client_id, currency="RUB", initial_balance=20_000)
+    oleg_usd = bank.open_account(
+        oleg.client_id, "premium", currency="USD", initial_balance=1_000, overdraft_limit=2_000, withdrawal_fee=3
+    )
+    alina_kzt = bank.open_account(alina.client_id, currency="KZT", initial_balance=50_000)
+    alina_frozen = bank.open_account(alina.client_id, currency="RUB", initial_balance=1_000)
+    bank.freeze_account(alina_frozen.account_id)
+    accounts = [maria_rub, oleg_usd, alina_kzt, alina_frozen]
+    for account in accounts:
+        print(f"  {account}")
+
+    print_step(2, "Ten transactions in the queue")
+    labels: dict[str, str] = {}
+
+    def enqueue(label: str, kind: str, amount: object, currency: str, **params: object) -> Transaction:
+        transaction = queue.add(Transaction(kind, amount, currency, created_at=clock(), **params))
+        labels[transaction.transaction_id] = label
+        return transaction
+
+    enqueue("salary", "deposit", 80_000, "RUB", recipient_id=maria_rub.account_id)
+    enqueue("cash", "withdrawal", 5_000, "RUB", sender_id=maria_rub.account_id, priority="urgent")
+    enqueue(
+        "rub->usd",
+        "transfer",
+        9_000,
+        "RUB",
+        sender_id=maria_rub.account_id,
+        recipient_id=oleg_usd.account_id,
+        priority="high",
+    )
+    enqueue(
+        "abroad",
+        "external_transfer",
+        200,
+        "USD",
+        sender_id=oleg_usd.account_id,
+        recipient_id="DE89-3704-0044-0532-0130-00",
+    )
+    enqueue("overdraft", "transfer", 1_500, "USD", sender_id=oleg_usd.account_id, recipient_id=maria_rub.account_id)
+    enqueue("short", "transfer", 100_000, "KZT", sender_id=alina_kzt.account_id, recipient_id=maria_rub.account_id)
+    enqueue("to frozen", "transfer", 1_000, "RUB", sender_id=maria_rub.account_id, recipient_id=alina_frozen.account_id)
+    enqueue(
+        "top-up",
+        "deposit",
+        60_000,
+        "KZT",
+        recipient_id=alina_kzt.account_id,
+        priority="low",
+        scheduled_at=datetime(2026, 9, 24, 15, 0),
+    )
+    typo = enqueue(
+        "typo",
+        "transfer",
+        500,
+        "RUB",
+        sender_id=maria_rub.account_id,
+        recipient_id=alina_kzt.account_id,
+        priority="low",
+    )
+    enqueue(
+        "night",
+        "transfer",
+        10_000,
+        "RUB",
+        sender_id=maria_rub.account_id,
+        recipient_id=alina_kzt.account_id,
+        scheduled_at=datetime(2026, 9, 25, 2, 0),
+    )
+    for transaction in queue.pending():
+        when = f" at {transaction.scheduled_at:%m-%d %H:%M}" if transaction.scheduled_at else ""
+        print(f"  {labels[transaction.transaction_id]:<10} {transaction}{when}")
+    attempt("cancel 'typo'", lambda: queue.cancel(typo.transaction_id).status.value, label="status")
+
+    print_step(3, "Processing the queue as time goes by")
+
+    def describe(report: ProcessingReport) -> None:
+        for title, transactions in (
+            ("completed", report.completed),
+            ("failed", report.failed),
+            ("retry", report.rescheduled),
+        ):
+            for transaction in transactions:
+                note = ""
+                if title == "retry":
+                    note = f" at {transaction.scheduled_at:%m-%d %H:%M}: {transaction.failure_reason}"
+                elif title == "failed":
+                    note = f": {transaction.failure_reason}"
+                print(f"    [{title}] {labels[transaction.transaction_id]}{note}")
+
+    for moment in (
+        datetime(2026, 9, 24, 14, 0),
+        datetime(2026, 9, 24, 15, 0),
+        datetime(2026, 9, 24, 16, 0),
+        datetime(2026, 9, 25, 2, 0),
+        datetime(2026, 9, 25, 4, 0),
+        datetime(2026, 9, 25, 8, 0),
+    ):
+        clock.moment = moment
+        print(f"  clock {moment:%m-%d %H:%M}")
+        describe(processor.process_queue(queue))
+    print(f"  still queued: {len(queue)}")
+
+    print_step(4, "Results")
+    for transaction_id, label in labels.items():
+        transaction = queue.get(transaction_id)
+        print(
+            f"  {label:<10} {transaction.status.value:<9} attempts {transaction.attempts} "
+            f"fee {transaction.fee} debited {transaction.debited_amount} credited {transaction.credited_amount}"
+        )
+    for account in accounts:
+        print(f"  {account}")
+    print(f"  fees collected: {processor.collected_fees} {bank.base_currency.value}")
+
+    print_step(5, "Error log")
+    for record in processor.errors:
+        outcome = "retry" if record.will_retry else "final"
+        label = labels[record.transaction_id]
+        print(f"  {record.timestamp:%m-%d %H:%M} {label:<10} #{record.attempt} {outcome:<5} {record.error_type}")
+
+    return accounts
+
+
 def print_summary(accounts: list[AbstractAccount]) -> None:
     """Treat every account through the common interface, whatever its type."""
     print(f"\n{' SUMMARY ':=^72}")
@@ -301,7 +458,7 @@ def main() -> None:
         email="ivan.petrov@example.com",
         phone="+79161234567",
     )
-    accounts = run_accounts_basic(owner) + run_accounts_advanced(owner) + run_bank_system()
+    accounts = run_accounts_basic(owner) + run_accounts_advanced(owner) + run_bank_system() + run_transactions()
     print_summary(accounts)
 
 

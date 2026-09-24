@@ -126,11 +126,13 @@ class BankAccount(AbstractAccount):
     """A regular currency account with validation and status enforcement.
 
     ``MAX_DEPOSIT`` and ``MAX_WITHDRAWAL`` cap a single operation; subclasses
-    override them to offer higher limits.
+    override them to offer higher limits. ``ALLOWS_NEGATIVE_BALANCE`` tells
+    whether the account type may go below zero (only with an overdraft).
     """
 
     MAX_DEPOSIT = Decimal("1000000.00")
     MAX_WITHDRAWAL = Decimal("1000000.00")
+    ALLOWS_NEGATIVE_BALANCE = False
 
     def __init__(
         self,
@@ -152,12 +154,6 @@ class BankAccount(AbstractAccount):
 
         self._balance = to_money(initial_balance, field="initial_balance", require="non_negative")
 
-    def _ensure_operational(self) -> None:
-        if self._status is AccountStatus.FROZEN:
-            raise AccountFrozenError(self._account_id)
-        if self._status is AccountStatus.CLOSED:
-            raise AccountClosedError(self._account_id)
-
     @staticmethod
     def _check_limit(value: Decimal, limit: Decimal) -> None:
         if value > limit:
@@ -169,7 +165,7 @@ class BankAccount(AbstractAccount):
         Subclasses call this first and then apply their own rule for how much
         money is actually available (minimum balance, overdraft, portfolio).
         """
-        self._ensure_operational()
+        self.ensure_operational()
         value = to_money(amount, require="positive")
         self._check_limit(value, self.MAX_WITHDRAWAL)
         return value
@@ -180,8 +176,15 @@ class BankAccount(AbstractAccount):
     def currency(self) -> Currency:
         return self._currency
 
+    def ensure_operational(self) -> None:
+        """Raise ``AccountFrozenError`` or ``AccountClosedError`` unless the account is active."""
+        if self._status is AccountStatus.FROZEN:
+            raise AccountFrozenError(self._account_id)
+        if self._status is AccountStatus.CLOSED:
+            raise AccountClosedError(self._account_id)
+
     def deposit(self, amount: object) -> Decimal:
-        self._ensure_operational()
+        self.ensure_operational()
         value = to_money(amount, require="positive")
         self._check_limit(value, self.MAX_DEPOSIT)
         self._balance += value
