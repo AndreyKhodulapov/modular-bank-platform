@@ -5,11 +5,11 @@ no database, no external API and no third-party runtime dependency.
 
 ## Current scope
 
-- `AbstractAccount` – abstract base with a unique id, owner, protected balance,
+- `AbstractAccount` - abstract base with a unique id, owner, protected balance,
   status and the abstract operations `deposit`, `withdraw`, `get_account_info`.
-- `BankAccount` – concrete account with input validation, status enforcement,
+- `BankAccount` - concrete account with input validation, status enforcement,
   automatic UUID4 generation and a `currency` attribute (RUB, USD, EUR, KZT, CNY).
-- `Owner` – immutable, validated owner data with `full_name` and `to_dict()`.
+- `Owner` - immutable, validated owner data with `full_name` and `to_dict()`.
 - Domain exceptions: `AccountFrozenError`, `AccountClosedError`,
   `InvalidOperationError`, `InsufficientFundsError` (all derive from `BankError`).
 - Money is handled as `decimal.Decimal` rounded half-up to two decimal places.

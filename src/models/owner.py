@@ -16,8 +16,8 @@ class Owner:
     by accident, which keeps the account's ``owner`` attribute trustworthy.
     """
 
-    EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-    PHONE_PATTERN = re.compile(r"^\+?\d{10,15}$")
+    EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+    PHONE_PATTERN = re.compile(r"\+?\d{10,15}")
 
     first_name: str
     last_name: str
@@ -27,10 +27,13 @@ class Owner:
     phone: str
 
     def __post_init__(self) -> None:
-        self._validate_name("first_name", self.first_name)
-        self._validate_name("last_name", self.last_name)
-        if self.middle_name is not None:
-            self._validate_name("middle_name", self.middle_name)
+        for field_name in ("first_name", "last_name", "middle_name"):
+            value = getattr(self, field_name)
+            if field_name == "middle_name" and value is None:
+                continue
+            self._validate_name(field_name, value)
+            # the dataclass is frozen, so normalisation has to bypass __setattr__
+            object.__setattr__(self, field_name, value.strip())
 
         # datetime is a subclass of date but cannot be compared with a plain date
         if not isinstance(self.birth_date, date) or isinstance(self.birth_date, datetime):
@@ -38,10 +41,10 @@ class Owner:
         if self.birth_date > date.today():
             raise InvalidOperationError("birth_date cannot be in the future.")
 
-        if not isinstance(self.email, str) or not self.EMAIL_PATTERN.match(self.email):
+        if not isinstance(self.email, str) or not self.EMAIL_PATTERN.fullmatch(self.email):
             raise InvalidOperationError(f"Invalid email address: {self.email!r}.")
 
-        if not isinstance(self.phone, str) or not self.PHONE_PATTERN.match(self.phone):
+        if not isinstance(self.phone, str) or not self.PHONE_PATTERN.fullmatch(self.phone):
             raise InvalidOperationError(
                 f"Invalid phone number: {self.phone!r} (expected 10-15 digits with optional leading '+')."
             )

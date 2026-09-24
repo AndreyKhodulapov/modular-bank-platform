@@ -25,6 +25,11 @@ def test_full_name_with_middle_name():
     assert owner.full_name == "Petrov Ivan Sergeevich"
 
 
+def test_names_are_stripped():
+    owner = Owner(**{**VALID, "first_name": "  Ivan ", "last_name": "Petrov "}, middle_name=" Sergeevich")
+    assert owner.full_name == "Petrov Ivan Sergeevich"
+
+
 def test_to_dict_serializes_birth_date_as_iso_string():
     owner = Owner(**VALID, middle_name="Sergeevich")
     assert owner.to_dict() == {
@@ -55,8 +60,10 @@ def test_owner_is_immutable():
         ("birth_date", date.today() + timedelta(days=1)),
         ("email", "not-an-email"),
         ("email", ""),
+        ("email", "ivan@example.com\n"),
         ("phone", "123"),
         ("phone", "phone"),
+        ("phone", "+79161234567\n"),
     ],
 )
 def test_owner_rejects_invalid_fields(field, value):

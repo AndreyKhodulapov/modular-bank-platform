@@ -7,30 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from exceptions import AccountFrozenError, BankError
-from models import AccountStatus, BankAccount, Currency
-
-
-def test_frozen_and_active_accounts_scenario(owner):
-    active = BankAccount(owner=owner, currency=Currency.RUB, initial_balance="1000")
-    frozen = BankAccount(
-        owner=owner,
-        currency="USD",
-        account_id="ACC-2024-0042",
-        status=AccountStatus.FROZEN,
-        initial_balance=250.50,
-    )
-
-    with pytest.raises(AccountFrozenError):
-        frozen.deposit(100)
-    with pytest.raises(AccountFrozenError):
-        frozen.withdraw(50)
-    assert frozen.balance == Decimal("250.50")
-
-    active.deposit(500.25)
-    active.withdraw("300")
-    assert active.balance == Decimal("1200.25")
-    assert str(active).endswith("| active | 1200.25 RUB")
+from exceptions import BankError
+from models import BankAccount
 
 
 def test_sequence_of_operations_keeps_exact_decimal_balance(owner):

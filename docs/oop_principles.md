@@ -45,16 +45,16 @@ and cannot be instantiated; `BankAccount` provides the implementation.
 
 ## SOLID
 
-- **S – Single Responsibility:** each module owns one concern -
+- **S - Single Responsibility:** each module owns one concern -
   `exceptions.py` (error types), `utils.py` (money normalisation),
   `owner.py` (owner data), `account.py` (account behaviour).
-- **O – Open/Closed:** new account types extend `AbstractAccount` without
+- **O - Open/Closed:** new account types extend `AbstractAccount` without
   modifying existing code; new currencies are added to the `Currency` enum.
-- **L – Liskov Substitution:** `BankAccount` can be used anywhere an
+- **L - Liskov Substitution:** `BankAccount` can be used anywhere an
   `AbstractAccount` is expected; it never weakens the base contract.
-- **I – Interface Segregation:** the abstract interface is minimal (three
+- **I - Interface Segregation:** the abstract interface is minimal (three
   methods); nothing forces subclasses to implement operations they do not need.
-- **D – Dependency Inversion:** high-level modules depend on abstractions,
+- **D - Dependency Inversion:** high-level modules depend on abstractions,
   not on concrete implementations. Not applied in the project yet: `BankAccount`
   depends on the concrete `Owner` class and `main.py` instantiates `BankAccount`
   directly.
