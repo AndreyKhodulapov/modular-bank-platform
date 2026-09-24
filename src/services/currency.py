@@ -7,32 +7,31 @@ from exceptions import InvalidOperationError
 from models.enums import Currency
 from utils import to_enum, to_money, to_positive_decimal
 
-# Reference rates: how many roubles one unit of each currency is worth.
-# They are fixed on purpose - the platform has no market data feed - and can be
-# replaced by passing another mapping to ``CurrencyConverter``.
-DEFAULT_RATES_TO_RUB: dict[Currency, str] = {
-    Currency.RUB: "1",
-    Currency.USD: "90",
-    Currency.EUR: "100",
-    Currency.KZT: "0.18",
-    Currency.CNY: "12.5",
-}
-
 
 class CurrencyConverter:
     """Converts amounts into a base currency using fixed reference rates.
 
     ``rates`` maps every supported currency to the price of one unit in the
-    base currency; the base currency itself must have the rate 1.
+    base currency; the base currency itself must have the rate 1. Without
+    ``rates`` the converter uses ``DEFAULT_RATES``: reference prices in
+    roubles, fixed on purpose because the platform has no market data feed.
     """
+
+    DEFAULT_RATES: dict[Currency | str, str] = {
+        Currency.RUB: "1",
+        Currency.USD: "90",
+        Currency.EUR: "100",
+        Currency.KZT: "0.18",
+        Currency.CNY: "12.5",
+    }
 
     def __init__(
         self,
-        rates: Mapping[Currency | str, object] = DEFAULT_RATES_TO_RUB,
+        rates: Mapping[Currency | str, object] | None = None,
         base: Currency | str = Currency.RUB,
     ) -> None:
         self._base = to_enum(Currency, base, field="currency")
-        self._rates = self._parse_rates(rates)
+        self._rates = self._parse_rates(self.DEFAULT_RATES if rates is None else rates)
         if self._rates[self._base] != 1:
             raise InvalidOperationError(f"The rate of the base currency {self._base.value} must be 1.")
 

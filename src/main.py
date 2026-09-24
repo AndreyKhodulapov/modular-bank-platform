@@ -45,14 +45,13 @@ def print_step(number: int, title: str) -> None:
 
 
 def attempt(description: str, action: Callable[[], object], label: str | None = "balance") -> None:
-    """Run ``action`` and print its result, or the domain error that rejected it."""
     try:
         value = action()
     except BankError as error:
         print(f"  [rejected] {description}: {type(error).__name__}: {error}")
     else:
-        result = f": {label} {value}" if label else ""
-        print(f"  [ok]       {description}{result}")
+        suffix = f": {label} {value}" if label else ""
+        print(f"  [ok]       {description}{suffix}")
 
 
 def run_accounts_basic(owner: Client) -> list[AbstractAccount]:

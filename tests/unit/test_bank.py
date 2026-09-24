@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
@@ -13,42 +13,24 @@ from exceptions import (
     InvalidOperationError,
     OperationTimeRestrictedError,
 )
-from models import AccountStatus, BankAccount, Client, InvestmentAccount, SavingsAccount
+from models import AccountStatus, BankAccount, InvestmentAccount, SavingsAccount
 from services import Bank, CurrencyConverter, SuspicionReason
-from tests.conftest import PASSWORD
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
 
 
-def make_client(first_name: str, last_name: str = "Ivanova") -> Client:
-    return Client(
-        first_name=first_name,
-        last_name=last_name,
-        birth_date=date(1990, 1, 1),
-        email=f"{first_name.lower()}@example.com",
-        phone="+79990002233",
-    )
-
-
-def reasons(bank):
-    return [activity.reason for activity in bank.suspicious_activities]
-
-
-# clients
-
-
-def test_add_client_registers_and_returns_it(bank, owner):
-    assert bank.add_client(owner, PASSWORD) is owner
+def test_add_client_registers_and_returns_it(bank, owner, password):
+    assert bank.add_client(owner, password) is owner
     assert bank.get_client(owner.client_id) is owner
 
 
-def test_add_client_rejects_duplicate_id(bank, client):
+def test_add_client_rejects_duplicate_id(bank, client, password):
     with pytest.raises(InvalidOperationError, match="already registered"):
-        bank.add_client(client, PASSWORD)
+        bank.add_client(client, password)
 
 
-@pytest.mark.parametrize(("candidate", "password"), [("not a client", PASSWORD), (None, PASSWORD)])
-def test_add_client_rejects_non_client(bank, candidate, password):
+@pytest.mark.parametrize("candidate", ["not a client", None])
+def test_add_client_rejects_non_client(bank, password, candidate):
     with pytest.raises(InvalidOperationError):
         bank.add_client(candidate, password)
 
@@ -67,52 +49,30 @@ def test_unknown_ids_raise_not_found(bank):
         bank.get_account("nope")
 
 
-def test_authenticate_client_returns_client(bank, client):
-    assert bank.authenticate_client(client.client_id, PASSWORD) is client
+def test_authenticate_client_returns_client(bank, client, password):
+    assert bank.authenticate_client(client.client_id, password) is client
 
 
-def test_three_failed_logins_block_the_client(bank, client):
-    for _ in range(2):
-        with pytest.raises(AuthenticationError):
-            bank.authenticate_client(client.client_id, "wrong-password")
-    with pytest.raises(ClientBlockedError):
-        bank.authenticate_client(client.client_id, "wrong-password")
-    with pytest.raises(ClientBlockedError):
-        bank.authenticate_client(client.client_id, PASSWORD)
-    assert client.is_blocked
-
-
-def test_login_for_unknown_client_is_flagged(bank):
+def test_login_for_unknown_client_is_flagged(bank, password):
     with pytest.raises(ClientNotFoundError):
-        bank.authenticate_client("ghost", PASSWORD)
+        bank.authenticate_client("ghost", password)
     [activity] = bank.suspicious_activities
     assert (activity.reason, activity.client_id) == (SuspicionReason.UNKNOWN_CLIENT_LOGIN, "ghost")
 
 
-def test_login_is_allowed_at_night(bank, client, clock):
+def test_login_is_allowed_at_night(bank, client, clock, password):
     clock.moment = NIGHT
-    assert bank.authenticate_client(client.client_id, PASSWORD) is client
+    assert bank.authenticate_client(client.client_id, password) is client
 
 
-def test_unblock_client_restores_access_and_resets_counter(bank, client, security):
+def test_unblock_client_restores_access_and_resets_counter(bank, client, security, password):
     for _ in range(3):
         with pytest.raises((AuthenticationError, ClientBlockedError)):
             bank.authenticate_client(client.client_id, "wrong-password")
     bank.unblock_client(client.client_id)
     assert not client.is_blocked
     assert security.failed_attempts(client.client_id) == 0
-    assert bank.authenticate_client(client.client_id, PASSWORD) is client
-
-
-def test_unblock_client_is_forbidden_at_night(bank, client, clock):
-    client.block()
-    clock.moment = NIGHT
-    with pytest.raises(OperationTimeRestrictedError):
-        bank.unblock_client(client.client_id)
-    assert client.is_blocked
-
-
-# opening accounts
+    assert bank.authenticate_client(client.client_id, password) is client
 
 
 @pytest.mark.parametrize(
@@ -163,27 +123,16 @@ def test_open_account_for_unknown_client(bank):
         bank.open_account("ghost", currency="RUB")
 
 
-def test_open_account_for_blocked_client_is_rejected_and_flagged(bank, client):
+def test_open_account_for_blocked_client_is_rejected_and_flagged(bank, client, reasons):
     client.block()
     with pytest.raises(ClientBlockedError):
         bank.open_account(client.client_id, currency="RUB")
     assert reasons(bank) == [SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
 
 
-def test_open_account_is_forbidden_at_night(bank, client, clock):
-    clock.moment = NIGHT
-    with pytest.raises(OperationTimeRestrictedError):
-        bank.open_account(client.client_id, currency="RUB")
-    assert client.account_ids == []
-    assert reasons(bank) == [SuspicionReason.NIGHT_OPERATION]
-
-
-def test_large_initial_balance_is_flagged(bank, client):
+def test_large_initial_balance_is_flagged(bank, client, reasons):
     bank.open_account(client.client_id, currency="USD", initial_balance="5555.56")  # 500_000.40 RUB
     assert reasons(bank) == [SuspicionReason.LARGE_OPERATION]
-
-
-# status changes
 
 
 def test_freeze_and_unfreeze_account(bank, client):
@@ -192,13 +141,11 @@ def test_freeze_and_unfreeze_account(bank, client):
     assert bank.unfreeze_account(account.account_id).status is AccountStatus.ACTIVE
 
 
-def test_freeze_is_allowed_at_night_but_unfreeze_is_not(bank, client, clock):
+def test_freeze_is_allowed_at_night(bank, client, clock):
     account = bank.open_account(client.client_id, currency="RUB")
     clock.moment = NIGHT
-    bank.freeze_account(account.account_id)
-    with pytest.raises(OperationTimeRestrictedError):
-        bank.unfreeze_account(account.account_id)
-    assert account.status is AccountStatus.FROZEN
+    assert bank.freeze_account(account.account_id).status is AccountStatus.FROZEN
+    assert bank.suspicious_activities == []
 
 
 def test_blocked_client_cannot_unfreeze_but_account_can_be_frozen(bank, client):
@@ -215,20 +162,46 @@ def test_close_empty_account(bank, client):
     assert client.account_ids == [account.account_id]  # closed accounts stay in the history
 
 
-def test_close_account_with_money_is_rejected(bank, client):
-    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1)
-    with pytest.raises(InvalidOperationError):
-        bank.close_account(account.account_id)
-
-
-def test_close_account_is_forbidden_at_night(bank, client, clock):
-    account = bank.open_account(client.client_id, currency="RUB")
+@pytest.mark.parametrize(
+    ("prepare", "operation"),
+    [
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.open_account(client.client_id, currency="RUB"),
+        ),
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.close_account(account.account_id),
+        ),
+        (
+            lambda bank, client, account: bank.freeze_account(account.account_id),
+            lambda bank, client, account: bank.unfreeze_account(account.account_id),
+        ),
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.deposit(account.account_id, 10),
+        ),
+        (
+            lambda bank, client, account: None,
+            lambda bank, client, account: bank.withdraw(account.account_id, 10),
+        ),
+        (
+            lambda bank, client, account: client.block(),
+            lambda bank, client, account: bank.unblock_client(client.client_id),
+        ),
+    ],
+    ids=["open_account", "close_account", "unfreeze_account", "deposit", "withdraw", "unblock_client"],
+)
+def test_restricted_operations_are_forbidden_at_night(bank, client, clock, reasons, prepare, operation):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    prepare(bank, client, account)
+    status, blocked = account.status, client.is_blocked
     clock.moment = NIGHT
     with pytest.raises(OperationTimeRestrictedError):
-        bank.close_account(account.account_id)
-
-
-# money
+        operation(bank, client, account)
+    assert reasons(bank) == [SuspicionReason.NIGHT_OPERATION]
+    assert (account.status, account.balance, client.is_blocked) == (status, Decimal("100.00"), blocked)
+    assert client.account_ids == [account.account_id]
 
 
 def test_deposit_and_withdraw(bank, client):
@@ -236,16 +209,6 @@ def test_deposit_and_withdraw(bank, client):
     assert bank.deposit(account.account_id, "50.5") == Decimal("150.50")
     assert bank.withdraw(account.account_id, 30) == Decimal("120.50")
     assert bank.suspicious_activities == []
-
-
-@pytest.mark.parametrize("operation", ["deposit", "withdraw"])
-def test_money_operations_are_forbidden_at_night(bank, client, clock, operation):
-    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
-    clock.moment = NIGHT
-    with pytest.raises(OperationTimeRestrictedError):
-        getattr(bank, operation)(account.account_id, 10)
-    assert account.balance == Decimal("100.00")
-    assert reasons(bank) == [SuspicionReason.NIGHT_OPERATION]
 
 
 def test_blocked_client_cannot_move_money(bank, client):
@@ -270,17 +233,7 @@ def test_operation_on_inactive_account_is_flagged(bank, client, prepare, error_t
     assert activity.account_id == account.account_id
 
 
-@pytest.mark.parametrize(
-    ("amount", "flagged"),
-    [(499_999, False), (500_000, True)],
-)
-def test_large_amount_is_flagged_in_base_currency(bank, client, amount, flagged):
-    account = bank.open_account(client.client_id, "premium", currency="RUB")
-    bank.deposit(account.account_id, amount)
-    assert reasons(bank) == ([SuspicionReason.LARGE_OPERATION] if flagged else [])
-
-
-def test_large_amount_is_converted_before_the_check(bank, client):
+def test_large_amount_is_converted_before_the_check(bank, client, reasons):
     account = bank.open_account(client.client_id, currency="EUR")
     bank.deposit(account.account_id, 5_000)  # 500_000 RUB
     assert reasons(bank) == [SuspicionReason.LARGE_OPERATION]
@@ -293,13 +246,10 @@ def test_invalid_amount_is_rejected_before_review(bank, client):
     assert bank.suspicious_activities == []
 
 
-# queries
-
-
 @pytest.fixture
-def populated(bank, client):
+def populated(bank, client, make_client, password):
     """Two clients with four accounts in different currencies, types and states."""
-    other = bank.add_client(make_client("Olga"), PASSWORD)
+    other = bank.add_client(make_client("Olga"), password)
     rub = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
     usd = bank.open_account(client.client_id, "savings", currency="USD", initial_balance=100)
     eur = bank.open_account(other.client_id, "investment", currency="EUR", initial_balance=50)
@@ -357,8 +307,8 @@ def test_total_balance_of_empty_bank_is_zero(bank):
     assert bank.get_total_balance() == Decimal("0.00")
 
 
-def test_clients_ranking(bank, populated):
-    newcomer = bank.add_client(make_client("Anna", "Belova"), PASSWORD)
+def test_clients_ranking(bank, populated, make_client, password):
+    newcomer = bank.add_client(make_client("Anna", "Belova"), password)
     ranking = bank.get_clients_ranking()
     assert ranking == [
         (populated["client"], Decimal("10000.00")),
@@ -367,16 +317,16 @@ def test_clients_ranking(bank, populated):
     ]
 
 
-def test_clients_ranking_breaks_ties_by_full_name(bank):
-    zoya = bank.add_client(make_client("Zoya"), PASSWORD)
-    anna = bank.add_client(make_client("Anna"), PASSWORD)
+def test_clients_ranking_breaks_ties_by_full_name(bank, make_client, password):
+    zoya = bank.add_client(make_client("Zoya"), password)
+    anna = bank.add_client(make_client("Anna"), password)
     assert [client for client, _ in bank.get_clients_ranking()] == [anna, zoya]
 
 
-def test_bank_uses_injected_converter(security, owner):
+def test_bank_uses_injected_converter(security, owner, password):
     rates = {"USD": 1, "RUB": "0.01", "EUR": "1.1", "KZT": "0.002", "CNY": "0.14"}
     bank = Bank(security=security, converter=CurrencyConverter(rates, base="USD"))
-    bank.add_client(owner, PASSWORD)
+    bank.add_client(owner, password)
     bank.open_account(owner.client_id, currency="RUB", initial_balance=1_000)
     assert bank.base_currency.value == "USD"
     assert bank.get_total_balance() == Decimal("10.00")

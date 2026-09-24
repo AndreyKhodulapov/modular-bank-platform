@@ -1,5 +1,6 @@
 """Shared fixtures for unit and integration tests."""
 
+from collections.abc import Callable
 from datetime import date, datetime
 
 import pytest
@@ -13,11 +14,8 @@ from models import (
     PremiumAccount,
     SavingsAccount,
 )
-from services import Bank, SecurityGuard
+from services import Bank, SecurityGuard, SuspicionReason
 from utils import ManualClock
-
-DAYTIME = datetime(2026, 9, 24, 14, 0)
-PASSWORD = "correct-horse-1"
 
 
 @pytest.fixture
@@ -29,6 +27,23 @@ def owner() -> Client:
         email="anna@example.com",
         phone="+79990001122",
     )
+
+
+@pytest.fixture
+def make_client() -> Callable[..., Client]:
+    """Factory of valid clients that differ by name; ``birth_date`` and ``last_name`` can be overridden."""
+
+    def factory(first_name: str, last_name: str = "Ivanova", birth_date: date = date(1990, 1, 1)) -> Client:
+        return Client(
+            first_name=first_name,
+            last_name=last_name,
+            birth_date=birth_date,
+            email=f"{first_name.lower()}@example.com",
+            phone="+79990002233",
+            today=date(2026, 9, 24),
+        )
+
+    return factory
 
 
 @pytest.fixture
@@ -84,7 +99,7 @@ def investment_account(owner: Client) -> InvestmentAccount:
 
 @pytest.fixture
 def clock() -> ManualClock:
-    return ManualClock(DAYTIME)
+    return ManualClock(datetime(2026, 9, 24, 14, 0))
 
 
 @pytest.fixture
@@ -98,6 +113,17 @@ def bank(security: SecurityGuard) -> Bank:
 
 
 @pytest.fixture
-def client(bank: Bank, owner: Client) -> Client:
-    """``owner`` registered in ``bank`` with ``PASSWORD``."""
-    return bank.add_client(owner, PASSWORD)
+def password() -> str:
+    return "correct-horse-1"
+
+
+@pytest.fixture
+def client(bank: Bank, owner: Client, password: str) -> Client:
+    """``owner`` registered in ``bank`` with ``password``."""
+    return bank.add_client(owner, password)
+
+
+@pytest.fixture
+def reasons() -> Callable[[Bank | SecurityGuard], list[SuspicionReason]]:
+    """Reasons of the recorded suspicious activities, in order, of a bank or a guard."""
+    return lambda source: [activity.reason for activity in source.suspicious_activities]

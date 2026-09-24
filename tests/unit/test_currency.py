@@ -4,7 +4,7 @@ import pytest
 
 from exceptions import InvalidOperationError
 from models import Currency
-from services import DEFAULT_RATES_TO_RUB, CurrencyConverter
+from services import CurrencyConverter
 
 
 def test_default_converter_uses_rouble_as_base():
@@ -41,11 +41,11 @@ def test_custom_base_currency():
 @pytest.mark.parametrize(
     "rates",
     [
-        {**DEFAULT_RATES_TO_RUB, Currency.RUB: "2"},  # base rate is not 1
-        {key: value for key, value in DEFAULT_RATES_TO_RUB.items() if key is not Currency.CNY},  # missing
-        {**DEFAULT_RATES_TO_RUB, "usd": "91"},  # the same currency twice
-        {**DEFAULT_RATES_TO_RUB, Currency.USD: 0},
-        {**DEFAULT_RATES_TO_RUB, "GBP": 110},
+        {**CurrencyConverter.DEFAULT_RATES, Currency.RUB: "2"},  # base rate is not 1
+        {key: value for key, value in CurrencyConverter.DEFAULT_RATES.items() if key is not Currency.CNY},  # missing
+        {**CurrencyConverter.DEFAULT_RATES, "usd": "91"},  # the same currency twice
+        {**CurrencyConverter.DEFAULT_RATES, Currency.USD: 0},
+        {**CurrencyConverter.DEFAULT_RATES, "GBP": 110},
         [("RUB", 1)],
     ],
 )

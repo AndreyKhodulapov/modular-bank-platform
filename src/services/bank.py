@@ -1,5 +1,6 @@
 """The bank: a single entry point to clients, accounts and their security."""
 
+import inspect
 from collections.abc import Callable
 from decimal import Decimal
 
@@ -66,8 +67,6 @@ class Bank:
     def suspicious_activities(self) -> list[SuspiciousActivity]:
         return self._security.suspicious_activities
 
-    # lookups
-
     def get_client(self, client_id: str) -> Client:
         client = self._clients.get(client_id)
         if client is None:
@@ -87,8 +86,6 @@ class Bank:
             allowed = ", ".join(cls.ACCOUNT_TYPES)
             raise InvalidOperationError(f"Unsupported account type {account_type!r}; allowed: {allowed}.")
         return account_class
-
-    # shared checks
 
     def _guard(self, action: str, client: Client, account: BankAccount | None = None) -> None:
         """Run the checks shared by every restricted operation: night window, then client status."""
@@ -110,8 +107,6 @@ class Bank:
             client_id=account.owner.client_id,
             account_id=account.account_id,
         )
-
-    # clients
 
     def add_client(self, client: Client, password: str) -> Client:
         """Register ``client`` with a login password; the password is stored as a hash only."""
@@ -142,8 +137,6 @@ class Bank:
         self._security.reset_failed_attempts(client_id)
         return client
 
-    # accounts
-
     def open_account(self, client_id: str, account_type: str = "basic", **params: object) -> BankAccount:
         """Open an account of a registered type for the client.
 
@@ -157,10 +150,11 @@ class Bank:
             raise InvalidOperationError("The owner of a new account is always the client it is opened for.")
         self._guard("open_account", client)
         try:
-            account = account_class(owner=client, **params)
+            inspect.signature(account_class).bind(owner=client, **params)
         except TypeError as error:
             # an unknown or missing constructor argument, e.g. min_balance for a basic account
             raise InvalidOperationError(f"Invalid parameters for a {account_type} account: {error}.") from error
+        account = account_class(owner=client, **params)
         if account.account_id in self._accounts:
             raise InvalidOperationError(f"Account {account.account_id} already exists.")
         self._accounts[account.account_id] = account
@@ -187,8 +181,6 @@ class Bank:
         account.unfreeze()
         return account
 
-    # money
-
     def deposit(self, account_id: str, amount: object) -> Decimal:
         account = self.get_account(account_id)
         return self._move_money("deposit", account, account.deposit, amount)
@@ -213,8 +205,6 @@ class Bank:
                 account_id=account.account_id,
             )
             raise
-
-    # queries
 
     def search_accounts(
         self,

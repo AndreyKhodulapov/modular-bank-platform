@@ -1,4 +1,3 @@
-import uuid
 from decimal import Decimal
 
 import pytest
@@ -18,13 +17,7 @@ def test_abstract_account_cannot_be_instantiated(owner):
         AbstractAccount(owner=owner, account_id="x")
 
 
-def test_generates_uuid4_when_account_id_missing(owner):
-    account = BankAccount(owner=owner, currency=Currency.RUB)
-    parsed = uuid.UUID(account.account_id)
-    assert parsed.version == 4
-
-
-def test_keeps_provided_account_id_stripped(owner):
+def test_account_id_is_resolved_like_any_identifier(owner):
     account = BankAccount(owner=owner, currency="RUB", account_id="  ACC-0001 ")
     assert account.account_id == "ACC-0001"
 

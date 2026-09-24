@@ -6,49 +6,43 @@ import pytest
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, OperationTimeRestrictedError
 from services import SecurityGuard, SuspicionReason
 
-PASSWORD = "correct-horse-1"
-
 
 @pytest.fixture
-def guard(security, owner):
-    security.register_password(owner.client_id, PASSWORD)
+def guard(security, owner, password):
+    security.register_password(owner.client_id, password)
     return security
 
 
-def reasons(guard):
-    return [activity.reason for activity in guard.suspicious_activities]
-
-
-def test_password_is_stored_as_salted_hash(security):
-    security.register_password("A", PASSWORD)
-    security.register_password("B", PASSWORD)
+def test_password_is_stored_as_salted_hash(security, password):
+    security.register_password("A", password)
+    security.register_password("B", password)
     stored_a, stored_b = security._passwords["A"], security._passwords["B"]
-    assert PASSWORD.encode() not in stored_a.digest
+    assert password.encode() not in stored_a.digest
     assert stored_a.salt != stored_b.salt
     assert stored_a.digest != stored_b.digest
 
 
-@pytest.mark.parametrize("password", ["short", "", None, 12345678])
-def test_rejects_weak_or_non_string_password(security, password):
+@pytest.mark.parametrize("candidate", ["short", "", None, 12345678])
+def test_rejects_weak_or_non_string_password(security, candidate):
     with pytest.raises(InvalidOperationError):
-        security.register_password("A", password)
+        security.register_password("A", candidate)
 
 
-def test_right_password_passes_and_logs_nothing(guard, owner):
-    guard.authenticate(owner, PASSWORD)
+def test_right_password_passes_and_logs_nothing(guard, owner, password):
+    guard.authenticate(owner, password)
     assert guard.suspicious_activities == []
 
 
-@pytest.mark.parametrize("password", ["wrong-password", None, b"correct-horse-1"])
-def test_wrong_password_counts_and_reports_attempts_left(guard, owner, password):
+@pytest.mark.parametrize("candidate", ["wrong-password", None, b"correct-horse-1"])
+def test_wrong_password_counts_and_reports_attempts_left(guard, owner, reasons, candidate):
     with pytest.raises(AuthenticationError) as info:
-        guard.authenticate(owner, password)
+        guard.authenticate(owner, candidate)
     assert info.value.attempts_left == 2
     assert guard.failed_attempts(owner.client_id) == 1
     assert reasons(guard) == [SuspicionReason.FAILED_LOGIN]
 
 
-def test_third_failure_blocks_the_client(guard, owner):
+def test_third_failure_blocks_the_client(guard, owner, reasons):
     for _ in range(2):
         with pytest.raises(AuthenticationError):
             guard.authenticate(owner, "wrong-password")
@@ -58,27 +52,27 @@ def test_third_failure_blocks_the_client(guard, owner):
     assert reasons(guard) == [SuspicionReason.FAILED_LOGIN] * 3 + [SuspicionReason.CLIENT_BLOCKED]
 
 
-def test_blocked_client_is_rejected_even_with_right_password(guard, owner):
+def test_blocked_client_is_rejected_even_with_right_password(guard, owner, password, reasons):
     owner.block()
     with pytest.raises(ClientBlockedError):
-        guard.authenticate(owner, PASSWORD)
+        guard.authenticate(owner, password)
     assert reasons(guard) == [SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
 
 
-def test_success_resets_the_failure_counter(guard, owner):
+def test_success_resets_the_failure_counter(guard, owner, password):
     for _ in range(2):
         with pytest.raises(AuthenticationError):
             guard.authenticate(owner, "wrong-password")
-    guard.authenticate(owner, PASSWORD)
+    guard.authenticate(owner, password)
     assert guard.failed_attempts(owner.client_id) == 0
     with pytest.raises(AuthenticationError):
         guard.authenticate(owner, "wrong-password")
     assert not owner.is_blocked
 
 
-def test_unknown_credentials_count_as_wrong_password(security, owner):
+def test_unknown_credentials_count_as_wrong_password(security, owner, password):
     with pytest.raises(AuthenticationError):
-        security.authenticate(owner, PASSWORD)
+        security.authenticate(owner, password)
 
 
 @pytest.mark.parametrize(
@@ -114,7 +108,7 @@ def test_ensure_daytime_allows_daytime_action(security):
     ("amount", "flagged"),
     [(Decimal("499999.99"), False), (Decimal("500000.00"), True)],
 )
-def test_review_amount_flags_from_threshold(security, amount, flagged):
+def test_review_amount_flags_from_threshold(security, reasons, amount, flagged):
     assert security.review_amount(amount, "deposit", client_id="C", account_id="A") is flagged
     assert reasons(security) == ([SuspicionReason.LARGE_OPERATION] if flagged else [])
 

@@ -67,9 +67,9 @@ inheriting from them ("is-a"). Parts can be replaced or tested separately.
 *In the project:* `InvestmentAccount` has a `Portfolio`; `Bank` has a
 `SecurityGuard` and a `CurrencyConverter` and delegates security and
 conversion to them. `Client` is deliberately not composed of a separate
-personal-data object: the task defines the client as the person, so a single
-class holds the data together with the client-specific rules (age check,
-status, account numbers).
+personal-data object: the client is the person, so a single class holds the
+data together with the client-specific rules (age check, status, account
+numbers).
 
 ## SOLID
 
@@ -178,8 +178,8 @@ filtered, aggregated and shipped to monitoring systems.
 
 *In the project:* the suspicious activity log already stores structured
 records - `SuspiciousActivity` has a timestamp, a `SuspicionReason` enum and
-the client and account ids - so it can be filtered by field. Sending records
-through the `logging` module will arrive with the transaction features.
+the client and account ids - so it can be filtered by field. The records are
+kept in memory and are not yet sent through the `logging` module.
 
 ## Preparing modules for unit testing
 

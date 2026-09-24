@@ -68,28 +68,29 @@ class SecurityGuard:
         self._failed_attempts: dict[str, int] = {}
         self._log: list[SuspiciousActivity] = []
 
-    # time
-
     def now(self) -> datetime:
         return self._clock()
 
+    @classmethod
+    def _is_night_at(cls, moment: datetime) -> bool:
+        return cls.NIGHT_START <= moment.time() < cls.NIGHT_END
+
     def is_night(self) -> bool:
-        return self.NIGHT_START <= self.now().time() < self.NIGHT_END
+        return self._is_night_at(self.now())
 
     def ensure_daytime(self, action: str, *, client_id: str | None = None, account_id: str | None = None) -> None:
         """Reject ``action`` and record the attempt when it happens in the night window."""
-        if not self.is_night():
+        moment = self.now()
+        if not self._is_night_at(moment):
             return
         window = f"{self.NIGHT_START:%H:%M} and {self.NIGHT_END:%H:%M}"
         self.flag(
             SuspicionReason.NIGHT_OPERATION,
-            f"{action} attempted at {self.now():%H:%M}",
+            f"{action} attempted at {moment:%H:%M}",
             client_id=client_id,
             account_id=account_id,
         )
         raise OperationTimeRestrictedError(action, window)
-
-    # passwords and login
 
     @classmethod
     def _hash(cls, password: str, salt: bytes) -> bytes:
@@ -145,8 +146,6 @@ class SecurityGuard:
 
     def reset_failed_attempts(self, client_id: str) -> None:
         self._failed_attempts.pop(client_id, None)
-
-    # audit log
 
     def review_amount(
         self, amount_in_base: Decimal, action: str, *, client_id: str | None = None, account_id: str | None = None

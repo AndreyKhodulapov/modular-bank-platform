@@ -82,12 +82,11 @@ class Client:
 
     @staticmethod
     def _full_years(birth_date: date, on: date) -> int:
-        # the birthday has not come yet this year -> one year less;
+        years = on.year - birth_date.year
         # a person born on 29 February becomes a year older on 1 March in non-leap years
-        not_yet = (on.month, on.day) < (birth_date.month, birth_date.day)
-        return on.year - birth_date.year - not_yet
-
-    # personal data (read-only)
+        if (on.month, on.day) < (birth_date.month, birth_date.day):
+            years -= 1
+        return years
 
     @property
     def client_id(self) -> str:
@@ -134,8 +133,6 @@ class Client:
         self._ensure_plain_date("on", on)
         return self._full_years(self._birth_date, on)
 
-    # status
-
     @property
     def status(self) -> ClientStatus:
         return self._status
@@ -154,8 +151,6 @@ class Client:
             raise InvalidOperationError(f"Client {self._client_id} is not blocked.")
         self._status = ClientStatus.ACTIVE
 
-    # account numbers
-
     @property
     def account_ids(self) -> list[str]:
         """A copy of the client's account numbers; mutating it does not affect the client."""
@@ -171,13 +166,9 @@ class Client:
             raise InvalidOperationError(f"Account {account_id} is already linked to client {self._client_id}.")
         self._account_ids.append(account_id)
 
-    # serialization
-
     def to_summary_dict(self) -> dict[str, Any]:
         """Identify the client and give their contacts; embedded into account snapshots."""
         return {"client_id": self._client_id, "full_name": self.full_name, **self.contacts}
-
-    # identity
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Client):

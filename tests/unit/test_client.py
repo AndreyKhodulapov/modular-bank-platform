@@ -1,4 +1,3 @@
-import uuid
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -15,20 +14,10 @@ VALID = {
 }
 
 
-def test_generates_uuid4_when_client_id_missing():
-    client = Client(**VALID)
-    assert uuid.UUID(client.client_id).version == 4
-
-
-def test_keeps_provided_client_id_stripped():
-    client = Client(**VALID, client_id="  CL-1 ")
-    assert client.client_id == "CL-1"
-
-
-@pytest.mark.parametrize("client_id", ["", "   ", 42])
-def test_rejects_invalid_client_id(client_id):
-    with pytest.raises(InvalidOperationError):
-        Client(**VALID, client_id=client_id)
+def test_client_id_is_resolved_like_any_identifier():
+    assert Client(**VALID, client_id="  CL-1 ").client_id == "CL-1"
+    with pytest.raises(InvalidOperationError, match="client_id"):
+        Client(**VALID, client_id="   ")
 
 
 def test_new_client_is_active_without_accounts():
