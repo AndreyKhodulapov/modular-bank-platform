@@ -4,7 +4,15 @@ from datetime import date
 
 import pytest
 
-from models import AccountStatus, BankAccount, Currency, Owner
+from models import (
+    AccountStatus,
+    BankAccount,
+    Currency,
+    InvestmentAccount,
+    Owner,
+    PremiumAccount,
+    SavingsAccount,
+)
 
 
 @pytest.fixture
@@ -40,3 +48,30 @@ def closed_account(owner: Owner) -> BankAccount:
         currency=Currency.EUR,
         status=AccountStatus.CLOSED,
     )
+
+
+@pytest.fixture
+def savings_account(owner: Owner) -> SavingsAccount:
+    return SavingsAccount(
+        owner=owner,
+        currency="RUB",
+        initial_balance=1000,
+        min_balance=100,
+        monthly_rate="0.015",
+    )
+
+
+@pytest.fixture
+def premium_account(owner: Owner) -> PremiumAccount:
+    return PremiumAccount(
+        owner=owner,
+        currency="USD",
+        initial_balance=100,
+        overdraft_limit=50,
+        withdrawal_fee=5,
+    )
+
+
+@pytest.fixture
+def investment_account(owner: Owner) -> InvestmentAccount:
+    return InvestmentAccount(owner=owner, currency="EUR", initial_balance=1000)

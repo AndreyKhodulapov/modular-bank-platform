@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 
 from exceptions import InvalidOperationError
-from utils import to_money
+from utils import to_money, to_rate
 
 
 @pytest.mark.parametrize(
@@ -35,3 +35,34 @@ def test_to_money_rejects_unsupported_input(value):
 def test_to_money_reports_field_name():
     with pytest.raises(InvalidOperationError, match="initial_balance"):
         to_money("oops", field="initial_balance")
+
+
+@pytest.mark.parametrize("value", [0, "-0.01", -0.004])
+def test_to_money_positive_rejects_zero_and_negative(value):
+    with pytest.raises(InvalidOperationError, match="greater than zero"):
+        to_money(value, positive=True)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("0.005", Decimal("0.005")), (0.1, Decimal("0.1")), (1, Decimal("1")), (Decimal("0"), Decimal("0"))],
+)
+def test_to_rate_keeps_precision(value, expected):
+    assert to_rate(value) == expected
+
+
+def test_to_rate_rejects_negative_unless_allowed():
+    with pytest.raises(InvalidOperationError, match="negative"):
+        to_rate("-0.1")
+    assert to_rate("-0.1", allow_negative=True) == Decimal("-0.1")
+
+
+def test_to_rate_never_goes_below_minus_one():
+    with pytest.raises(InvalidOperationError, match="below -1"):
+        to_rate(-1.5, allow_negative=True)
+
+
+@pytest.mark.parametrize("value", [True, None, "abc", "nan", "inf"])
+def test_to_rate_rejects_unsupported_input(value):
+    with pytest.raises(InvalidOperationError):
+        to_rate(value)

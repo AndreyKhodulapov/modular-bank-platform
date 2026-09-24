@@ -5,8 +5,8 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from exceptions import InvalidOperationError
 
 
-def to_money(value: object, *, field: str = "amount") -> Decimal:
-    """Convert an arbitrary numeric input into a two-decimal ``Decimal``.
+def _to_decimal(value: object, field: str) -> Decimal:
+    """Convert a numeric input into a finite ``Decimal`` without rounding.
 
     Accepted inputs: ``int``, ``Decimal``, ``float`` and numeric ``str``.
     ``bool`` is rejected explicitly because it is a subclass of ``int`` and
@@ -14,28 +14,57 @@ def to_money(value: object, *, field: str = "amount") -> Decimal:
 
     Floats are converted through ``str()`` so that binary representation
     artefacts (``Decimal(0.1) == 0.1000000000000000055...``) never leak into
-    the account balance. The result is rounded half-up to two decimal places;
-    a negative zero produced by rounding (``"-0.004"``) is normalised to ``0.00``.
+    the domain.
     """
     if isinstance(value, bool):
         raise InvalidOperationError(f"{field} must be a number, not bool.")
 
     if isinstance(value, Decimal | int):
-        money = Decimal(value)
+        number = Decimal(value)
     elif isinstance(value, float):
-        money = Decimal(str(value))
+        number = Decimal(str(value))
     elif isinstance(value, str):
         try:
-            money = Decimal(value.strip())
+            number = Decimal(value.strip())
         except InvalidOperation as exc:
             raise InvalidOperationError(f"{field} must be a numeric string, got {value!r}.") from exc
     else:
         raise InvalidOperationError(f"{field} must be int, float, Decimal or str, got {type(value).__name__}.")
 
-    if not money.is_finite():
+    if not number.is_finite():
         raise InvalidOperationError(f"{field} must be a finite number.")
+    return number
 
+
+def to_money(value: object, *, field: str = "amount", positive: bool = False) -> Decimal:
+    """Convert an arbitrary numeric input into a two-decimal ``Decimal``.
+
+    The result is rounded half-up to two decimal places; a negative zero
+    produced by rounding (``"-0.004"``) is normalised to ``0.00``. With
+    ``positive=True`` the rounded value must be strictly greater than zero.
+    """
+    number = _to_decimal(value, field)
     try:
-        return +money.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        money = +number.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except InvalidOperation as exc:
         raise InvalidOperationError(f"{field} is too large: {value!r}.") from exc
+
+    if positive and money <= 0:
+        raise InvalidOperationError(f"{field} must be greater than zero, got {money}.")
+    return money
+
+
+def to_rate(value: object, *, field: str = "rate", allow_negative: bool = False) -> Decimal:
+    """Convert a numeric input into a ``Decimal`` rate expressed as a fraction.
+
+    Rates are fractions, not percentages: ``0.10`` means 10%. Unlike money
+    they are not rounded to two decimal places, so ``0.005`` (0.5%) survives.
+    A negative rate is only accepted with ``allow_negative=True`` and can never
+    go below ``-1`` (a loss of more than 100% is meaningless).
+    """
+    rate = _to_decimal(value, field)
+    if rate < 0 and not allow_negative:
+        raise InvalidOperationError(f"{field} cannot be negative, got {rate}.")
+    if rate < -1:
+        raise InvalidOperationError(f"{field} cannot be below -1, got {rate}.")
+    return rate

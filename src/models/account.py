@@ -10,6 +10,7 @@ from exceptions import (
     AccountFrozenError,
     InsufficientFundsError,
     InvalidOperationError,
+    LimitExceededError,
 )
 from models.enums import AccountStatus, Currency
 from models.owner import Owner
@@ -77,7 +78,14 @@ class AbstractAccount(ABC):
 
 
 class BankAccount(AbstractAccount):
-    """A regular currency account with validation and status enforcement."""
+    """A regular currency account with validation and status enforcement.
+
+    ``MAX_DEPOSIT`` and ``MAX_WITHDRAWAL`` cap a single operation; subclasses
+    override them to offer higher limits.
+    """
+
+    MAX_DEPOSIT = Decimal("1000000.00")
+    MAX_WITHDRAWAL = Decimal("1000000.00")
 
     def __init__(
         self,
@@ -137,10 +145,19 @@ class BankAccount(AbstractAccount):
             raise AccountClosedError(self._account_id)
 
     @staticmethod
-    def _validate_amount(amount: object) -> Decimal:
-        value = to_money(amount)
-        if value <= 0:
-            raise InvalidOperationError(f"amount must be greater than zero, got {value}.")
+    def _check_limit(value: Decimal, limit: Decimal) -> None:
+        if value > limit:
+            raise LimitExceededError(requested=value, limit=limit)
+
+    def _prepare_withdrawal(self, amount: object) -> Decimal:
+        """Run the checks shared by every withdrawal: status, amount, limit.
+
+        Subclasses call this first and then apply their own rule for how much
+        money is actually available (minimum balance, overdraft, portfolio).
+        """
+        self._ensure_operational()
+        value = to_money(amount, positive=True)
+        self._check_limit(value, self.MAX_WITHDRAWAL)
         return value
 
     # public API
@@ -151,13 +168,13 @@ class BankAccount(AbstractAccount):
 
     def deposit(self, amount: object) -> Decimal:
         self._ensure_operational()
-        value = self._validate_amount(amount)
+        value = to_money(amount, positive=True)
+        self._check_limit(value, self.MAX_DEPOSIT)
         self._balance += value
         return self._balance
 
     def withdraw(self, amount: object) -> Decimal:
-        self._ensure_operational()
-        value = self._validate_amount(amount)
+        value = self._prepare_withdrawal(amount)
         if value > self._balance:
             raise InsufficientFundsError(requested=value, available=self._balance)
         self._balance -= value
