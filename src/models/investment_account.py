@@ -62,9 +62,10 @@ class InvestmentAccount(BankAccount):
     def divest(self, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move ``amount`` from ``asset_type`` back to free cash; return the new cash balance."""
         self._ensure_operational()
-        # the portfolio validates the asset type, the amount and the holding size
-        self._portfolio.remove(asset_type, amount)
-        self._balance += to_money(amount)
+        asset = Portfolio.resolve_asset_type(asset_type)
+        value = to_money(amount, positive=True)
+        self._portfolio.remove(asset, value)
+        self._balance += value
         return self._balance
 
     def project_yearly_growth(self, growth_rates: Mapping[AssetType | str, object]) -> Decimal:

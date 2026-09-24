@@ -63,8 +63,9 @@ implement the part that differs - how much money is actually available.
   `owner.py` (owner data), one module per account type, `portfolio.py`
   (asset allocation and growth projection, no knowledge of cash or accounts).
 - **O - Open/Closed:** the three advanced accounts were added without
-  modifying `AbstractAccount` or the tests of `BankAccount`; new asset types
-  are added to the `AssetType` enum.
+  touching `AbstractAccount` or any existing test of `BankAccount`; the only
+  change to `BankAccount` was extracting the shared withdrawal checks into
+  `_prepare_withdrawal()`. New asset types are added to the `AssetType` enum.
 - **L - Liskov Substitution:** every subclass can be used wherever an
   `AbstractAccount` is expected. Subclasses apply stricter funds rules, but the
   base contract - "either debit the balance and return it, or raise a

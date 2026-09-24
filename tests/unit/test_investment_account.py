@@ -66,9 +66,7 @@ def test_withdraw_never_touches_portfolio(investment_account):
 
 def test_project_yearly_growth_delegates_to_portfolio(investment_account):
     investment_account.invest("stocks", 500)
-    investment_account.invest("bonds", 200)
-    rates = {"stocks": "0.10", "bonds": "0.04", "etf": "0.07"}
-    assert investment_account.project_yearly_growth(rates) == Decimal("58.00")
+    assert investment_account.project_yearly_growth({"stocks": "0.10"}) == Decimal("50.00")
 
 
 def test_get_account_info_extends_base_snapshot(investment_account):

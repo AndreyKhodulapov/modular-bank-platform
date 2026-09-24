@@ -68,15 +68,19 @@ class Portfolio:
 
         ``growth_rates`` maps every asset type held in the portfolio to its
         yearly rate as a fraction (``0.10`` means 10%). Extra keys are allowed,
-        missing ones are an error: a silent 0% would hide a caller's mistake.
+        missing or duplicated ones (``"stocks"`` and ``AssetType.STOCKS``) are
+        an error: a silent 0% or a silently chosen rate would hide a caller's
+        mistake.
         """
         if not isinstance(growth_rates, Mapping):
             raise InvalidOperationError("growth_rates must be a mapping of asset type to yearly rate.")
 
-        rates = {
-            self.resolve_asset_type(asset): to_rate(rate, field=f"growth_rates[{asset!r}]", allow_negative=True)
-            for asset, rate in growth_rates.items()
-        }
+        rates: dict[AssetType, Decimal] = {}
+        for key, rate in growth_rates.items():
+            asset = self.resolve_asset_type(key)
+            if asset in rates:
+                raise InvalidOperationError(f"growth_rates has more than one rate for {asset.value}.")
+            rates[asset] = to_rate(rate, field=f"growth_rates[{asset.value}]", allow_negative=True)
         missing = [asset.value for asset in self._holdings if asset not in rates]
         if missing:
             raise InvalidOperationError(f"growth_rates is missing rates for: {', '.join(missing)}.")

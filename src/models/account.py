@@ -105,10 +105,7 @@ class BankAccount(AbstractAccount):
         )
         self._currency = self._resolve_currency(currency)
 
-        balance = to_money(initial_balance, field="initial_balance")
-        if balance < 0:
-            raise InvalidOperationError("initial_balance cannot be negative.")
-        self._balance = balance
+        self._balance = to_money(initial_balance, field="initial_balance", non_negative=True)
 
     @staticmethod
     def _resolve_account_id(account_id: str | None) -> str:

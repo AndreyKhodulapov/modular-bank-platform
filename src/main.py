@@ -30,9 +30,6 @@ from models import (
     SavingsAccount,
 )
 
-# Illustrative yearly growth rates for the investment demo; not market data.
-DEMO_GROWTH_RATES = {AssetType.STOCKS: "0.10", AssetType.BONDS: "0.04", AssetType.ETF: "0.07"}
-
 
 def print_stage(number: int, title: str) -> None:
     banner = f" STAGE {number}: {title} "
@@ -120,6 +117,7 @@ def run_accounts_advanced(owner: Owner) -> list[AbstractAccount]:
     attempt("withdraw 98.50 EUR", lambda: premium_no_overdraft.withdraw("98.50"))
 
     print_step(3, "Investment accounts: portfolio and yearly projection")
+    growth_rates = {AssetType.STOCKS: "0.10", AssetType.BONDS: "0.04", AssetType.ETF: "0.07"}
     investment = InvestmentAccount(owner=owner, currency="EUR", initial_balance=10_000)
     investment_small = InvestmentAccount(owner=owner, currency="KZT", initial_balance=1_000)
     print(f"  {investment}")
@@ -133,13 +131,17 @@ def run_accounts_advanced(owner: Owner) -> list[AbstractAccount]:
     attempt("divest 1_500 EUR from stocks", lambda: investment.divest("stocks", 1_500), label="cash")
     attempt("withdraw 3_000 EUR", lambda: investment.withdraw(3_000))
     attempt("invest 1_000 KZT in etf", lambda: investment_small.invest("etf", 1_000), label="cash")
-    rates = ", ".join(f"{asset.value} {Decimal(rate):.0%}" for asset, rate in DEMO_GROWTH_RATES.items())
+    rates = ", ".join(f"{asset.value} {Decimal(rate):.0%}" for asset, rate in growth_rates.items())
     print(f"  Portfolio: {investment.get_account_info()['portfolio']}")
-    attempt(f"project yearly growth ({rates})", lambda: investment.project_yearly_growth(DEMO_GROWTH_RATES), "growth")
+    attempt(
+        f"project yearly growth ({rates})",
+        lambda: investment.project_yearly_growth(growth_rates),
+        label="growth",
+    )
     attempt(
         "project yearly growth (rate only for stocks)",
         lambda: investment.project_yearly_growth({"stocks": 0.1}),
-        "growth",
+        label="growth",
     )
 
     return [savings, savings_frozen, premium, premium_no_overdraft, investment, investment_small]

@@ -44,12 +44,6 @@ def test_withdraw_below_min_balance_raises(savings_account):
     assert savings_account.balance == Decimal("1000.00")
 
 
-def test_withdraw_runs_shared_checks_first(owner):
-    frozen = SavingsAccount(owner=owner, currency="RUB", status="frozen", initial_balance=1000, min_balance=100)
-    with pytest.raises(AccountFrozenError):
-        frozen.withdraw(10)
-
-
 def test_apply_monthly_interest_credits_and_returns_interest(savings_account):
     interest = savings_account.apply_monthly_interest()
     assert interest == Decimal("15.00")

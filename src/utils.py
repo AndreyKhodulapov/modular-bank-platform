@@ -36,12 +36,13 @@ def _to_decimal(value: object, field: str) -> Decimal:
     return number
 
 
-def to_money(value: object, *, field: str = "amount", positive: bool = False) -> Decimal:
+def to_money(value: object, *, field: str = "amount", positive: bool = False, non_negative: bool = False) -> Decimal:
     """Convert an arbitrary numeric input into a two-decimal ``Decimal``.
 
     The result is rounded half-up to two decimal places; a negative zero
     produced by rounding (``"-0.004"``) is normalised to ``0.00``. With
-    ``positive=True`` the rounded value must be strictly greater than zero.
+    ``positive=True`` the rounded value must be strictly greater than zero,
+    with ``non_negative=True`` it must not be below zero.
     """
     number = _to_decimal(value, field)
     try:
@@ -51,6 +52,8 @@ def to_money(value: object, *, field: str = "amount", positive: bool = False) ->
 
     if positive and money <= 0:
         raise InvalidOperationError(f"{field} must be greater than zero, got {money}.")
+    if non_negative and money < 0:
+        raise InvalidOperationError(f"{field} cannot be negative, got {money}.")
     return money
 
 

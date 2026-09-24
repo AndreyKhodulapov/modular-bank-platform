@@ -43,6 +43,12 @@ def test_to_money_positive_rejects_zero_and_negative(value):
         to_money(value, positive=True)
 
 
+def test_to_money_non_negative_accepts_zero_and_rejects_negative():
+    assert to_money("-0.004", non_negative=True) == Decimal("0.00")
+    with pytest.raises(InvalidOperationError, match="cannot be negative"):
+        to_money("-0.01", non_negative=True)
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [("0.005", Decimal("0.005")), (0.1, Decimal("0.1")), (1, Decimal("1")), (Decimal("0"), Decimal("0"))],

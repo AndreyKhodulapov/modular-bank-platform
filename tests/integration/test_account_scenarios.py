@@ -16,8 +16,6 @@ from models import (
     SavingsAccount,
 )
 
-ACCOUNT_TYPES = [BankAccount, SavingsAccount, PremiumAccount, InvestmentAccount]
-
 
 def test_sequence_of_operations_keeps_exact_decimal_balance(owner):
     account = BankAccount(owner=owner, currency="EUR")
@@ -73,7 +71,7 @@ def test_same_withdrawal_behaves_differently_per_account_type(owner):
     ]
 
 
-@pytest.mark.parametrize("account_type", ACCOUNT_TYPES)
+@pytest.mark.parametrize("account_type", [BankAccount, SavingsAccount, PremiumAccount, InvestmentAccount])
 def test_every_account_type_honours_base_contract(owner, account_type):
     frozen = account_type(owner=owner, currency="RUB", status="frozen", initial_balance=10)
     with pytest.raises(AccountFrozenError):

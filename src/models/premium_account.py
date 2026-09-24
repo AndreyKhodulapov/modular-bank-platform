@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Any
 
-from exceptions import InsufficientFundsError, InvalidOperationError
+from exceptions import InsufficientFundsError
 from models.account import BankAccount
 from models.enums import AccountStatus, Currency
 from models.owner import Owner
@@ -16,6 +16,8 @@ class PremiumAccount(BankAccount):
     Per-operation limits are ten times higher than on a regular account, the
     balance may go negative down to ``-overdraft_limit``, and every successful
     withdrawal is charged a fixed ``withdrawal_fee`` on top of the amount.
+    ``MAX_WITHDRAWAL`` caps the requested amount only; the fee is not counted
+    against it.
     """
 
     MAX_DEPOSIT = BankAccount.MAX_DEPOSIT * 10
@@ -34,12 +36,8 @@ class PremiumAccount(BankAccount):
     ) -> None:
         super().__init__(owner, currency, account_id, status, initial_balance)
 
-        self._overdraft_limit = to_money(overdraft_limit, field="overdraft_limit")
-        if self._overdraft_limit < 0:
-            raise InvalidOperationError("overdraft_limit cannot be negative.")
-        self._withdrawal_fee = to_money(withdrawal_fee, field="withdrawal_fee")
-        if self._withdrawal_fee < 0:
-            raise InvalidOperationError("withdrawal_fee cannot be negative.")
+        self._overdraft_limit = to_money(overdraft_limit, field="overdraft_limit", non_negative=True)
+        self._withdrawal_fee = to_money(withdrawal_fee, field="withdrawal_fee", non_negative=True)
 
     @property
     def overdraft_limit(self) -> Decimal:
@@ -58,11 +56,8 @@ class PremiumAccount(BankAccount):
         value = self._prepare_withdrawal(amount)
         total_debit = value + self._withdrawal_fee
         if total_debit > self.available_funds:
-            raise InsufficientFundsError(
-                requested=total_debit,
-                available=self.available_funds,
-                hint=f"Requested amount includes the fixed fee {self._withdrawal_fee}.",
-            )
+            hint = f"Requested amount includes the fixed fee {self._withdrawal_fee}." if self._withdrawal_fee else None
+            raise InsufficientFundsError(requested=total_debit, available=self.available_funds, hint=hint)
         self._balance -= total_debit
         return self._balance
 

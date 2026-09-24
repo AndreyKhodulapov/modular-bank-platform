@@ -5,15 +5,13 @@ import pytest
 from exceptions import InsufficientFundsError, InvalidOperationError
 from models import AssetType, Portfolio
 
-RATES = {"stocks": "0.10", "bonds": "0.04", "etf": "0.07"}
-
 
 @pytest.fixture
 def portfolio() -> Portfolio:
-    result = Portfolio()
-    result.add(AssetType.STOCKS, 500)
-    result.add("bonds", 200)
-    return result
+    filled = Portfolio()
+    filled.add(AssetType.STOCKS, 500)
+    filled.add("bonds", 200)
+    return filled
 
 
 def test_empty_portfolio():
@@ -21,7 +19,7 @@ def test_empty_portfolio():
     assert empty.total == Decimal("0.00")
     assert empty.holdings == {}
     assert empty.to_dict() == {}
-    assert empty.project_yearly_growth(RATES) == Decimal("0.00")
+    assert empty.project_yearly_growth({"stocks": "0.10"}) == Decimal("0.00")
 
 
 @pytest.mark.parametrize("asset", [AssetType.ETF, "etf", "ETF"])
@@ -58,7 +56,7 @@ def test_remove_more_than_held_raises(portfolio):
 
 def test_project_yearly_growth_sums_weighted_rates(portfolio):
     # 500 * 0.10 + 200 * 0.04 = 58.00; the etf rate is unused but allowed
-    assert portfolio.project_yearly_growth(RATES) == Decimal("58.00")
+    assert portfolio.project_yearly_growth({"stocks": "0.10", "bonds": "0.04", "etf": "0.07"}) == Decimal("58.00")
 
 
 def test_project_yearly_growth_accepts_enum_keys_and_negative_rates(portfolio):
@@ -72,6 +70,7 @@ def test_project_yearly_growth_accepts_enum_keys_and_negative_rates(portfolio):
         {"stocks": "0.10"},  # bonds missing
         {"stocks": "0.10", "bonds": "0.04", "crypto": "1"},  # unknown asset
         {"stocks": "0.10", "bonds": "-1.5"},  # loss of more than 100%
+        {"stocks": "0.10", AssetType.STOCKS: "0.50", "bonds": "0.04"},  # same asset twice
         {"stocks": "0.10", "bonds": "four"},
         [("stocks", "0.10")],  # not a mapping
     ],
