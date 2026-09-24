@@ -4,7 +4,7 @@ Run from the repository root:
 
     python src/main.py
 
-The script is organised in stages that mirror the growth of the platform.
+The script is organised in stages, one per feature set.
 Each stage prints a banner, walks through its scenario and returns the
 accounts it created; the final section treats all of them polymorphically.
 

@@ -57,7 +57,8 @@ class PremiumAccount(BankAccount):
         total_debit = value + self._withdrawal_fee
         if total_debit > self.available_funds:
             hint = f"The fixed fee {self._withdrawal_fee} is charged on top." if self._withdrawal_fee else None
-            raise InsufficientFundsError(requested=value, available=self.available_funds, hint=hint)
+            requestable = max(self.available_funds - self._withdrawal_fee, Decimal("0.00"))
+            raise InsufficientFundsError(requested=value, available=requestable, hint=hint)
         self._balance -= total_debit
         return self._balance
 

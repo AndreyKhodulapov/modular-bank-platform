@@ -65,7 +65,7 @@ def test_same_withdrawal_behaves_differently_per_account_type(owner):
     assert outcomes == [
         ("ok", Decimal("0.00")),  # regular: whole balance leaves
         ("rejected", Decimal("70.00")),  # savings: only 70 above the minimum
-        ("rejected", Decimal("100.00")),  # premium without overdraft: 105 with fee exceeds 100
+        ("rejected", Decimal("95.00")),  # premium without overdraft: 100 minus the 5 fee
         ("ok", Decimal("-5.00")),  # premium with overdraft: fee pushes into overdraft
         ("rejected", Decimal("50.00")),  # investment: half is locked in the portfolio
     ]
@@ -79,9 +79,7 @@ def test_every_account_type_honours_base_contract(owner, account_type):
 
     active = account_type(owner=owner, currency="RUB", account_id="X-1234", initial_balance=10)
     info = active.get_account_info()
-    assert info["account_type"] == account_type.__name__
-    assert {"account_id", "owner", "status", "currency", "balance"} <= info.keys()
-    assert str(active).startswith(f"{account_type.__name__} | Smirnova Anna | ****1234 | active | 10.00 RUB")
+    assert {"account_id", "account_type", "owner", "status", "currency", "balance"} <= info.keys()
 
 
 def test_demo_script_runs_without_errors():

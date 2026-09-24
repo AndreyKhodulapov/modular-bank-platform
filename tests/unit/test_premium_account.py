@@ -31,7 +31,7 @@ def test_withdraw_beyond_overdraft_raises_and_charges_nothing(premium_account):
     with pytest.raises(InsufficientFundsError) as info:
         premium_account.withdraw("145.01")
     assert info.value.requested == Decimal("145.01")
-    assert info.value.available == Decimal("150.00")
+    assert info.value.available == Decimal("145.00")
     assert "fee 5.00" in str(info.value)
     assert premium_account.balance == Decimal("100.00")
 

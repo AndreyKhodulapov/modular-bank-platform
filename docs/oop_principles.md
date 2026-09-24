@@ -68,7 +68,7 @@ implement the part that differs - how much money is actually available.
   New asset types are added to the `AssetType` enum, new currencies to
   `Currency`.
 - **L - Liskov Substitution:** every subclass can be used wherever an
-  `AbstractAccount` is expected. Subclasses apply stricter funds rules, but the
+  `AbstractAccount` is expected. Subclasses apply their own funds rules, but the
   base contract - "either debit the balance and return it, or raise a
   `BankError`" - is never broken, and the shared checks always run first and
   in the same order.

@@ -68,10 +68,8 @@ def to_rate(value: object, *, field: str = "rate", allow_negative: bool = False)
 
     Rates are fractions, not percentages: ``0.10`` means 10%. Unlike money
     they are not rounded to two decimal places, so ``0.005`` (0.5%) survives.
-    A negative rate is only accepted with ``allow_negative=True``. Either way
-    the rate stays within ``[-1, 1]``: a loss of more than 100% is
-    meaningless, and a gain above 100% per period is outside what this
-    model is meant to describe.
+    A negative rate is only accepted with ``allow_negative=True``; rates
+    outside ``[-1, 1]`` are rejected.
     """
     rate = _to_decimal(value, field)
     if rate < 0 and not allow_negative:

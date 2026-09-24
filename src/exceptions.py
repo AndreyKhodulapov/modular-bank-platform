@@ -35,8 +35,9 @@ class AccountClosedError(BankError):
 class InsufficientFundsError(BankError):
     """Raised when a debit exceeds the funds available for it.
 
-    ``hint`` optionally explains what "available" means for the account type
-    (for example that part of the money is locked in a portfolio).
+    ``available`` is the largest amount the same operation would accept.
+    ``hint`` optionally explains why it is smaller than the balance (for
+    example that part of the money is locked in a portfolio).
     """
 
     def __init__(self, requested: Decimal, available: Decimal, hint: str | None = None) -> None:
