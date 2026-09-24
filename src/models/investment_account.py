@@ -48,7 +48,7 @@ class InvestmentAccount(BankAccount):
         """Move ``amount`` of free cash into ``asset_type``; return the new cash balance."""
         self._ensure_operational()
         asset = Portfolio.resolve_asset_type(asset_type)
-        value = to_money(amount, positive=True)
+        value = to_money(amount, require="positive")
         if value > self._balance:
             raise InsufficientFundsError(
                 requested=value,
@@ -63,7 +63,7 @@ class InvestmentAccount(BankAccount):
         """Move ``amount`` from ``asset_type`` back to free cash; return the new cash balance."""
         self._ensure_operational()
         asset = Portfolio.resolve_asset_type(asset_type)
-        value = to_money(amount, positive=True)
+        value = to_money(amount, require="positive")
         self._portfolio.remove(asset, value)
         self._balance += value
         return self._balance
@@ -74,11 +74,8 @@ class InvestmentAccount(BankAccount):
     def withdraw(self, amount: object) -> Decimal:
         value = self._prepare_withdrawal(amount)
         if value > self._balance:
-            raise InsufficientFundsError(
-                requested=value,
-                available=self._balance,
-                hint=f"{self.invested_total} is locked in the portfolio; divest first.",
-            )
+            hint = f"{self.invested_total} is locked in the portfolio; divest first." if self.invested_total else None
+            raise InsufficientFundsError(requested=value, available=self._balance, hint=hint)
         self._balance -= value
         return self._balance
 

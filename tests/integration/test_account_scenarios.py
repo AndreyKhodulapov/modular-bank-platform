@@ -58,16 +58,16 @@ def test_same_withdrawal_behaves_differently_per_account_type(owner):
     outcomes = []
     for account in accounts:
         try:
-            outcomes.append(account.withdraw(100))
+            outcomes.append(("ok", account.withdraw(100)))
         except InsufficientFundsError as error:
-            outcomes.append(error.available)
+            outcomes.append(("rejected", error.available))
 
     assert outcomes == [
-        Decimal("0.00"),  # regular: whole balance
-        Decimal("70.00"),  # savings: only 70 above the minimum
-        Decimal("100.00"),  # premium without overdraft: 105 with fee exceeds 100
-        Decimal("-5.00"),  # premium with overdraft: fee pushes into overdraft
-        Decimal("50.00"),  # investment: half is locked in the portfolio
+        ("ok", Decimal("0.00")),  # regular: whole balance leaves
+        ("rejected", Decimal("70.00")),  # savings: only 70 above the minimum
+        ("rejected", Decimal("100.00")),  # premium without overdraft: 105 with fee exceeds 100
+        ("ok", Decimal("-5.00")),  # premium with overdraft: fee pushes into overdraft
+        ("rejected", Decimal("50.00")),  # investment: half is locked in the portfolio
     ]
 
 

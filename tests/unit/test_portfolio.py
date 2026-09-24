@@ -70,6 +70,7 @@ def test_project_yearly_growth_accepts_enum_keys_and_negative_rates(portfolio):
         {"stocks": "0.10"},  # bonds missing
         {"stocks": "0.10", "bonds": "0.04", "crypto": "1"},  # unknown asset
         {"stocks": "0.10", "bonds": "-1.5"},  # loss of more than 100%
+        {"stocks": "1.5", "bonds": "0.04"},  # gain of more than 100%
         {"stocks": "0.10", AssetType.STOCKS: "0.50", "bonds": "0.04"},  # same asset twice
         {"stocks": "0.10", "bonds": "four"},
         [("stocks", "0.10")],  # not a mapping

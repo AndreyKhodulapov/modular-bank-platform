@@ -36,8 +36,8 @@ class PremiumAccount(BankAccount):
     ) -> None:
         super().__init__(owner, currency, account_id, status, initial_balance)
 
-        self._overdraft_limit = to_money(overdraft_limit, field="overdraft_limit", non_negative=True)
-        self._withdrawal_fee = to_money(withdrawal_fee, field="withdrawal_fee", non_negative=True)
+        self._overdraft_limit = to_money(overdraft_limit, field="overdraft_limit", require="non_negative")
+        self._withdrawal_fee = to_money(withdrawal_fee, field="withdrawal_fee", require="non_negative")
 
     @property
     def overdraft_limit(self) -> Decimal:
@@ -56,8 +56,8 @@ class PremiumAccount(BankAccount):
         value = self._prepare_withdrawal(amount)
         total_debit = value + self._withdrawal_fee
         if total_debit > self.available_funds:
-            hint = f"Requested amount includes the fixed fee {self._withdrawal_fee}." if self._withdrawal_fee else None
-            raise InsufficientFundsError(requested=total_debit, available=self.available_funds, hint=hint)
+            hint = f"The fixed fee {self._withdrawal_fee} is charged on top." if self._withdrawal_fee else None
+            raise InsufficientFundsError(requested=value, available=self.available_funds, hint=hint)
         self._balance -= total_debit
         return self._balance
 

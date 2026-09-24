@@ -40,13 +40,13 @@ def test_to_money_reports_field_name():
 @pytest.mark.parametrize("value", [0, "-0.01", -0.004])
 def test_to_money_positive_rejects_zero_and_negative(value):
     with pytest.raises(InvalidOperationError, match="greater than zero"):
-        to_money(value, positive=True)
+        to_money(value, require="positive")
 
 
 def test_to_money_non_negative_accepts_zero_and_rejects_negative():
-    assert to_money("-0.004", non_negative=True) == Decimal("0.00")
+    assert to_money("-0.004", require="non_negative") == Decimal("0.00")
     with pytest.raises(InvalidOperationError, match="cannot be negative"):
-        to_money("-0.01", non_negative=True)
+        to_money("-0.01", require="non_negative")
 
 
 @pytest.mark.parametrize(
@@ -63,9 +63,15 @@ def test_to_rate_rejects_negative_unless_allowed():
     assert to_rate("-0.1", allow_negative=True) == Decimal("-0.1")
 
 
-def test_to_rate_never_goes_below_minus_one():
-    with pytest.raises(InvalidOperationError, match="below -1"):
-        to_rate(-1.5, allow_negative=True)
+@pytest.mark.parametrize("value", [-1, 1, "0.999"])
+def test_to_rate_accepts_boundaries(value):
+    assert to_rate(value, allow_negative=True) == Decimal(str(value))
+
+
+@pytest.mark.parametrize("value", [-1.5, "1.01", 50])
+def test_to_rate_stays_within_minus_one_and_one(value):
+    with pytest.raises(InvalidOperationError, match="between -1 and 1"):
+        to_rate(value, allow_negative=True)
 
 
 @pytest.mark.parametrize("value", [True, None, "abc", "nan", "inf"])

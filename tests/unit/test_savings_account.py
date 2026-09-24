@@ -23,6 +23,7 @@ def test_defaults_to_no_minimum_and_no_interest(owner):
     [
         {"min_balance": -1},
         {"monthly_rate": "-0.01"},
+        {"monthly_rate": "1.5"},
         {"monthly_rate": True},
         {"initial_balance": 50, "min_balance": 100},
     ],

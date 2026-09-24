@@ -17,7 +17,7 @@ no database, no external API and no third-party runtime dependency.
   `InvalidOperationError`, `InsufficientFundsError`, `LimitExceededError`
   (all derive from `BankError`).
 - Money is handled as `decimal.Decimal` rounded half-up to two decimal places;
-  rates are `Decimal` fractions (`0.10` means 10%).
+  rates are `Decimal` fractions (`0.10` means 10%) within `[-1, 1]`.
 
 ### Accounts Advanced
 

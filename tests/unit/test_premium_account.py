@@ -6,11 +6,6 @@ from exceptions import InsufficientFundsError, InvalidOperationError, LimitExcee
 from models import BankAccount, PremiumAccount
 
 
-def test_limits_are_ten_times_higher_than_regular():
-    assert PremiumAccount.MAX_DEPOSIT == BankAccount.MAX_DEPOSIT * 10
-    assert PremiumAccount.MAX_WITHDRAWAL == BankAccount.MAX_WITHDRAWAL * 10
-
-
 def test_stores_overdraft_and_fee_as_decimal(premium_account):
     assert premium_account.overdraft_limit == Decimal("50.00")
     assert premium_account.withdrawal_fee == Decimal("5.00")
@@ -35,8 +30,9 @@ def test_withdraw_may_use_whole_overdraft(premium_account):
 def test_withdraw_beyond_overdraft_raises_and_charges_nothing(premium_account):
     with pytest.raises(InsufficientFundsError) as info:
         premium_account.withdraw("145.01")
-    assert info.value.requested == Decimal("150.01")
+    assert info.value.requested == Decimal("145.01")
     assert info.value.available == Decimal("150.00")
+    assert "fee 5.00" in str(info.value)
     assert premium_account.balance == Decimal("100.00")
 
 

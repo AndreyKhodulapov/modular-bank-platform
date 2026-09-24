@@ -42,16 +42,14 @@ class Portfolio:
         return self._holdings.get(self.resolve_asset_type(asset_type), Decimal("0.00"))
 
     def add(self, asset_type: AssetType | str, amount: object) -> Decimal:
-        """Allocate ``amount`` to ``asset_type`` and return the new holding."""
         asset = self.resolve_asset_type(asset_type)
-        value = to_money(amount, positive=True)
+        value = to_money(amount, require="positive")
         self._holdings[asset] = self.get(asset) + value
         return self._holdings[asset]
 
     def remove(self, asset_type: AssetType | str, amount: object) -> Decimal:
-        """Release ``amount`` from ``asset_type`` and return the remaining holding."""
         asset = self.resolve_asset_type(asset_type)
-        value = to_money(amount, positive=True)
+        value = to_money(amount, require="positive")
         held = self.get(asset)
         if value > held:
             raise InsufficientFundsError(requested=value, available=held, hint=f"Holding in {asset.value}.")
@@ -67,10 +65,9 @@ class Portfolio:
         """Return the expected growth over one year.
 
         ``growth_rates`` maps every asset type held in the portfolio to its
-        yearly rate as a fraction (``0.10`` means 10%). Extra keys are allowed,
-        missing or duplicated ones (``"stocks"`` and ``AssetType.STOCKS``) are
-        an error: a silent 0% or a silently chosen rate would hide a caller's
-        mistake.
+        yearly rate as a fraction (``0.10`` means 10%). Extra keys are allowed;
+        a missing key or the same asset given twice (``"stocks"`` and
+        ``AssetType.STOCKS``) raises ``InvalidOperationError``.
         """
         if not isinstance(growth_rates, Mapping):
             raise InvalidOperationError("growth_rates must be a mapping of asset type to yearly rate.")

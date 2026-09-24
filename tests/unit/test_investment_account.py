@@ -64,6 +64,12 @@ def test_withdraw_never_touches_portfolio(investment_account):
     assert investment_account.total_value == Decimal("1000.00")
 
 
+def test_withdraw_hint_mentions_portfolio_only_when_something_is_invested(investment_account):
+    with pytest.raises(InsufficientFundsError) as info:
+        investment_account.withdraw(2000)
+    assert "portfolio" not in str(info.value)
+
+
 def test_project_yearly_growth_delegates_to_portfolio(investment_account):
     investment_account.invest("stocks", 500)
     assert investment_account.project_yearly_growth({"stocks": "0.10"}) == Decimal("50.00")

@@ -105,7 +105,7 @@ class BankAccount(AbstractAccount):
         )
         self._currency = self._resolve_currency(currency)
 
-        self._balance = to_money(initial_balance, field="initial_balance", non_negative=True)
+        self._balance = to_money(initial_balance, field="initial_balance", require="non_negative")
 
     @staticmethod
     def _resolve_account_id(account_id: str | None) -> str:
@@ -153,7 +153,7 @@ class BankAccount(AbstractAccount):
         money is actually available (minimum balance, overdraft, portfolio).
         """
         self._ensure_operational()
-        value = to_money(amount, positive=True)
+        value = to_money(amount, require="positive")
         self._check_limit(value, self.MAX_WITHDRAWAL)
         return value
 
@@ -165,7 +165,7 @@ class BankAccount(AbstractAccount):
 
     def deposit(self, amount: object) -> Decimal:
         self._ensure_operational()
-        value = to_money(amount, positive=True)
+        value = to_money(amount, require="positive")
         self._check_limit(value, self.MAX_DEPOSIT)
         self._balance += value
         return self._balance

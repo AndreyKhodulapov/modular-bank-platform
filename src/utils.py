@@ -1,6 +1,7 @@
 """Helper functions shared across the platform."""
 
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from typing import Literal
 
 from exceptions import InvalidOperationError
 
@@ -36,13 +37,18 @@ def _to_decimal(value: object, field: str) -> Decimal:
     return number
 
 
-def to_money(value: object, *, field: str = "amount", positive: bool = False, non_negative: bool = False) -> Decimal:
+def to_money(
+    value: object,
+    *,
+    field: str = "amount",
+    require: Literal["positive", "non_negative"] | None = None,
+) -> Decimal:
     """Convert an arbitrary numeric input into a two-decimal ``Decimal``.
 
     The result is rounded half-up to two decimal places; a negative zero
-    produced by rounding (``"-0.004"``) is normalised to ``0.00``. With
-    ``positive=True`` the rounded value must be strictly greater than zero,
-    with ``non_negative=True`` it must not be below zero.
+    produced by rounding (``"-0.004"``) is normalised to ``0.00``.
+    ``require="positive"`` demands a rounded value strictly greater than
+    zero, ``require="non_negative"`` a value that is not below zero.
     """
     number = _to_decimal(value, field)
     try:
@@ -50,9 +56,9 @@ def to_money(value: object, *, field: str = "amount", positive: bool = False, no
     except InvalidOperation as exc:
         raise InvalidOperationError(f"{field} is too large: {value!r}.") from exc
 
-    if positive and money <= 0:
+    if require == "positive" and money <= 0:
         raise InvalidOperationError(f"{field} must be greater than zero, got {money}.")
-    if non_negative and money < 0:
+    if require == "non_negative" and money < 0:
         raise InvalidOperationError(f"{field} cannot be negative, got {money}.")
     return money
 
@@ -62,12 +68,14 @@ def to_rate(value: object, *, field: str = "rate", allow_negative: bool = False)
 
     Rates are fractions, not percentages: ``0.10`` means 10%. Unlike money
     they are not rounded to two decimal places, so ``0.005`` (0.5%) survives.
-    A negative rate is only accepted with ``allow_negative=True`` and can never
-    go below ``-1`` (a loss of more than 100% is meaningless).
+    A negative rate is only accepted with ``allow_negative=True``. Either way
+    the rate stays within ``[-1, 1]``: a loss of more than 100% is
+    meaningless, and a gain above 100% per period is outside what this
+    model is meant to describe.
     """
     rate = _to_decimal(value, field)
     if rate < 0 and not allow_negative:
         raise InvalidOperationError(f"{field} cannot be negative, got {rate}.")
-    if rate < -1:
-        raise InvalidOperationError(f"{field} cannot be below -1, got {rate}.")
+    if not -1 <= rate <= 1:
+        raise InvalidOperationError(f"{field} must be between -1 and 1, got {rate}.")
     return rate

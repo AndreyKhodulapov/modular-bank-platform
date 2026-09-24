@@ -31,7 +31,7 @@ class SavingsAccount(BankAccount):
     ) -> None:
         super().__init__(owner, currency, account_id, status, initial_balance)
 
-        self._min_balance = to_money(min_balance, field="min_balance", non_negative=True)
+        self._min_balance = to_money(min_balance, field="min_balance", require="non_negative")
         self._monthly_rate = to_rate(monthly_rate, field="monthly_rate")
 
         if self._balance < self._min_balance:
