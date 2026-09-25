@@ -1,5 +1,7 @@
 """End-to-end scenarios that combine several models and operations."""
 
+import json
+import os
 import subprocess
 import sys
 from decimal import Decimal
@@ -82,13 +84,15 @@ def test_every_account_type_honours_base_contract(owner, account_type):
     assert {"account_id", "account_type", "owner", "status", "currency", "balance"} <= info.keys()
 
 
-def test_demo_script_runs_without_errors():
+def test_demo_script_runs_without_errors(tmp_path):
     root = Path(__file__).resolve().parents[2]
+    audit_path = tmp_path / "audit.jsonl"  # keeps the test run out of the project's logs/ folder
     completed = subprocess.run(
         [sys.executable, str(root / "src" / "main.py")],
         capture_output=True,
         text=True,
         check=False,
+        env=os.environ | {"BANK_AUDIT_LOG": str(audit_path)},
     )
     assert completed.returncode == 0, completed.stderr
     assert "STAGE 1: Accounts Basic" in completed.stdout
@@ -109,3 +113,9 @@ def test_demo_script_runs_without_errors():
     assert "[failed] to frozen: AccountFrozenError" in completed.stdout
     assert "night      completed attempts 3" in completed.stdout
     assert "fees collected: 180.00 RUB" in completed.stdout
+    assert "STAGE 5: Audit and Risk" in completed.stdout
+    assert f"file: {audit_path}" in completed.stdout
+    assert "[failed   ] huge abroad      high   score  90" in completed.stdout
+    events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    assert f"this run added {len(events)} events" in completed.stdout
+    assert sum(event["event"] == "operation_blocked" for event in events) == 2

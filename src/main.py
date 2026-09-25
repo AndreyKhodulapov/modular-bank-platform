@@ -16,11 +16,12 @@ Stages:
 4. Transactions - ten transactions go through the priority queue and the
    processor: fees, conversion, rules, delays, cancellation and retries.
 5. Audit and Risk - ordinary and suspicious transactions are scored,
-   dangerous ones are blocked; the audit log is written to a file,
-   filtered and summarised in reports.
+   dangerous ones are blocked; the audit log is appended to
+   ``logs/audit.jsonl`` (or the file in ``BANK_AUDIT_LOG``), filtered and
+   summarised in reports.
 """
 
-import tempfile
+import os
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -49,6 +50,15 @@ from services import (
     TransactionQueue,
 )
 from utils import ManualClock
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_AUDIT_LOG = PROJECT_ROOT / "logs" / "audit.jsonl"
+
+
+def audit_log_path() -> Path:
+    """Where the demo writes its audit log: ``BANK_AUDIT_LOG`` if set, else ``logs/audit.jsonl``."""
+    value = os.environ.get("BANK_AUDIT_LOG", "").strip()
+    return Path(value).expanduser() if value else DEFAULT_AUDIT_LOG
 
 
 def print_stage(number: int, title: str) -> None:
@@ -453,8 +463,8 @@ def run_transactions() -> list[AbstractAccount]:
 def run_audit_and_risk() -> list[AbstractAccount]:
     print_stage(5, "Audit and Risk")
     clock = ManualClock(datetime(2026, 9, 10, 10, 0))
-    # the demo writes its journal to a fresh temporary folder, never into the repository
-    audit_path = Path(tempfile.mkdtemp(prefix="bank-audit-")) / "audit.jsonl"
+    # the journal is append-only: every run adds its events to the same file (logs/ is ignored by git)
+    audit_path = audit_log_path()
     audit_log = AuditLog(audit_path)
     bank = Bank(security=SecurityGuard(clock=clock, audit_log=audit_log))
     queue = TransactionQueue(clock=bank.now)
@@ -555,8 +565,9 @@ def run_audit_and_risk() -> list[AbstractAccount]:
         print(f"  {account}")
 
     print_step(4, "Audit log")
-    lines = audit_path.read_text(encoding="utf-8").splitlines()
-    print(f"  {len(audit_log)} events in memory, {len(lines)} lines in {audit_path}")
+    stored = AuditLog.load(audit_path)
+    print(f"  file: {audit_path}")
+    print(f"  this run added {len(audit_log)} events; the file holds {len(stored)} events from all runs")
     print("  WARNING and above:")
     for event in audit_log.filter(min_level="warning"):
         print(f"    {event}")

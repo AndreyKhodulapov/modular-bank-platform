@@ -203,8 +203,10 @@ modular-bank-platform/
 │   ├── conftest.py         # shared fixtures
 │   ├── unit/               # one module per model, service or helper
 │   └── integration/        # account, bank, transaction and risk scenarios, demo smoke test
-└── docs/
-    └── oop_principles.md   # interview-style notes on OOP, patterns, security
+├── docs/
+│   └── oop_principles.md   # interview-style notes on OOP, patterns, security
+└── logs/                   # created by the demo, ignored by git
+    └── audit.jsonl         # the audit log, one JSON event per line
 ```
 
 ## Setup
@@ -243,11 +245,33 @@ The script runs one stage per feature set and prints a banner before each:
    suspicious ones - a large transfer to an account opened today, a huge
    payment abroad, six quick transfers in a row, a large transfer late in
    the evening, a night transfer - are scored, allowed with a warning or
-   blocked. The audit log is written to a JSON Lines file in a temporary
-   folder (its path is printed), filtered, and summarised in the three
-   reports.
+   blocked. The audit log is appended to `logs/audit.jsonl`, filtered, and
+   summarised in the three reports.
 
 A final summary treats all created accounts through the common interface.
+
+### Audit log file
+
+The demo writes its audit log to `logs/audit.jsonl` in the project root; the
+folder is created on the first run and is ignored by git. The log is
+append-only, so each run adds its events to the same file (delete the file
+to start over). Set `BANK_AUDIT_LOG` to write somewhere else:
+
+```bash
+BANK_AUDIT_LOG=/tmp/bank/audit.jsonl python src/main.py
+```
+
+Every line is one event, so standard tools work on the file:
+
+```bash
+tail -n 5 logs/audit.jsonl                                   # the latest events
+grep '"level": "CRITICAL"' logs/audit.jsonl                  # blocked operations and clients
+jq -c 'select(.category == "risk") | [.timestamp, .message]' logs/audit.jsonl
+```
+
+In code, `AuditLog.load("logs/audit.jsonl")` reads the file back into
+`AuditEvent` objects. The tests never write to `logs/`: the demo smoke test
+points `BANK_AUDIT_LOG` to a temporary folder.
 
 ## Run the tests and linter
 
