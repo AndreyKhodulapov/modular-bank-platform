@@ -1,4 +1,4 @@
-"""Security rules of the bank: passwords, login lockout, the night window and the audit log."""
+"""Security rules of the bank: passwords, login lockout, the night window and suspicious activities."""
 
 import hashlib
 import hmac
@@ -11,6 +11,7 @@ from enum import Enum
 
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, OperationTimeRestrictedError
 from models.client import Client
+from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog
 
 
 class SuspicionReason(Enum):
@@ -27,7 +28,7 @@ class SuspicionReason(Enum):
 
 @dataclass(frozen=True)
 class SuspiciousActivity:
-    """One entry of the audit log; immutable once recorded."""
+    """A security event of the audit log, seen from the security side; immutable."""
 
     timestamp: datetime
     reason: SuspicionReason
@@ -49,10 +50,12 @@ class SecurityGuard:
       the passwords themselves;
     - blocks a client after ``MAX_FAILED_ATTEMPTS`` failed logins in a row;
     - forbids restricted operations inside ``[NIGHT_START, NIGHT_END)``;
-    - keeps an append-only log of suspicious activities.
+    - records suspicious activities in the audit log (category
+      ``security``; a blocked client is ``CRITICAL``, the rest ``WARNING``).
 
     The current time comes from the injected ``clock`` (``datetime.now`` by
-    default), which keeps the night rule testable.
+    default), which keeps the night rule testable. The audit log is injected
+    too, so the bank, the processor and the guard can share one journal.
     """
 
     MAX_FAILED_ATTEMPTS = 3
@@ -61,14 +64,22 @@ class SecurityGuard:
     LARGE_OPERATION_THRESHOLD = Decimal("500000.00")  # in the bank's base currency
     MIN_PASSWORD_LENGTH = 8
     HASH_ITERATIONS = 100_000
+    CRITICAL_REASONS = frozenset({SuspicionReason.CLIENT_BLOCKED})
+    REASON_NAMES = frozenset(reason.value for reason in SuspicionReason)
 
-    def __init__(self, clock: Callable[[], datetime] = datetime.now) -> None:
+    def __init__(self, clock: Callable[[], datetime] = datetime.now, audit_log: AuditLog | None = None) -> None:
+        if audit_log is not None and not isinstance(audit_log, AuditLog):
+            raise InvalidOperationError("audit_log must be an AuditLog instance.")
         self._clock = clock
         self._passwords: dict[str, _PasswordHash] = {}
-        self._log: list[SuspiciousActivity] = []
+        self._audit_log = audit_log if audit_log is not None else AuditLog()
 
     def now(self) -> datetime:
         return self._clock()
+
+    @property
+    def audit_log(self) -> AuditLog:
+        return self._audit_log
 
     def ensure_daytime(self, action: str, *, client_id: str | None = None, account_id: str | None = None) -> None:
         """Reject ``action`` and record the attempt when it happens in the night window."""
@@ -155,17 +166,37 @@ class SecurityGuard:
         client_id: str | None = None,
         account_id: str | None = None,
     ) -> SuspiciousActivity:
-        activity = SuspiciousActivity(
+        level = AuditLevel.CRITICAL if reason in self.CRITICAL_REASONS else AuditLevel.WARNING
+        event = self._audit_log.record(
+            level,
+            AuditCategory.SECURITY,
+            reason.value,
+            details,
             timestamp=self.now(),
-            reason=reason,
-            details=details,
             client_id=client_id,
             account_id=account_id,
         )
-        self._log.append(activity)
-        return activity
+        return self._to_activity(event)
+
+    @staticmethod
+    def _to_activity(event: AuditEvent) -> SuspiciousActivity:
+        return SuspiciousActivity(
+            timestamp=event.timestamp,
+            reason=SuspicionReason(event.event),
+            details=event.message,
+            client_id=event.client_id,
+            account_id=event.account_id,
+        )
 
     @property
     def suspicious_activities(self) -> list[SuspiciousActivity]:
-        """A copy of the log in the order the activities were recorded."""
-        return list(self._log)
+        """The security events of the audit log, in the order they were recorded.
+
+        Only events named after a ``SuspicionReason`` are included: other
+        code may record its own security events in the shared log.
+        """
+        return [
+            self._to_activity(event)
+            for event in self._audit_log.filter(category=AuditCategory.SECURITY)
+            if event.event in self.REASON_NAMES
+        ]

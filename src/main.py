@@ -15,11 +15,17 @@ Stages:
    search, totals in roubles and the suspicious activity log.
 4. Transactions - ten transactions go through the priority queue and the
    processor: fees, conversion, rules, delays, cancellation and retries.
+5. Audit and Risk - ordinary and suspicious transactions are scored,
+   dangerous ones are blocked; the audit log is appended to
+   ``logs/audit.jsonl`` (or the file in ``BANK_AUDIT_LOG``), filtered and
+   summarised in reports.
 """
 
+import os
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from exceptions import BankError
 from models import (
@@ -34,8 +40,24 @@ from models import (
     SavingsAccount,
     Transaction,
 )
-from services import Bank, ProcessingReport, SecurityGuard, TransactionProcessor, TransactionQueue
+from services import (
+    AuditLog,
+    AuditReport,
+    Bank,
+    ProcessingReport,
+    SecurityGuard,
+    TransactionProcessor,
+    TransactionQueue,
+)
 from utils import ManualClock
+
+
+def audit_log_path() -> Path:
+    """Where the demo writes its audit log: ``BANK_AUDIT_LOG`` if set, else ``logs/audit.jsonl``."""
+    configured = os.environ.get("BANK_AUDIT_LOG", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"
 
 
 def print_stage(number: int, title: str) -> None:
@@ -437,6 +459,139 @@ def run_transactions() -> list[AbstractAccount]:
     return accounts
 
 
+def run_audit_and_risk() -> list[AbstractAccount]:
+    print_stage(5, "Audit and Risk")
+    clock = ManualClock(datetime(2026, 9, 10, 10, 0))
+    # the journal is append-only: every run adds its events to the same file
+    audit_path = audit_log_path()
+    audit_log = AuditLog(audit_path)
+    bank = Bank(security=SecurityGuard(clock=clock, audit_log=audit_log))
+    queue = TransactionQueue(clock=bank.now)
+    processor = TransactionProcessor(bank)
+
+    print_step(1, "Accounts opened two weeks ago, and one opened today")
+    maria = Client(
+        first_name="Maria",
+        last_name="Volkova",
+        birth_date=date(1988, 11, 3),
+        email="maria.volkova@example.com",
+        phone="+79035550101",
+    )
+    oleg = Client(
+        first_name="Oleg",
+        last_name="Sokolov",
+        birth_date=date(1975, 2, 14),
+        email="oleg.sokolov@example.com",
+        phone="+79035550202",
+    )
+    alina = Client(
+        first_name="Alina",
+        last_name="Nurlanova",
+        birth_date=date(2001, 7, 21),
+        email="alina.n@example.kz",
+        phone="+77015550303",
+    )
+    ivan = Client(
+        first_name="Ivan",
+        last_name="Novikov",
+        birth_date=date(1999, 4, 9),
+        email="ivan.novikov@example.com",
+        phone="+79035550505",
+    )
+    for client, password in ((maria, "maria-pass-1"), (oleg, "oleg-pass-22"), (alina, "alina-pass-333")):
+        bank.add_client(client, password)
+    maria_rub = bank.open_account(maria.client_id, currency="RUB", initial_balance=300_000)
+    oleg_usd = bank.open_account(
+        oleg.client_id, "premium", currency="USD", initial_balance=50_000, overdraft_limit=5_000
+    )
+    alina_kzt = bank.open_account(alina.client_id, currency="KZT", initial_balance=2_000_000)
+    alina_rub = bank.open_account(alina.client_id, currency="RUB", initial_balance=10_000)
+    clock.moment = datetime(2026, 9, 24, 12, 0)
+    bank.add_client(ivan, "ivan-pass-4444")
+    fresh = bank.open_account(ivan.client_id, currency="RUB")
+    accounts = [maria_rub, oleg_usd, alina_kzt, alina_rub, fresh]
+    for account in accounts:
+        print(f"  opened {bank.account_opened_at(account.account_id):%m-%d}  {account}")
+
+    labels: dict[str, str] = {}
+
+    def enqueue(label: str, kind: str, amount: object, currency: str, **params: object) -> None:
+        transaction = queue.add(Transaction(kind, amount, currency, created_at=clock(), **params))
+        labels[transaction.transaction_id] = label
+
+    def process_at(moment: datetime) -> None:
+        clock.moment = moment
+        print(f"  clock {moment:%m-%d %H:%M}")
+        report = processor.process_queue(queue)
+        latest = {item.transaction_id: item for item in bank.risk_analyzer.assessments}
+        for outcome, transactions in (
+            ("completed", report.completed),
+            ("failed", report.failed),
+            ("retry", report.rescheduled),
+        ):
+            for transaction in transactions:
+                assessment = latest.get(transaction.transaction_id)
+                risk = str(assessment) if assessment is not None else "not assessed: " + transaction.failure_reason
+                print(f"    [{outcome:<9}] {labels[transaction.transaction_id]:<16} {risk}")
+
+    print_step(2, "Ordinary transactions")
+    enqueue("salary", "deposit", 90_000, "RUB", recipient_id=maria_rub.account_id)
+    enqueue("to Alina", "transfer", 5_000, "RUB", sender_id=maria_rub.account_id, recipient_id=alina_rub.account_id)
+    enqueue("cash", "withdrawal", 20_000, "KZT", sender_id=alina_kzt.account_id)
+    enqueue("abroad", "external_transfer", 300, "USD", sender_id=oleg_usd.account_id, recipient_id="DE89-3704-00")
+    process_at(datetime(2026, 9, 24, 12, 0))
+    enqueue(
+        "to Alina again", "transfer", 3_000, "RUB", sender_id=maria_rub.account_id, recipient_id=alina_rub.account_id
+    )
+    process_at(datetime(2026, 9, 24, 12, 5))
+
+    print_step(3, "Suspicious transactions")
+    enqueue("large to new", "transfer", 6_000, "USD", sender_id=oleg_usd.account_id, recipient_id=fresh.account_id)
+    enqueue("huge abroad", "external_transfer", 25_000, "USD", sender_id=oleg_usd.account_id, recipient_id="CY17-0020")
+    process_at(datetime(2026, 9, 24, 13, 0))
+    for number in range(1, 7):
+        enqueue(
+            f"rapid #{number}", "transfer", 1_000, "KZT", sender_id=alina_kzt.account_id, recipient_id=fresh.account_id
+        )
+    process_at(datetime(2026, 9, 24, 14, 0))
+    enqueue("evening", "transfer", 1_000, "RUB", sender_id=maria_rub.account_id, recipient_id=alina_rub.account_id)
+    enqueue("late large", "transfer", 7_000, "USD", sender_id=oleg_usd.account_id, recipient_id=fresh.account_id)
+    process_at(datetime(2026, 9, 24, 23, 30))
+    enqueue("night", "transfer", 1_000, "RUB", sender_id=maria_rub.account_id, recipient_id=alina_rub.account_id)
+    process_at(datetime(2026, 9, 25, 2, 0))
+    process_at(datetime(2026, 9, 25, 6, 0))
+    for account in accounts:
+        print(f"  {account}")
+
+    print_step(4, "Audit log")
+    stored = AuditLog.load_events(audit_path)
+    print(f"  file: {audit_path}")
+    print(f"  this run added {len(audit_log)} events; the file holds {len(stored)} events from all runs")
+    print("  WARNING and above:")
+    for event in audit_log.filter(min_level="warning"):
+        print(f"    {event}")
+    print("  Oleg's risk events:")
+    for event in audit_log.filter(category="risk", client_id=oleg.client_id):
+        print(f"    {event}")
+
+    audit = AuditReport(audit_log, bank.risk_analyzer)
+    print_step(5, "Report: suspicious operations")
+    for line in str(audit.suspicious_operations()).splitlines():
+        print(f"  {line}")
+
+    print_step(6, "Report: client risk profiles")
+    for client in (maria, oleg, alina):
+        print(f"  {client.full_name}")
+        for line in str(audit.client_risk_profile(client.client_id)).splitlines():
+            print(f"  {line}")
+
+    print_step(7, "Report: error statistics")
+    for line in str(audit.error_statistics()).splitlines():
+        print(f"  {line}")
+
+    return accounts
+
+
 def print_summary(accounts: list[AbstractAccount]) -> None:
     """Treat every account through the common interface, whatever its type."""
     print(f"\n{' SUMMARY ':=^72}")
@@ -458,7 +613,13 @@ def main() -> None:
         email="ivan.petrov@example.com",
         phone="+79161234567",
     )
-    accounts = run_accounts_basic(owner) + run_accounts_advanced(owner) + run_bank_system() + run_transactions()
+    accounts = (
+        run_accounts_basic(owner)
+        + run_accounts_advanced(owner)
+        + run_bank_system()
+        + run_transactions()
+        + run_audit_and_risk()
+    )
     print_summary(accounts)
 
 

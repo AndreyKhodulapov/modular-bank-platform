@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -13,9 +13,10 @@ from exceptions import (
     InsufficientFundsError,
     InvalidOperationError,
     OperationTimeRestrictedError,
+    RiskBlockedError,
 )
-from models import AccountStatus, BankAccount, InvestmentAccount, SavingsAccount
-from services import Bank, CurrencyConverter, SuspicionReason
+from models import AccountStatus, BankAccount, InvestmentAccount, SavingsAccount, Transaction
+from services import AuditLevel, Bank, CurrencyConverter, RiskAnalyzer, RiskLevel, SuspicionReason
 from tests.helpers import reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
@@ -408,3 +409,107 @@ def test_ensure_operational_flags_a_frozen_account(bank, client):
 def test_now_and_converter_come_from_the_collaborators(bank, clock):
     assert bank.now() == clock.moment
     assert bank.converter.base.value == "RUB"
+
+
+# risk screening
+
+
+@pytest.fixture
+def pair(bank, client, clock):
+    """Two RUB accounts of the client opened a month ago, so neither counts as new."""
+    opened = clock.moment
+    clock.moment = opened - timedelta(days=30)
+    sender = bank.open_account(client.client_id, currency="RUB", initial_balance=900_000)
+    recipient = bank.open_account(client.client_id, currency="RUB")
+    clock.moment = opened
+    return sender, recipient
+
+
+def transfer(sender, recipient, amount, kind="transfer") -> Transaction:
+    return Transaction(kind, amount, "RUB", sender_id=sender.account_id, recipient_id=recipient, created_at=NIGHT)
+
+
+def test_bank_remembers_when_an_account_was_opened(bank, client, clock):
+    account = bank.open_account(client.client_id, currency="RUB")
+    assert bank.account_opened_at(account.account_id) == clock.moment
+    with pytest.raises(AccountNotFoundError):
+        bank.account_opened_at("missing")
+
+
+def test_screen_low_risk_is_logged_as_info(bank, client, pair):
+    sender, recipient = pair
+    assessment = bank.screen(transfer(sender, recipient.account_id, 100))
+    assert (assessment.level, assessment.rules, assessment.client_id) == (
+        RiskLevel.LOW,
+        ("new_recipient",),
+        client.client_id,
+    )
+    [event] = bank.audit_log.filter(category="risk")
+    assert (event.level, event.event, event.account_id) == (AuditLevel.INFO, "risk_assessed", sender.account_id)
+    assert dict(event.details) == {
+        "score": 20,
+        "risk_level": "low",
+        "factors": ("new_recipient",),
+        "amount_in_base": "100.00",
+    }
+
+
+def test_screen_medium_risk_is_a_warning_and_goes_on(bank, pair):
+    sender, recipient = pair
+    assessment = bank.screen(transfer(sender, recipient.account_id, 500_000))
+    assert assessment.level is RiskLevel.MEDIUM
+    assert bank.audit_log.filter(category="risk")[-1].level is AuditLevel.WARNING
+
+
+def test_screen_refuses_high_risk(bank, pair, clock):
+    sender, recipient = pair
+    clock.moment = clock.moment.replace(hour=23)
+    transaction = transfer(sender, recipient.account_id, 500_000)
+    with pytest.raises(RiskBlockedError) as info:
+        bank.screen(transaction)
+    assert (info.value.score, info.value.factors) == (80, ("large_amount", "new_recipient", "night_operation"))
+    [event] = bank.audit_log.filter(event="operation_blocked")
+    assert (event.level, event.transaction_id) == (AuditLevel.CRITICAL, transaction.transaction_id)
+    assert sender.balance == Decimal("900000.00")  # screening never moves money
+
+
+def test_screen_applies_the_hard_rules_before_scoring(bank, client, pair, clock):
+    sender, recipient = pair
+    clock.moment = NIGHT
+    with pytest.raises(OperationTimeRestrictedError):
+        bank.screen(transfer(sender, recipient.account_id, 100))
+    client.block()
+    clock.moment = NIGHT.replace(hour=12)
+    with pytest.raises(ClientBlockedError):
+        bank.screen(transfer(sender, recipient.account_id, 100))
+    assert bank.risk_analyzer.assessments == []
+
+
+def test_screen_deposit_is_assessed_for_the_recipient_owner(bank, client, pair):
+    _, recipient = pair
+    deposit = Transaction("deposit", 100, "RUB", recipient_id=recipient.account_id, created_at=NIGHT)
+    assessment = bank.screen(deposit)
+    assert (assessment.client_id, assessment.level) == (client.client_id, RiskLevel.LOW)
+
+
+def test_screen_external_transfer_needs_only_the_sender(bank, pair):
+    sender, _ = pair
+    assessment = bank.screen(transfer(sender, "DE-0001", 100, kind="external_transfer"))
+    assert assessment.rules == ("new_recipient",)
+
+
+def test_screen_unknown_account_and_wrong_input(bank, pair):
+    sender, _ = pair
+    with pytest.raises(AccountNotFoundError):
+        bank.screen(transfer(sender, "missing", 100))
+    with pytest.raises(InvalidOperationError):
+        bank.screen("transaction")
+
+
+def test_bank_uses_injected_risk_analyzer_and_shares_the_audit_log(security):
+    analyzer = RiskAnalyzer(rules=[])
+    bank = Bank(security=security, risk_analyzer=analyzer)
+    assert bank.risk_analyzer is analyzer
+    assert bank.audit_log is security.audit_log
+    with pytest.raises(InvalidOperationError):
+        Bank(risk_analyzer="strict")

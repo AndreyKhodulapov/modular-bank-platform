@@ -65,7 +65,7 @@ Security rules applied by the bank:
 | Login lockout | 3 wrong passwords in a row block the client; `unblock_client()` restores access |
 | Blocked client | cannot open, close or unfreeze accounts or move money |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw and unblock are refused; login, freeze and queries are allowed |
-| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more |
+| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more; kept in the audit log as `security` events |
 
 Known limitations:
 
@@ -115,11 +115,58 @@ Processing rules:
 | Rule | Behaviour |
 | --- | --- |
 | Frozen or closed account | the transaction fails at once; no money moves |
+| Risk control | after both accounts are checked and before money moves the bank screens the transaction; a high risk fails it at once with `RiskBlockedError`, no money moves |
 | Negative balance | decided by the account type itself through `withdraw()`: a regular account never goes below zero, a premium account may use its overdraft |
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
 | Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `refund()`, which no bank rule or limit can refuse. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back |
 | Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
+
+### Audit and Risk
+
+- `AuditLog` - one append-only journal for the whole bank. Every
+  `AuditEvent` is immutable and structured: timestamp, level (`INFO`,
+  `WARNING`, `ERROR`, `CRITICAL`), category (`security`, `transaction`,
+  `risk`), event name, message, client, account and transaction ids and a
+  `details` mapping. Events are kept in memory and, when a `file_path` is
+  given, appended to a JSON Lines file as soon as they are recorded;
+  `AuditLog.load_events()` reads a file back. `filter()` combines a minimum or
+  exact level, category, event, client, account, transaction and a time
+  range.
+- Who writes to it: `SecurityGuard` (every suspicious activity, as
+  `WARNING`; a blocked client as `CRITICAL`), `Bank.screen()` (every risk
+  assessment) and `TransactionProcessor` (completed transactions as
+  `INFO`, failed attempts as `ERROR`, unexpected errors as `CRITICAL`).
+  `bank.suspicious_activities` is a view of the `security` events.
+- `RiskAnalyzer` - scores a transaction with independent rules and turns
+  the score into a level. Rules and thresholds are constructor arguments;
+  a new rule is a new `RiskRule` subclass.
+
+  | Rule | Fires when | Score |
+  | --- | --- | --- |
+  | `large_amount` | the amount is at least 500 000 RUB / at least 2 000 000 RUB | 40 / 70 |
+  | `high_frequency` | the client's 5th transaction within 10 minutes (a retry is not a new transaction) | 30 |
+  | `new_recipient` | a transfer to an account opened less than 7 days ago, or to a recipient the sender has never paid before (the client's own accounts included) | 20 |
+  | `night_operation` | between 22:00 and 06:00 | 20 |
+
+  Levels: `low` below 40, `medium` from 40, `high` from 70.
+- Blocking: before any money moves, the processor calls
+  `bank.screen(transaction)`. The hard rules come first (the night window
+  00:00-05:00, a blocked client); then the transaction is scored. `low`
+  and `medium` go on (`medium` is logged as a warning); `high` is refused
+  with `RiskBlockedError`, which is not retried, so the transaction fails
+  at once. Direct `bank.deposit()` / `bank.withdraw()` calls are back-office
+  operations and are not scored.
+- `AuditReport` - reports built from the audit log and the analyzer:
+  - `suspicious_operations(min_level="medium")` - risky transactions (the
+    latest assessment of each) and the security events;
+  - `client_risk_profile(client_id)` - transactions by level, blocked
+    ones, maximum and average score, most frequent factors, security events
+    and failed attempts, and the client's overall level (the highest one);
+  - `error_statistics()` - events by level, failed attempts by error
+    type, retried and final failures, the failure rate and how many
+    transactions risk control blocked.
+- Domain exception: `RiskBlockedError` (carries the score and the factors).
 
 ## Project structure
 
@@ -139,7 +186,10 @@ modular-bank-platform/
 │   │   ├── currency.py     # CurrencyConverter, reference rates to RUB
 │   │   ├── fees.py         # FeePolicy
 │   │   ├── transaction_queue.py      # TransactionQueue
-│   │   └── transaction_processor.py  # TransactionProcessor, error log, report
+│   │   ├── transaction_processor.py  # TransactionProcessor, error log, report
+│   │   ├── audit_log.py    # AuditLog, AuditEvent, AuditLevel, AuditCategory
+│   │   ├── risk.py         # RiskAnalyzer, risk rules, RiskAssessment, RiskLevel
+│   │   └── audit_report.py # AuditReport and its three reports
 │   └── models/
 │       ├── account.py             # AbstractAccount, BankAccount
 │       ├── savings_account.py     # SavingsAccount
@@ -152,9 +202,11 @@ modular-bank-platform/
 ├── tests/
 │   ├── conftest.py         # shared fixtures
 │   ├── unit/               # one module per model, service or helper
-│   └── integration/        # account, bank and transaction scenarios, demo smoke test
-└── docs/
-    └── oop_principles.md   # interview-style notes on OOP, patterns, security
+│   └── integration/        # account, bank, transaction and risk scenarios, demo smoke test
+├── docs/
+│   └── oop_principles.md   # interview-style notes on OOP, patterns, security
+└── logs/                   # created by the demo, ignored by git
+    └── audit.jsonl         # the audit log, one JSON event per line
 ```
 
 ## Setup
@@ -188,8 +240,38 @@ The script runs one stage per feature set and prints a banner before each:
    external transfer with a fee, a premium overdraft, a regular account that
    runs short and succeeds on retry, and a night transfer that completes in
    the morning; then the results, collected fees and the error log.
+5. **Audit and Risk** - ordinary transactions (a salary, transfers to a
+   known recipient, cash, a small payment abroad) pass with a low risk;
+   suspicious ones - a large transfer to an account opened today, a huge
+   payment abroad, six quick transfers in a row, a large transfer late in
+   the evening, a night transfer - are scored, allowed with a warning or
+   blocked. The audit log is appended to `logs/audit.jsonl`, filtered, and
+   summarised in the three reports.
 
 A final summary treats all created accounts through the common interface.
+
+### Audit log file
+
+The demo writes its audit log to `logs/audit.jsonl` in the project root; the
+folder is created on the first run and is ignored by git. The log is
+append-only, so each run adds its events to the same file (delete the file
+to start over). Set `BANK_AUDIT_LOG` to write somewhere else:
+
+```bash
+BANK_AUDIT_LOG=/tmp/bank/audit.jsonl python src/main.py
+```
+
+Every line is one event, so standard tools work on the file:
+
+```bash
+tail -n 5 logs/audit.jsonl                                   # the latest events
+grep '"level": "CRITICAL"' logs/audit.jsonl                  # blocked operations and clients
+jq -c 'select(.category == "risk") | [.timestamp, .message]' logs/audit.jsonl
+```
+
+In code, `AuditLog.load_events("logs/audit.jsonl")` reads the file back into
+`AuditEvent` objects. The tests never write to `logs/`: the demo smoke test
+points `BANK_AUDIT_LOG` to a temporary folder.
 
 ## Run the tests and linter
 

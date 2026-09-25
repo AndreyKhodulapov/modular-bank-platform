@@ -137,6 +137,16 @@ class Transaction:
         return self._recipient_id
 
     @property
+    def initiator_id(self) -> str:
+        """The account the transaction runs on behalf of: the sender, or the recipient of a deposit."""
+        return self._sender_id if self._sender_id is not None else self._recipient_id
+
+    @property
+    def internal_recipient_id(self) -> str | None:
+        """The recipient account when it is in this bank; ``None`` for an external transfer."""
+        return None if self._type is TransactionType.EXTERNAL_TRANSFER else self._recipient_id
+
+    @property
     def priority(self) -> TransactionPriority:
         return self._priority
 

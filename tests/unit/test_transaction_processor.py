@@ -3,9 +3,9 @@ from decimal import Decimal
 
 import pytest
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError
+from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, RiskBlockedError
 from models import Transaction, TransactionStatus
-from services import FeePolicy, SuspicionReason, TransactionProcessor
+from services import AuditLevel, Bank, FeePolicy, RiskAnalyzer, SuspicionReason, TransactionProcessor
 from tests.helpers import reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
@@ -132,7 +132,11 @@ def test_closed_or_unknown_account_fails(bank, processor, rub, usd):
     assert to_nowhere.failure_reason.startswith("AccountNotFoundError")
 
 
-def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(bank, processor, client, make_client):
+def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, owner, password, make_client):
+    # risk control would refuse such a large transfer to a new account before the debit; switch it off
+    bank = Bank(security=security, risk_analyzer=RiskAnalyzer(rules=[]))
+    processor = TransactionProcessor(bank)
+    client = bank.add_client(owner, password)
     other = bank.add_client(make_client("Boris"), "boris-password")
     recipient = bank.open_account(other.client_id, currency="RUB")
     for _ in range(3):  # three wrong passwords block the recipient's owner
@@ -205,7 +209,7 @@ def test_process_queue_reports_and_requeues(processor, queue, rub, usd, clock):
 
 def test_process_queue_requeues_retries_even_if_an_attempt_raises(processor, queue, rub, usd, monkeypatch):
     short = queue.add(transfer(rub, usd, 50_000, priority="high"))
-    queue.add(transfer(rub, usd, 900))
+    untouched = queue.add(transfer(rub, usd, 900))
     original = processor.process
 
     def process(transaction):
@@ -216,7 +220,8 @@ def test_process_queue_requeues_retries_even_if_an_attempt_raises(processor, que
     monkeypatch.setattr(processor, "process", process)
     with pytest.raises(RuntimeError):
         processor.process_queue(queue)
-    assert queue.pending() == [short]
+    # the retry comes back, and so does the transaction the failing call never started
+    assert queue.pending() == [untouched, short]  # ready ones first, then the delayed retry
 
 
 def test_unexpected_error_fails_the_transaction_and_is_raised(bank, processor, rub, usd, monkeypatch):
@@ -230,6 +235,8 @@ def test_unexpected_error_fails_the_transaction_and_is_raised(bank, processor, r
     assert transaction.status is TransactionStatus.FAILED
     assert transaction.failure_reason == "RuntimeError: boom"
     assert [(record.error_type, record.will_retry) for record in processor.errors] == [("RuntimeError", False)]
+    [event] = bank.audit_log.filter(event="transaction_failed")
+    assert (event.level, event.details["error_type"]) == (AuditLevel.CRITICAL, "RuntimeError")
 
 
 def test_custom_fee_policy_and_single_attempt(bank, rub):
@@ -254,3 +261,98 @@ def test_rejects_invalid_settings(bank, params):
 def test_requires_a_bank():
     with pytest.raises(InvalidOperationError):
         TransactionProcessor("bank")
+
+
+def test_high_risk_transaction_fails_at_once_without_moving_money(bank, processor, client, clock):
+    rich = bank.open_account(client.client_id, currency="RUB", initial_balance=900_000)
+    fresh = bank.open_account(client.client_id, currency="RUB")
+    clock.moment = NOW.replace(hour=23)
+    transaction = transfer(rich, fresh, 600_000)  # large 40 + new account 20 + late evening 20
+    processor.process(transaction)
+    assert transaction.status is TransactionStatus.FAILED
+    assert transaction.failure_reason.startswith(RiskBlockedError.__name__)
+    assert (rich.balance, fresh.balance) == (Decimal("900000.00"), Decimal("0.00"))
+    assert [(record.error_type, record.will_retry) for record in processor.errors] == [("RiskBlockedError", False)]
+    [event] = bank.audit_log.filter(event="transaction_failed")
+    assert (event.level, event.details["error_type"], event.details["will_retry"]) == (
+        AuditLevel.ERROR,
+        "RiskBlockedError",
+        False,
+    )
+
+
+def test_medium_risk_transaction_goes_through(bank, processor, client):
+    rich = bank.open_account(client.client_id, currency="RUB", initial_balance=900_000)
+    fresh = bank.open_account(client.client_id, currency="RUB")
+    transaction = transfer(rich, fresh, 600_000)  # large 40 + new account 20: medium, not blocked
+    processor.process(transaction)
+    assert transaction.status is TransactionStatus.COMPLETED
+    assert (rich.balance, fresh.balance) == (Decimal("300000.00"), Decimal("600000.00"))
+
+
+def test_outcomes_are_written_to_the_audit_log(bank, processor, client, rub, usd):
+    done = transfer(rub, usd, 900)
+    short = transfer(rub, usd, 50_000)
+    processor.process(done)
+    processor.process(short)
+    events = bank.audit_log.filter(category="transaction")
+    assert [(event.event, event.level, event.transaction_id) for event in events] == [
+        ("transaction_completed", AuditLevel.INFO, done.transaction_id),
+        ("transaction_failed", AuditLevel.ERROR, short.transaction_id),
+    ]
+    assert all((event.client_id, event.account_id) == (client.client_id, rub.account_id) for event in events)
+    assert dict(events[0].details) == {
+        "type": "transfer",
+        "amount": "900.00",
+        "currency": "RUB",
+        "fee": "0.00",
+        "attempt": 1,
+    }
+    assert dict(events[1].details) == {"error_type": "InsufficientFundsError", "attempt": 1, "will_retry": True}
+
+
+def test_failure_for_an_unknown_account_is_logged_without_a_client(bank, processor, rub):
+    transaction = Transaction("deposit", 100, "RUB", recipient_id="missing", created_at=NOW)
+    processor.process(transaction)
+    [event] = bank.audit_log.filter(event="transaction_failed")
+    assert (event.client_id, event.account_id) == (None, "missing")
+
+
+def test_completed_transfer_makes_the_recipient_known(bank, processor, client, clock):
+    clock.moment = NOW - timedelta(days=30)
+    sender = bank.open_account(client.client_id, currency="RUB", initial_balance=10_000)
+    recipient = bank.open_account(client.client_id, currency="RUB")
+    clock.moment = NOW
+    processor.process(transfer(sender, recipient, 100))
+    processor.process(transfer(sender, recipient, 100))
+    first, second = bank.risk_analyzer.assessments
+    assert (first.rules, second.rules) == (("new_recipient",), ())
+
+
+@pytest.fixture
+def failing_audit_log(bank, monkeypatch):
+    """The bank's audit log refuses to record a failed attempt, as if the disk were full."""
+    record = bank.audit_log.record
+
+    def broken(level, category, event, *args, **kwargs):
+        if event == "transaction_failed":
+            raise OSError("disk full")
+        return record(level, category, event, *args, **kwargs)
+
+    monkeypatch.setattr(bank.audit_log, "record", broken)
+
+
+def test_failed_attempt_is_finished_even_if_the_audit_write_fails(processor, rub, usd, failing_audit_log):
+    short = transfer(rub, usd, 50_000)
+    with pytest.raises(OSError):
+        processor.process(short)
+    assert short.status is TransactionStatus.PENDING
+    assert short.scheduled_at == NOW + timedelta(minutes=5)
+
+
+def test_process_queue_keeps_a_retry_when_its_audit_write_fails(processor, queue, rub, usd, failing_audit_log):
+    short = queue.add(transfer(rub, usd, 50_000))
+    with pytest.raises(OSError):
+        processor.process_queue(queue)
+    assert short.status is TransactionStatus.PENDING
+    assert queue.pending() == [short]
