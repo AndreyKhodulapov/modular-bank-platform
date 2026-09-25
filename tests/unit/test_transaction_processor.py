@@ -6,7 +6,7 @@ import pytest
 
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, RiskBlockedError
 from models import Transaction, TransactionStatus
-from services import AuditLevel, Bank, FeePolicy, RiskAnalyzer, SuspicionReason, TransactionProcessor
+from services import AuditLevel, Bank, FeePolicy, MovementKind, RiskAnalyzer, SuspicionReason, TransactionProcessor
 from tests.helpers import reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
@@ -154,9 +154,18 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     assert (cap.balance, recipient.balance) == (Decimal("10000000.00"), Decimal("0.00"))
     # the refund is not a client operation: one large withdrawal is reviewed, the refund is not
     assert reasons(bank).count(SuspicionReason.LARGE_OPERATION) == 2  # opening the account, then the withdrawal
+    # but it is a movement: the debit and its refund cancel out, and the history still adds up to the balance
+    movements = bank.history.movements(cap.account_id)
+    assert [(m.kind, m.amount, m.balance_after, m.transaction_id) for m in movements] == [
+        (MovementKind.OPENING, Decimal("10000000.00"), Decimal("10000000.00"), None),
+        (MovementKind.WITHDRAWAL, Decimal("-10000010.00"), Decimal("-10.00"), transaction.transaction_id),
+        (MovementKind.REFUND, Decimal("10000010.00"), Decimal("10000000.00"), transaction.transaction_id),
+    ]
+    assert bank.history.movements(recipient.account_id) == []
+    assert bank.history.transactions() == [transaction]
 
 
-def test_night_window_is_retried_with_exponential_delay(processor, rub, usd, clock):
+def test_night_window_is_retried_with_exponential_delay(bank, processor, rub, usd, clock):
     clock.moment = NIGHT
     transaction = transfer(rub, usd, 900)
     processor.process(transaction)
@@ -173,6 +182,7 @@ def test_night_window_is_retried_with_exponential_delay(processor, rub, usd, clo
     assert transaction.failure_reason.startswith("OperationTimeRestrictedError")
     assert [(record.attempt, record.will_retry) for record in processor.errors] == [(1, True), (2, True), (3, False)]
     assert {record.error_type for record in processor.errors} == {"OperationTimeRestrictedError"}
+    assert bank.history.transactions() == [transaction]  # once, after the last attempt
 
 
 def test_each_attempt_is_traced(processor, rub, usd, clock, caplog):
@@ -194,10 +204,12 @@ def test_retry_succeeds_once_money_arrives(bank, processor, rub, usd, clock):
     transaction = transfer(rub, usd, 12_000)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.PENDING
+    assert bank.history.transactions() == []  # a retry is not final yet
     bank.deposit(rub.account_id, 5_000)
     clock.moment = transaction.scheduled_at
     processor.process(transaction)
     assert transaction.status is TransactionStatus.COMPLETED
+    assert bank.history.transactions() == [transaction]
     assert transaction.failure_reason is None
     assert rub.balance == Decimal("3000.00")
 
@@ -241,7 +253,7 @@ def test_process_queue_requeues_retries_even_if_an_attempt_raises(processor, que
 
 
 def test_unexpected_error_fails_the_transaction_and_is_raised(bank, processor, rub, usd, monkeypatch):
-    def withdraw(account_id, amount):
+    def withdraw(account_id, amount, **kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(bank, "withdraw", withdraw)
@@ -249,6 +261,7 @@ def test_unexpected_error_fails_the_transaction_and_is_raised(bank, processor, r
     with pytest.raises(RuntimeError):
         processor.process(transaction)
     assert transaction.status is TransactionStatus.FAILED
+    assert bank.history.transactions() == [transaction]
     assert transaction.failure_reason == "RuntimeError: boom"
     assert [(record.error_type, record.will_retry) for record in processor.errors] == [("RuntimeError", False)]
     [event] = bank.audit_log.filter(event="transaction_failed")
@@ -277,6 +290,35 @@ def test_rejects_invalid_settings(bank, params):
 def test_requires_a_bank():
     with pytest.raises(InvalidOperationError):
         TransactionProcessor("bank")
+
+
+def test_transfer_moves_money_on_both_accounts_under_one_transaction(bank, processor, premium, usd):
+    transaction = transfer(premium, usd, 1_800)  # 20 USD out of the overdraft, with the premium fee
+    processor.process(transaction)
+    moved = bank.history.movements()[-2:]
+    assert [(m.account_id, m.kind, m.amount, m.currency.value, m.balance_after) for m in moved] == [
+        (premium.account_id, MovementKind.WITHDRAWAL, Decimal("-1810.00"), "RUB", Decimal("-810.00")),
+        (usd.account_id, MovementKind.DEPOSIT, Decimal("20.00"), "USD", Decimal("120.00")),
+    ]
+    assert {m.transaction_id for m in moved} == {transaction.transaction_id}
+    assert {m.moment for m in moved} == {transaction.finished_at}
+    assert bank.history.transactions(account_ids=[usd.account_id]) == [transaction]
+
+
+def test_failed_transaction_enters_the_history_without_movements(bank, processor, rub, usd):
+    bank.freeze_account(usd.account_id)
+    moved = bank.history.movements()
+    transaction = transfer(rub, usd, 100)
+    processor.process(transaction)
+    assert bank.history.transactions(status="failed") == [transaction]
+    assert bank.history.movements() == moved
+
+
+def test_cancelled_transaction_stays_out_of_the_history(bank, processor, queue, rub, usd):
+    cancelled = queue.add(transfer(rub, usd, 100))
+    queue.cancel(cancelled.transaction_id)
+    processor.process_queue(queue)
+    assert bank.history.transactions() == []
 
 
 def test_high_risk_transaction_fails_at_once_without_moving_money(bank, processor, client, clock):
@@ -371,6 +413,14 @@ def test_failed_attempt_is_finished_even_if_the_audit_write_fails(processor, rub
         processor.process(short)
     assert short.status is TransactionStatus.PENDING
     assert short.scheduled_at == NOW + timedelta(minutes=5)
+
+
+def test_final_failure_enters_the_history_even_if_the_audit_write_fails(bank, rub, usd, failing_audit_log):
+    processor = TransactionProcessor(bank, max_attempts=1)
+    short = transfer(rub, usd, 50_000)
+    with pytest.raises(OSError):
+        processor.process(short)
+    assert bank.history.transactions() == [short]
 
 
 def test_process_queue_keeps_a_retry_when_its_audit_write_fails(processor, queue, rub, usd, failing_audit_log):

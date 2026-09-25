@@ -1,4 +1,4 @@
-"""Services that coordinate the domain models: the bank, security, currency, transactions, audit and risk."""
+"""Services that coordinate the domain models: the bank, security, currency, transactions, history, audit and risk."""
 
 import logging
 
@@ -30,6 +30,7 @@ from services.risk import (
     RiskRule,
 )
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
+from services.transaction_history import BalanceMovement, MovementKind, TransactionHistory
 from services.transaction_processor import ProcessingReport, TransactionErrorRecord, TransactionProcessor
 from services.transaction_queue import TransactionQueue
 
@@ -43,6 +44,7 @@ __all__ = [
     "AuditLevel",
     "AuditLog",
     "AuditReport",
+    "BalanceMovement",
     "Bank",
     "ClientEvent",
     "ClientRiskProfile",
@@ -51,6 +53,7 @@ __all__ = [
     "FeePolicy",
     "HighFrequencyRule",
     "LargeAmountRule",
+    "MovementKind",
     "NewRecipientRule",
     "NightOperationRule",
     "ProcessingReport",
@@ -68,6 +71,7 @@ __all__ = [
     "SuspiciousOperationsReport",
     "TransactionErrorRecord",
     "TransactionEvent",
+    "TransactionHistory",
     "TransactionProcessor",
     "TransactionQueue",
 ]

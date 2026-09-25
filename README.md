@@ -48,7 +48,8 @@ overdraft, holds money in a portfolio or is frozen with money on it.
   `premium`, `investment`), closes, freezes and unfreezes them, runs deposits
   and withdrawals, searches accounts by client, status, currency, type and
   balance range, and reports `get_total_balance()` and
-  `get_clients_ranking()` in roubles.
+  `get_clients_ranking()` in roubles. Every balance change it makes goes to
+  the [transaction history](#transaction-history).
 - `SecurityGuard` - stores salted password hashes, blocks a client after three
   failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
   a log of suspicious activities.
@@ -71,8 +72,9 @@ Known limitations:
 
 - `invest()`, `divest()` and `apply_monthly_interest()` are not part of
   `Bank` and are called on the account itself, so the night window,
-  blocking and the suspicious activity log do not cover them. The bank demo
-  invests on Oleg's account this way.
+  blocking and the suspicious activity log do not cover them, and the
+  transaction history has no movement for them. The bank demo invests on
+  Oleg's account this way.
 
 ### Transactions
 
@@ -121,8 +123,42 @@ Processing rules:
 | Negative balance | decided by the account type itself through `withdraw()`: a regular account never goes below zero, a premium account may use its overdraft |
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
-| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `refund()`, which no bank rule or limit can refuse. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back |
+| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `bank.refund()`, which no bank rule or limit can refuse. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
 | Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
+
+### Transaction history
+
+`TransactionHistory` is the bank's record of what happened to the money,
+kept in memory next to the accounts (`bank.history`, or injected with
+`Bank(history=...)`). It holds two things:
+
+- **Transactions** - each one once, when it reaches its final status after
+  the last attempt: `completed` or `failed`. A cancelled transaction never
+  ran, so it stays in the queue and the audit log only.
+  `transactions(account_ids=..., status=..., transaction_type=..., since=...,
+  until=...)` returns them in the order they finished; `account_ids` matches
+  both outgoing and incoming ones, and the time range applies to
+  `finished_at`.
+- **Balance movements** - one `BalanceMovement` per change of a balance made
+  through the bank: the moment, the account, the kind (`opening`, `deposit`,
+  `withdrawal`, `refund`, `payout`), the signed change in the account's
+  currency, the balance right after it and the transaction id (`None` for a
+  back-office operation). `movements(account_id, since=..., until=...)`
+  returns them in order.
+
+`Bank` is the only writer of movements: an account opened with money,
+`deposit()`, `withdraw()` (both take an optional `transaction_id`), the
+payout on `close_account()` and `refund()`, which puts back the debit of a
+rolled-back transfer. The change is measured as the balance after minus the
+balance before, so a premium account's own withdrawal fee is part of the
+withdrawal. A refused operation leaves no movement. As a result the
+movements of every account add up to its balance, except for the
+operations past the bank listed in the known limitations above.
+
+```python
+for movement in bank.history.movements(account.account_id):
+    print(movement)  # 09-24 14:00 3c50a706 withdrawal     -3010.00     -2010.00 RUB
+```
 
 ### Audit and Risk
 
@@ -203,6 +239,7 @@ modular-bank-platform/
 │   │   ├── fees.py         # FeePolicy
 │   │   ├── transaction_queue.py      # TransactionQueue
 │   │   ├── transaction_processor.py  # TransactionProcessor, error log, report
+│   │   ├── transaction_history.py    # TransactionHistory, BalanceMovement, MovementKind
 │   │   ├── audit_log.py    # AuditLog, AuditEvent, AuditLevel, AuditCategory
 │   │   ├── risk.py         # RiskAnalyzer, risk rules, RiskAssessment, RiskLevel
 │   │   └── audit_report.py # AuditReport and its three reports

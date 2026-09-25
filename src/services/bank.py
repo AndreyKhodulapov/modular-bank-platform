@@ -25,6 +25,7 @@ from services.audit_log import AccountEvent, AuditCategory, AuditLevel, AuditLog
 from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
+from services.transaction_history import MovementKind, TransactionHistory
 from utils import to_enum, to_money
 
 
@@ -43,7 +44,10 @@ class Bank:
       moves and refuses a high-risk one;
     - the life cycle of clients and accounts (registered, unblocked; opened,
       frozen, unfrozen, closed) goes to the audit log as ``INFO`` once the
-      change is made; a refused change is recorded only as suspicious.
+      change is made; a refused change is recorded only as suspicious;
+    - every change of a balance made through the bank goes to the
+      transaction history as a ``BalanceMovement`` with the actual change
+      (fees included) and the balance after it.
 
     Protective actions (``freeze_account``), logins and read-only queries are
     allowed at any time. Totals and the ranking are expressed in the
@@ -65,12 +69,16 @@ class Bank:
         security: SecurityGuard | None = None,
         converter: CurrencyConverter | None = None,
         risk_analyzer: RiskAnalyzer | None = None,
+        history: TransactionHistory | None = None,
     ) -> None:
         if risk_analyzer is not None and not isinstance(risk_analyzer, RiskAnalyzer):
             raise InvalidOperationError("risk_analyzer must be a RiskAnalyzer instance.")
+        if history is not None and not isinstance(history, TransactionHistory):
+            raise InvalidOperationError("history must be a TransactionHistory instance.")
         self._security = security if security is not None else SecurityGuard()
         self._converter = converter if converter is not None else CurrencyConverter()
         self._risk = risk_analyzer if risk_analyzer is not None else RiskAnalyzer()
+        self._history = history if history is not None else TransactionHistory()
         self._clients: dict[str, Client] = {}
         self._accounts: dict[str, BankAccount] = {}
         # kept by the bank, not the account: the models have no clock
@@ -96,6 +104,11 @@ class Bank:
     @property
     def risk_analyzer(self) -> RiskAnalyzer:
         return self._risk
+
+    @property
+    def history(self) -> TransactionHistory:
+        """Finished transactions and every balance movement made through the bank."""
+        return self._history
 
     def now(self) -> datetime:
         """The bank's current time, from the security guard's clock."""
@@ -170,6 +183,23 @@ class Bank:
             details=details,
         )
 
+    def _record_movement(
+        self, kind: MovementKind, account: BankAccount, before: Decimal, transaction_id: str | None = None
+    ) -> None:
+        """Record the change of ``account``'s balance since ``before``; no change, no movement."""
+        change = account.balance - before
+        if change == 0:
+            return
+        self._history.record_movement(
+            moment=self.now(),
+            account_id=account.account_id,
+            kind=kind,
+            amount=change,
+            currency=account.currency,
+            balance_after=account.balance,
+            transaction_id=transaction_id,
+        )
+
     def _review_amount(self, action: str, account: BankAccount, amount: Decimal) -> None:
         self._security.review_amount(
             self._converter.to_base(amount, account.currency),
@@ -234,6 +264,8 @@ class Bank:
         self._accounts[account.account_id] = account
         self._opened_at[account.account_id] = self.now()
         client.add_account_id(account.account_id)
+        # the cash only: an investment account opens with an empty portfolio
+        self._record_movement(MovementKind.OPENING, account, Decimal("0.00"))
         self._record_account(
             AccountEvent.OPENED,
             account,
@@ -262,7 +294,9 @@ class Bank:
         """Close an account and return the cash paid out to the client."""
         account = self.get_account(account_id)
         self._guard("close_account", account.owner, account)
+        before = account.balance
         payout = self._run_on_account("close_account", account, account.close)
+        self._record_movement(MovementKind.PAYOUT, account, before)
         self._record_account(
             AccountEvent.CLOSED,
             account,
@@ -350,21 +384,46 @@ class Bank:
         self._record_account(AccountEvent.UNFROZEN, account, "account unfrozen")
         return account
 
-    def deposit(self, account_id: str, amount: object) -> Decimal:
+    def deposit(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
+        """Credit the account and return its new balance; ``transaction_id`` links the movement to a transaction."""
         account = self.get_account(account_id)
-        return self._move_money("deposit", account, account.deposit, amount)
+        return self._move_money("deposit", MovementKind.DEPOSIT, account, account.deposit, amount, transaction_id)
 
-    def withdraw(self, account_id: str, amount: object) -> Decimal:
+    def withdraw(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
+        """Debit the account and return its new balance; ``transaction_id`` links the movement to a transaction."""
         account = self.get_account(account_id)
-        return self._move_money("withdraw", account, account.withdraw, amount)
+        return self._move_money("withdraw", MovementKind.WITHDRAWAL, account, account.withdraw, amount, transaction_id)
+
+    def refund(self, account_id: str, amount: object, *, transaction_id: str) -> Decimal:
+        """Put back a debit of the rolled-back transaction ``transaction_id``; return the new balance.
+
+        A compensation, not a client operation: the night window, a blocked
+        client, the account status, the deposit limit and the amount review
+        do not apply, because the money was on the account a moment ago and
+        must come back whatever happened in between. It is still recorded as
+        a movement, so the history adds up to the balance.
+        """
+        account = self.get_account(account_id)
+        before = account.balance
+        balance = account.refund(amount)
+        self._record_movement(MovementKind.REFUND, account, before, transaction_id)
+        return balance
 
     def _move_money(
-        self, action: str, account: BankAccount, operation: Callable[[Decimal], Decimal], amount: object
+        self,
+        action: str,
+        kind: MovementKind,
+        account: BankAccount,
+        operation: Callable[[Decimal], Decimal],
+        amount: object,
+        transaction_id: str | None,
     ) -> Decimal:
         value = to_money(amount, require="positive")
         self._guard(action, account.owner, account)
         before = account.balance
         balance = self._run_on_account(action, account, lambda: operation(value))
+        # the actual change, so the premium account's own fee is part of a withdrawal
+        self._record_movement(kind, account, before, transaction_id)
         self._review_amount(action, account, abs(balance - before))
         return balance
 

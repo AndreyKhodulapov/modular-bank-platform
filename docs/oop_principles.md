@@ -213,12 +213,13 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **Atomicity and compensation.** A transfer has two steps (debit, credit)
   and must not stop halfway. Both accounts are checked and both amounts
   converted before money moves; if the bank still refuses the credit, a
-  compensating operation returns the debit. The compensation goes straight
-  to the account (`refund()`), not through the bank: a rollback must not be
-  refused by a deposit limit or the night window, and must not be reviewed
-  as a new client operation. This is the idea behind the Saga pattern for
-  operations that span several services, where one database transaction is
-  not available.
+  compensating operation returns the debit. The compensation is
+  `bank.refund()`, which skips the checks of a client operation: a rollback
+  must not be refused by a deposit limit or the night window, and must not
+  be reviewed as a new client operation. It still goes through the bank, so
+  the history records it next to the debit it cancels. This is the idea
+  behind the Saga pattern for operations that span several services, where
+  one database transaction is not available.
 - **Retries with exponential backoff.** Only temporary errors are retried
   (the night window ends, money may arrive); permanent ones (a frozen
   account, bad input) fail at once, because retrying them only adds load.
@@ -227,6 +228,32 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **Money and currencies.** Amounts stay `Decimal`; conversion between two
   foreign currencies goes through the base currency (a cross rate) and is
   rounded once, at the end, so rounding errors do not accumulate.
+
+## Transaction history
+
+- **State, not a log.** The history is a separate store owned by the bank,
+  not a query over the logs. A log describes what the system did and may be
+  sampled, rotated or lost; the audit log is evidence, but it records
+  events, not balances. Questions like "what did this account look like on
+  Monday" need the bank's own record, written in the same step as the change
+  of the balance. Real systems keep it as a ledger table in the database;
+  the logs point at it by transaction id.
+- **One writer.** Only `Bank` records movements, in the same methods that
+  change balances, so a movement cannot be forgotten or written twice, and
+  a refused operation leaves none. The processor passes the transaction id
+  through `deposit()` / `withdraw()` / `refund()` and adds the finished
+  transaction itself - once, after its last attempt.
+- **The actual change.** A movement stores the balance after minus the
+  balance before, not the requested amount, so fees charged by the account
+  (the premium withdrawal fee) are not lost. The invariant "the movements of
+  an account add up to its balance" is checked by the integration tests.
+- **`balance_after`.** Each movement keeps the balance right after it, so a
+  balance chart or a statement for any period is a plain filter, without
+  replaying every earlier movement (a running balance, as on a bank
+  statement).
+- **Immutability.** Movements are frozen dataclasses and the getters return
+  copies; a finished transaction has no status transitions left, so what is
+  in the history cannot change.
 
 ## Structured logging
 

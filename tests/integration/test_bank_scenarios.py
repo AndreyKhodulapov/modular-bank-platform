@@ -13,6 +13,7 @@ from exceptions import (
 )
 from models import AccountStatus
 from services import SuspicionReason
+from tests.helpers import history_gaps
 
 
 def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
@@ -67,3 +68,19 @@ def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
         SuspicionReason.INACTIVE_ACCOUNT_OPERATION,
         SuspicionReason.NIGHT_OPERATION,
     ]
+    assert history_gaps(bank) == {}
+    assert [movement.kind.value for movement in bank.history.movements(anna_rub.account_id)] == [
+        "opening",
+        "withdrawal",
+        "deposit",
+        "withdrawal",
+    ]  # closing an empty account pays nothing out
+
+
+def test_money_moved_past_the_bank_is_missing_from_the_history(bank, client):
+    investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    investment.invest("stocks", 400)
+    savings.apply_monthly_interest()
+    assert history_gaps(bank) == {investment.account_id: Decimal("-400.00"), savings.account_id: Decimal("10.00")}
+    assert history_gaps(bank, bypassed=[investment.account_id, savings.account_id]) == {}

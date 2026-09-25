@@ -16,6 +16,7 @@ from services import (
     TransactionProcessor,
     TransactionQueue,
 )
+from tests.helpers import history_gaps
 from utils import ManualClock
 
 NOON = datetime(2026, 9, 24, 12, 0)
@@ -118,6 +119,8 @@ def test_ordinary_and_suspicious_transactions(world, tmp_path):
     # blocked transactions moved no money
     assert oleg.balance == Decimal("43697.00")  # 50 000 - 303 (300 plus the 1% fee) - 6 000
     assert fresh.balance == Decimal("541080.00")  # 540 000 + 6 x 180
+    assert history_gaps(bank) == {}
+    assert len(bank.history.transactions(status="failed")) == 2  # the night transfer is still waiting
 
     audit = AuditReport(bank.audit_log, bank.risk_analyzer)
     suspicious = audit.suspicious_operations()

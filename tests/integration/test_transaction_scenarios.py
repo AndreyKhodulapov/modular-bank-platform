@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from models import Transaction, TransactionStatus
 from services import SuspicionReason
-from tests.helpers import reasons
+from tests.helpers import history_gaps, reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
 
@@ -89,3 +89,13 @@ def test_ten_transactions_through_the_queue(bank, clock, queue, processor, make_
         (too_big.transaction_id, False),
     ]
     assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]
+
+    # the history: every finished transaction once, in the order they finished; the cancelled one is not there
+    finished = [cash, to_boris, salary, abroad, overdraft, to_frozen, exchange, later, too_big]
+    assert bank.history.transactions() == finished
+    assert bank.history.transactions(account_ids=[boris_kzt.account_id]) == [exchange, later, too_big]
+    # every balance is the sum of its movements, and each transaction's movements name it
+    assert history_gaps(bank) == {}
+    for transaction in bank.history.transactions(status="completed"):
+        moved = [m for m in bank.history.movements() if m.transaction_id == transaction.transaction_id]
+        assert len(moved) == (2 if transaction.internal_recipient_id and transaction.sender_id else 1)

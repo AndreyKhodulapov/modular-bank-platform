@@ -60,8 +60,11 @@ class TransactionProcessor:
       fails it at once with ``RiskBlockedError``;
     - charges the fee from ``fee_policy`` together with the debit;
     - keeps a transfer atomic: if crediting the recipient fails after the
-      sender was debited, the debit is put back with ``account.refund()``,
-      which no bank rule or limit can refuse.
+      sender was debited, the debit is put back with ``bank.refund()``,
+      which no bank rule or limit can refuse;
+    - passes the transaction id with every movement of money, so the
+      bank's history links each balance change to its transaction, and
+      puts the transaction itself into the history once it is final.
 
     Errors in ``RETRYABLE_ERRORS`` are temporary - the night window ends,
     money may arrive - so the transaction goes back to the queue with an
@@ -165,6 +168,7 @@ class TransactionProcessor:
         else:
             transaction.complete(self._bank.now(), fee=fee, debited_amount=debited, credited_amount=credited)
             self._bank.risk_analyzer.record_completed(transaction)
+            self._bank.history.record_transaction(transaction)
             self._audit_completed(transaction)
         return transaction
 
@@ -220,16 +224,16 @@ class TransactionProcessor:
         if sender is not None:
             fee = self._fee_policy.calculate(transaction.transaction_type, debit, sender.currency, converter)
             before = sender.balance
-            self._bank.withdraw(sender.account_id, debit + fee)
+            self._bank.withdraw(sender.account_id, debit + fee, transaction_id=transaction.transaction_id)
             # the account may charge its own fee on top (premium), so measure what actually left it
             debited = before - sender.balance
 
         if recipient is not None:
             try:
-                self._bank.deposit(recipient.account_id, credit)
+                self._bank.deposit(recipient.account_id, credit, transaction_id=transaction.transaction_id)
             except Exception:
                 if sender is not None:
-                    sender.refund(debited)
+                    self._bank.refund(sender.account_id, debited, transaction_id=transaction.transaction_id)
                 raise
             credited = credit
 
@@ -265,6 +269,8 @@ class TransactionProcessor:
             transaction.retry(reason, now, now + delay)
         else:
             transaction.fail(reason, now)
+            # before the audit write: a failing write must not keep a finished transaction out of the history
+            self._bank.history.record_transaction(transaction)
         # logged after the status change: a failing audit write must not leave the transaction in PROCESSING
         client_id, account_id = self._initiator(transaction)
         self._bank.audit_log.record(
