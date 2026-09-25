@@ -2,6 +2,7 @@
 
 import inspect
 from collections.abc import Callable
+from datetime import datetime
 from decimal import Decimal
 
 from exceptions import (
@@ -65,8 +66,16 @@ class Bank:
         return self._converter.base
 
     @property
+    def converter(self) -> CurrencyConverter:
+        return self._converter
+
+    @property
     def suspicious_activities(self) -> list[SuspiciousActivity]:
         return self._security.suspicious_activities
+
+    def now(self) -> datetime:
+        """The bank's current time, from the security guard's clock."""
+        return self._security.now()
 
     def get_client(self, client_id: str) -> Client:
         client = self._clients.get(client_id)
@@ -185,6 +194,16 @@ class Bank:
         payout = self._run_on_account("close_account", account, account.close)
         self._review_amount("close_account", account, payout)
         return payout
+
+    def ensure_operational(self, action: str, account_id: str) -> BankAccount:
+        """Return the account if it is active; otherwise record the attempt and raise.
+
+        Lets a caller check an account before a multi-step operation, e.g. both
+        sides of a transfer before any money moves.
+        """
+        account = self.get_account(account_id)
+        self._run_on_account(action, account, account.ensure_operational)
+        return account
 
     def freeze_account(self, account_id: str) -> BankAccount:
         """Freeze an active account; allowed at any time, since freezing only protects money."""

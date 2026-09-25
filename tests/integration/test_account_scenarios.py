@@ -104,3 +104,8 @@ def test_demo_script_runs_without_errors():
     assert "[rejected] withdraw 5_000 KZT: OperationTimeRestrictedError" in completed.stdout
     assert "(min_balance does not hold money back): payout 300000.00" in completed.stdout
     assert "total balance: 1502100.00 RUB" in completed.stdout
+    assert "STAGE 4: Transactions" in completed.stdout
+    assert "[ok]       cancel 'typo': status cancelled" in completed.stdout
+    assert "[failed] to frozen: AccountFrozenError" in completed.stdout
+    assert "night      completed attempts 3" in completed.stdout
+    assert "fees collected: 180.00 RUB" in completed.stdout

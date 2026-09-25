@@ -92,14 +92,20 @@ def resolve_identifier(value: str | None, *, field: str = "id") -> str:
 
 
 def to_enum[E: Enum](enum_type: type[E], value: E | str, *, field: str) -> E:
-    """Return the ``enum_type`` member for ``value``; strings match member values in any case."""
+    """Return the ``enum_type`` member for ``value``.
+
+    Strings match a member's value or name in any case, so an enum with
+    numeric values (a priority) is still addressed by a readable word.
+    """
     if isinstance(value, enum_type):
         return value
     text = str(value).casefold()
     for member in enum_type:
-        if str(member.value).casefold() == text:
+        if text in (str(member.value).casefold(), member.name.casefold()):
             return member
-    allowed = ", ".join(str(member.value) for member in enum_type)
+    allowed = ", ".join(
+        str(member.value) if isinstance(member.value, str) else member.name.lower() for member in enum_type
+    )
     raise InvalidOperationError(f"Unsupported {field} {value!r}; allowed: {allowed}.")
 
 

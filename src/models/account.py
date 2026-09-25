@@ -152,12 +152,6 @@ class BankAccount(AbstractAccount):
 
         self._balance = to_money(initial_balance, field="initial_balance", require="non_negative")
 
-    def _ensure_operational(self) -> None:
-        if self._status is AccountStatus.FROZEN:
-            raise AccountFrozenError(self._account_id)
-        if self._status is AccountStatus.CLOSED:
-            raise AccountClosedError(self._account_id)
-
     @staticmethod
     def _check_limit(value: Decimal, limit: Decimal) -> None:
         if value > limit:
@@ -169,7 +163,7 @@ class BankAccount(AbstractAccount):
         Subclasses call this first and then apply their own rule for how much
         money is actually available (minimum balance, overdraft, portfolio).
         """
-        self._ensure_operational()
+        self.ensure_operational()
         value = to_money(amount, require="positive")
         self._check_limit(value, self.MAX_WITHDRAWAL)
         return value
@@ -180,8 +174,15 @@ class BankAccount(AbstractAccount):
     def currency(self) -> Currency:
         return self._currency
 
+    def ensure_operational(self) -> None:
+        """Raise ``AccountFrozenError`` or ``AccountClosedError`` unless the account is active."""
+        if self._status is AccountStatus.FROZEN:
+            raise AccountFrozenError(self._account_id)
+        if self._status is AccountStatus.CLOSED:
+            raise AccountClosedError(self._account_id)
+
     def deposit(self, amount: object) -> Decimal:
-        self._ensure_operational()
+        self.ensure_operational()
         value = to_money(amount, require="positive")
         self._check_limit(value, self.MAX_DEPOSIT)
         self._balance += value
@@ -192,6 +193,16 @@ class BankAccount(AbstractAccount):
         if value > self._balance:
             raise InsufficientFundsError(requested=value, available=self._balance)
         self._balance -= value
+        return self._balance
+
+    def refund(self, amount: object) -> Decimal:
+        """Put back money that a rolled-back operation took from the account.
+
+        This is not a client operation: the status and the deposit limit are
+        ignored, because the money was on the account a moment ago and must
+        come back whatever happened in between.
+        """
+        self._balance += to_money(amount, require="positive")
         return self._balance
 
     def get_account_info(self) -> dict[str, Any]:

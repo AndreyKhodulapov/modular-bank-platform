@@ -1,0 +1,201 @@
+"""Execution of transactions: rules, fees, currency conversion, retries and the error log."""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+from exceptions import BankError, InsufficientFundsError, InvalidOperationError, OperationTimeRestrictedError
+from models.account import BankAccount
+from models.enums import TransactionStatus, TransactionType
+from models.transaction import Transaction
+from services.bank import Bank
+from services.fees import FeePolicy
+from services.transaction_queue import TransactionQueue
+
+
+@dataclass(frozen=True)
+class TransactionErrorRecord:
+    """One failed attempt in the processor's error log; immutable once recorded."""
+
+    timestamp: datetime
+    transaction_id: str
+    attempt: int
+    error_type: str
+    message: str
+    will_retry: bool
+
+
+@dataclass
+class ProcessingReport:
+    """What one ``process_queue()`` run did with the transactions it took from the queue."""
+
+    completed: list[Transaction] = field(default_factory=list)
+    failed: list[Transaction] = field(default_factory=list)
+    rescheduled: list[Transaction] = field(default_factory=list)
+
+
+class TransactionProcessor:
+    """Executes transactions through the ``Bank`` facade.
+
+    Money moves only through ``bank.withdraw()`` and ``bank.deposit()``, so
+    every rule of the bank and of the account types applies to every
+    transaction: the night window, blocked clients, frozen and closed
+    accounts, operation limits, the suspicious activity log, and how far an
+    account may be debited (a regular account never goes below zero, a
+    premium account has its overdraft). On top of them the processor:
+
+    - checks both accounts and converts the amount into their currencies
+      before any money moves;
+    - charges the fee from ``fee_policy`` together with the debit;
+    - keeps a transfer atomic: if crediting the recipient fails after the
+      sender was debited, the debit is put back with ``account.refund()``,
+      which no bank rule or limit can refuse.
+
+    Errors in ``RETRYABLE_ERRORS`` are temporary - the night window ends,
+    money may arrive - so the transaction goes back to the queue with an
+    exponential delay (``retry_delay``, then twice as long, ...) until
+    ``max_attempts`` is used up. Any other ``BankError`` fails it at once.
+    An error that is not a ``BankError`` is a defect, not a business
+    outcome: the transaction is failed and logged all the same, and the
+    error is raised to the caller.
+
+    The queue that feeds ``process_queue()`` should share the bank's clock
+    (``TransactionQueue(clock=bank.now)``): the queue decides when a delayed
+    or retried transaction is due, the processor stamps the moments.
+    """
+
+    RETRYABLE_ERRORS: tuple[type[BankError], ...] = (OperationTimeRestrictedError, InsufficientFundsError)
+
+    def __init__(
+        self,
+        bank: Bank,
+        *,
+        fee_policy: FeePolicy | None = None,
+        max_attempts: int = 3,
+        retry_delay: timedelta = timedelta(minutes=5),
+    ) -> None:
+        if not isinstance(bank, Bank):
+            raise InvalidOperationError("bank must be a Bank instance.")
+        if not isinstance(max_attempts, int) or max_attempts < 1:
+            raise InvalidOperationError("max_attempts must be a positive integer.")
+        if not isinstance(retry_delay, timedelta) or retry_delay <= timedelta(0):
+            raise InvalidOperationError("retry_delay must be a positive timedelta.")
+        self._bank = bank
+        self._fee_policy = fee_policy if fee_policy is not None else FeePolicy()
+        self._max_attempts = max_attempts
+        self._retry_delay = retry_delay
+        self._errors: list[TransactionErrorRecord] = []
+        self._collected_fees = Decimal("0.00")
+
+    @property
+    def errors(self) -> list[TransactionErrorRecord]:
+        """A copy of the error log, one record per failed attempt, in order."""
+        return list(self._errors)
+
+    @property
+    def collected_fees(self) -> Decimal:
+        """Fees earned on completed transactions, in the bank's base currency."""
+        return self._collected_fees
+
+    def process_queue(self, queue: TransactionQueue) -> ProcessingReport:
+        """Run every transaction that is due now and put the retried ones back into ``queue``."""
+        report = ProcessingReport()
+        outcome = {
+            TransactionStatus.COMPLETED: report.completed,
+            TransactionStatus.FAILED: report.failed,
+            TransactionStatus.PENDING: report.rescheduled,
+        }
+        # one run makes one attempt per transaction, so retries return to the queue after the loop;
+        # `finally` gets them back even if an attempt raises halfway through the run
+        try:
+            while (transaction := queue.next_ready()) is not None:
+                self.process(transaction)
+                outcome[transaction.status].append(transaction)
+        finally:
+            for transaction in report.rescheduled:
+                queue.add(transaction)
+        return report
+
+    def process(self, transaction: Transaction) -> Transaction:
+        """Make one attempt; the transaction ends completed, failed or pending for a retry."""
+        transaction.start(self._bank.now())
+        try:
+            fee, debited, credited = self._execute(transaction)
+        except BankError as error:
+            self._handle_failure(transaction, error)
+        except Exception as error:
+            self._handle_failure(transaction, error)
+            raise
+        else:
+            transaction.complete(self._bank.now(), fee=fee, debited_amount=debited, credited_amount=credited)
+        return transaction
+
+    def _execute(self, transaction: Transaction) -> tuple[Decimal, Decimal | None, Decimal | None]:
+        """Move the money; return the fee, the amount debited and the amount credited."""
+        sender = (
+            self._bank.ensure_operational("withdraw", transaction.sender_id)
+            if transaction.sender_id is not None
+            else None
+        )
+        # the recipient of an external transfer is in another bank, nothing to credit here
+        recipient = (
+            self._bank.ensure_operational("deposit", transaction.recipient_id)
+            if transaction.recipient_id is not None
+            and transaction.transaction_type is not TransactionType.EXTERNAL_TRANSFER
+            else None
+        )
+        converter = self._bank.converter
+        # both conversions come before the debit: a credit that rounds away to nothing must not strand it
+        debit = self._convert_for(transaction, sender) if sender is not None else None
+        credit = self._convert_for(transaction, recipient) if recipient is not None else None
+
+        fee = Decimal("0.00")
+        debited = credited = None
+        if sender is not None:
+            fee = self._fee_policy.calculate(transaction.transaction_type, debit, sender.currency, converter)
+            before = sender.balance
+            self._bank.withdraw(sender.account_id, debit + fee)
+            # the account may charge its own fee on top (premium), so measure what actually left it
+            debited = before - sender.balance
+
+        if recipient is not None:
+            try:
+                self._bank.deposit(recipient.account_id, credit)
+            except Exception:
+                if sender is not None:
+                    sender.refund(debited)
+                raise
+            credited = credit
+
+        if sender is not None:
+            self._collected_fees += converter.to_base(fee, sender.currency)
+        return fee, debited, credited
+
+    def _convert_for(self, transaction: Transaction, account: BankAccount) -> Decimal:
+        """The transaction amount in the account's currency; refuse one that rounds away to nothing."""
+        value = self._bank.converter.convert(transaction.amount, transaction.currency, account.currency)
+        if value <= 0:
+            raise InvalidOperationError(
+                f"{transaction.amount} {transaction.currency.value} is {value} in {account.currency.value}."
+            )
+        return value
+
+    def _handle_failure(self, transaction: Transaction, error: Exception) -> None:
+        now = self._bank.now()
+        will_retry = isinstance(error, self.RETRYABLE_ERRORS) and transaction.attempts < self._max_attempts
+        self._errors.append(
+            TransactionErrorRecord(
+                timestamp=now,
+                transaction_id=transaction.transaction_id,
+                attempt=transaction.attempts,
+                error_type=type(error).__name__,
+                message=str(error),
+                will_retry=will_retry,
+            )
+        )
+        reason = f"{type(error).__name__}: {error}"
+        if will_retry:
+            delay = self._retry_delay * 2 ** (transaction.attempts - 1)
+            transaction.retry(reason, now, now + delay)
+        else:
+            transaction.fail(reason, now)

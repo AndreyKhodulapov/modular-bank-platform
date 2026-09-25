@@ -46,7 +46,7 @@ class InvestmentAccount(BankAccount):
 
     def invest(self, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move ``amount`` of free cash into ``asset_type``; return the new cash balance."""
-        self._ensure_operational()
+        self.ensure_operational()
         asset = Portfolio.resolve_asset_type(asset_type)
         value = to_money(amount, require="positive")
         if value > self._balance:
@@ -61,7 +61,7 @@ class InvestmentAccount(BankAccount):
 
     def divest(self, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move ``amount`` from ``asset_type`` back to free cash; return the new cash balance."""
-        self._ensure_operational()
+        self.ensure_operational()
         asset = Portfolio.resolve_asset_type(asset_type)
         value = to_money(amount, require="positive")
         self._portfolio.remove(asset, value)

@@ -102,3 +102,21 @@ class OperationTimeRestrictedError(BankError):
         self.action = action
         self.window = window
         super().__init__(f"Operation {action!r} is not allowed between {window}.")
+
+
+class TransactionNotFoundError(BankError):
+    """Raised when the queue has no transaction with the given id."""
+
+    def __init__(self, transaction_id: str) -> None:
+        self.transaction_id = transaction_id
+        super().__init__(f"Transaction {transaction_id} not found.")
+
+
+class InvalidTransactionStateError(InvalidOperationError):
+    """Raised when a transaction cannot move from its current status to the requested one."""
+
+    def __init__(self, transaction_id: str, current: str, target: str) -> None:
+        self.transaction_id = transaction_id
+        self.current = current
+        self.target = target
+        super().__init__(f"Transaction {transaction_id} cannot move from {current} to {target}.")

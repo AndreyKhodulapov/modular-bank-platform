@@ -14,7 +14,7 @@ from models import (
     PremiumAccount,
     SavingsAccount,
 )
-from services import Bank, SecurityGuard
+from services import Bank, SecurityGuard, TransactionProcessor, TransactionQueue
 from utils import ManualClock
 
 
@@ -121,3 +121,13 @@ def password() -> str:
 def client(bank: Bank, owner: Client, password: str) -> Client:
     """``owner`` registered in ``bank`` with ``password``."""
     return bank.add_client(owner, password)
+
+
+@pytest.fixture
+def queue(bank: Bank) -> TransactionQueue:
+    return TransactionQueue(clock=bank.now)
+
+
+@pytest.fixture
+def processor(bank: Bank) -> TransactionProcessor:
+    return TransactionProcessor(bank)

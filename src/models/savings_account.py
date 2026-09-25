@@ -54,7 +54,7 @@ class SavingsAccount(BankAccount):
 
     def apply_monthly_interest(self) -> Decimal:
         """Credit one month of interest and return the credited amount."""
-        self._ensure_operational()
+        self.ensure_operational()
         interest = to_money(self._balance * self._monthly_rate, field="interest")
         self._balance += interest
         return interest

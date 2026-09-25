@@ -56,5 +56,14 @@ class CurrencyConverter:
 
     def to_base(self, amount: object, currency: Currency | str) -> Decimal:
         """Return ``amount`` of ``currency`` expressed in the base currency."""
-        rate = self._rates[to_enum(Currency, currency, field="currency")]
-        return to_money(to_money(amount) * rate)
+        return self.convert(amount, currency, self._base)
+
+    def convert(self, amount: object, source: Currency | str, target: Currency | str) -> Decimal:
+        """Return ``amount`` of ``source`` expressed in ``target``.
+
+        Two foreign currencies are converted through the base currency (a
+        cross rate); the result is rounded once, at the end.
+        """
+        source_rate = self._rates[to_enum(Currency, source, field="currency")]
+        target_rate = self._rates[to_enum(Currency, target, field="currency")]
+        return to_money(to_money(amount) * source_rate / target_rate)
