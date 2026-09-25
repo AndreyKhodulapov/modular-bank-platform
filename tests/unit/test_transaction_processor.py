@@ -6,7 +6,16 @@ import pytest
 
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, RiskBlockedError
 from models import Transaction, TransactionStatus
-from services import AuditLevel, Bank, FeePolicy, MovementKind, RiskAnalyzer, SuspicionReason, TransactionProcessor
+from services import (
+    AuditLevel,
+    Bank,
+    FeePolicy,
+    MovementKind,
+    RiskAnalyzer,
+    SuspicionReason,
+    TransactionProcessor,
+    TransactionQueue,
+)
 from tests.helpers import reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
@@ -425,6 +434,24 @@ def test_final_failure_enters_the_history_even_if_the_audit_write_fails(bank, ru
 
 def test_process_queue_keeps_a_retry_when_its_audit_write_fails(processor, queue, rub, usd, failing_audit_log):
     short = queue.add(transfer(rub, usd, 50_000))
+    with pytest.raises(OSError):
+        processor.process_queue(queue)
+    assert short.status is TransactionStatus.PENDING
+    assert queue.pending() == [short]
+
+
+def test_journaled_queue_keeps_a_retry_when_the_audit_log_is_broken(bank, processor, rub, usd, monkeypatch):
+    queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
+    short = queue.add(transfer(rub, usd, 50_000))
+    record = bank.audit_log.record
+
+    def broken(level, category, event, *args, **kwargs):
+        # neither the failed attempt nor the retry coming back can be recorded
+        if event in ("transaction_failed", "transaction_queued"):
+            raise OSError("disk full")
+        return record(level, category, event, *args, **kwargs)
+
+    monkeypatch.setattr(bank.audit_log, "record", broken)
     with pytest.raises(OSError):
         processor.process_queue(queue)
     assert short.status is TransactionStatus.PENDING

@@ -174,12 +174,46 @@ def test_adding_and_cancelling_are_recorded(journaled, audit_log):
     }
 
 
+def handed_out_for_retry(queue: TransactionQueue, *labels: str) -> list[Transaction]:
+    """Queue deposits, hand them out and schedule each for a retry in five minutes, as the processor does."""
+    transactions = [queue.add(deposit(label)) for label in labels]
+    for _ in transactions:
+        queue.next_ready().start(NOW)
+    for transaction in transactions:
+        transaction.retry("night window", NOW, NOW + timedelta(minutes=5))
+    return transactions
+
+
 def test_a_retry_is_recorded_as_queued_again(journaled, audit_log):
-    transaction = journaled.add(deposit("a"))
-    journaled.next_ready().start(NOW)
-    transaction.retry("night window", NOW, NOW + timedelta(minutes=5))
-    journaled.add(transaction)
-    assert [event.details["attempts"] for event in audit_log.filter(event="transaction_queued")] == [0, 1]
+    retries = handed_out_for_retry(journaled, "a", "b")
+    journaled.requeue(retries)
+    assert journaled.pending() == retries
+    queued = audit_log.filter(event="transaction_queued")
+    assert [(event.transaction_id, event.details["attempts"]) for event in queued[2:]] == [
+        (transaction.transaction_id, 1) for transaction in retries
+    ]
+
+
+def test_failed_audit_write_does_not_drop_a_retry(journaled, audit_log, monkeypatch):
+    retries = handed_out_for_retry(journaled, "a", "b")
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(audit_log, "record", broken)
+    with pytest.raises(OSError):
+        journaled.requeue(retries)
+    assert journaled.pending() == retries  # both are back, though neither was recorded
+
+
+def test_requeue_checks_the_whole_batch_before_queuing(queue):
+    [retry] = handed_out_for_retry(queue, "a")
+    cancelled = deposit("b")
+    cancelled.cancel(NOW)
+    for batch in ([retry, cancelled], [retry, retry], [retry, "not a transaction"]):
+        with pytest.raises(InvalidOperationError):
+            queue.requeue(batch)
+        assert len(queue) == 0  # the valid retry was not queued either
 
 
 def test_failed_audit_write_leaves_nothing_queued(clock, tmp_path):

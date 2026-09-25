@@ -76,7 +76,11 @@ class ConsoleFormatter(logging.Formatter):
         if not isinstance(moment, datetime):
             moment = datetime.fromtimestamp(record.created)
         event = fields.pop("event", None)
-        fields.update(fields.pop("details", None) or {})
+        details = fields.pop("details", None)
+        if isinstance(details, dict):
+            fields.update(details)
+        elif details is not None:
+            fields["details"] = details  # not a mapping: shown as one value rather than lost
 
         message = record.getMessage()
         text = f"{event}: {message}" if event else message
@@ -111,7 +115,10 @@ def configure_logging(
 
     The console goes to ``stream`` (standard output by default, so log lines
     stay in order with the program's own output). Calling it again replaces
-    the handlers it added before instead of adding more.
+    the handlers it added before instead of adding more. The ``bank``
+    records stop at these handlers and do not reach the root logger, so a
+    program that also configures the root (``logging.basicConfig()``) does
+    not print each of them twice.
     """
     logger = logging.getLogger(ROOT_LOGGER)
     for handler in [handler for handler in logger.handlers if handler.name in _HANDLER_NAMES]:
@@ -137,3 +144,4 @@ def configure_logging(
 
     # the logger lets through what at least one handler wants; each handler filters the rest
     logger.setLevel(lowest)
+    logger.propagate = False

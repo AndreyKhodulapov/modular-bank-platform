@@ -318,8 +318,14 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   answer for: an account opened, frozen or closed, a client unblocked, a
   transaction accepted, executed, refused or cancelled. A change is recorded
   after it is made, so the journal never claims what did not happen; a
-  refused attempt is recorded as a security event instead. Event names are
-  enums (`AccountEvent`, `ClientEvent`, `TransactionEvent`, `RiskEvent`), so
+  refused attempt is recorded as a security event instead. The price is the
+  opposite gap: if the write fails, the change is already made (an account
+  closed, a client registered) and the caller gets the error, with nothing
+  to undo it. Here the error at least stops further work, and money
+  movements are in the history before the journal is written; a real system
+  closes the gap by storing the change and its event in one database
+  transaction (the transactional outbox pattern). Event names are enums
+  (`AccountEvent`, `ClientEvent`, `TransactionEvent`, `RiskEvent`), so
   writers and reports cannot drift apart on a typo.
 - **Audit log vs application log.** The application log (`logging`) is
   for developers and can be sampled or rotated away; the audit log is a

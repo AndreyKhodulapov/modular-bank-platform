@@ -21,12 +21,13 @@ def make_record(message: str = "attempt started", level: int = logging.INFO, fie
 def bank_logger():
     """The ``bank`` logger, with whatever ``configure_logging()`` added removed afterwards."""
     logger = logging.getLogger(ROOT_LOGGER)
-    handlers, level = list(logger.handlers), logger.level
+    handlers, level, propagate = list(logger.handlers), logger.level, logger.propagate
     yield logger
     for handler in [handler for handler in logger.handlers if handler not in handlers]:
         logger.removeHandler(handler)
         handler.close()
     logger.setLevel(level)
+    logger.propagate = propagate
 
 
 def test_json_line_has_the_standard_keys_and_the_fields():
@@ -70,6 +71,11 @@ def test_console_line_uses_the_event_time_and_compacts_fields():
     assert line.endswith("factors=large_amount,night_operation will_retry=False")
 
 
+def test_console_line_keeps_details_that_are_not_a_mapping():
+    record = make_record(fields={"details": "free text"})
+    assert ConsoleFormatter().format(record).endswith("attempt started details=free text")
+
+
 def test_console_line_without_fields_is_just_the_message():
     record = make_record("delayed transaction is due", logging.DEBUG)
     assert ConsoleFormatter().format(record).endswith("DEBUG    bank.test         delayed transaction is due")
@@ -96,3 +102,16 @@ def test_configuring_again_replaces_the_handlers(tmp_path, bank_logger):
     logging.getLogger("bank.test").info("once")
     assert (first.getvalue(), second.getvalue().count("once")) == ("", 1)
     assert not [handler for handler in bank_logger.handlers if isinstance(handler, logging.FileHandler)]
+
+
+def test_records_do_not_reach_the_root_logger_twice(bank_logger):
+    root_output = io.StringIO()
+    root_handler = logging.StreamHandler(root_output)
+    logging.getLogger().addHandler(root_handler)  # as if the host program called logging.basicConfig()
+    try:
+        console = io.StringIO()
+        configure_logging(console_level=logging.INFO, stream=console)
+        logging.getLogger("bank.test").warning("once")
+    finally:
+        logging.getLogger().removeHandler(root_handler)
+    assert (console.getvalue().count("once"), root_output.getvalue()) == (1, "")

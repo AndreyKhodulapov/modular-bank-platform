@@ -83,8 +83,10 @@ class TransactionProcessor:
     is already set, and a pending one still returns to the queue.
 
     The queue that feeds ``process_queue()`` should share the bank's clock
-    (``TransactionQueue(clock=bank.now)``): the queue decides when a delayed
-    or retried transaction is due, the processor stamps the moments.
+    and audit log (``TransactionQueue(clock=bank.now,
+    audit_log=bank.audit_log)``): the queue decides when a delayed or
+    retried transaction is due, the processor stamps the moments, and one
+    journal holds the whole story of a transaction.
     """
 
     RETRYABLE_ERRORS: tuple[type[BankError], ...] = (OperationTimeRestrictedError, InsufficientFundsError)
@@ -141,8 +143,7 @@ class TransactionProcessor:
                     if bucket is not None:
                         bucket.append(transaction)
         finally:
-            for transaction in report.rescheduled:
-                queue.add(transaction)
+            queue.requeue(report.rescheduled)
         return report
 
     def process(self, transaction: Transaction) -> Transaction:

@@ -97,17 +97,22 @@ Known limitations:
   ones still waiting. Two heaps keep a delayed urgent transaction from
   blocking the ready ones. Given an `audit_log`, it records every
   transaction it takes in (a retry coming back included) and every
-  cancellation.
+  cancellation. `add()` records first, so a transaction whose event cannot
+  be written is not queued; retries come back through `requeue()`, which
+  queues them first, so a failing audit write cannot drop one.
 - `TransactionProcessor` - executes transactions through `Bank`, so the
   night window, blocked clients, limits and the suspicious activity log
   apply. It converts amounts into each account's currency, charges fees,
   retries temporary failures and keeps an error log (`errors`) of every
   failed attempt. `process_queue()` runs everything that is due and returns
   a `ProcessingReport` (completed, failed, rescheduled). The queue should
-  share the bank's clock (`TransactionQueue(clock=bank.now)`), so that
-  delays and retries are measured by the same time; on its own the queue
-  uses the wall clock, as does `Transaction` for a `created_at` that is not
-  passed in. The demo and the tests pass both explicitly.
+  share the bank's clock and audit log
+  (`TransactionQueue(clock=bank.now, audit_log=bank.audit_log)`): delays
+  and retries are then measured by the same time, and the queue's events
+  go to the bank's journal. Without them the queue uses the wall clock (as
+  does `Transaction` for a `created_at` that is not passed in) and records
+  nothing. The demo passes both; the tests pass the clock and add the
+  journal where they check it.
 - `FeePolicy` - the tariff: external transfers pay 1% of the amount, at
   least 50 and at most 5 000 RUB (converted into the sender's currency);
   everything else is free. Pass another policy to change the tariff.
