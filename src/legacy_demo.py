@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    python src/main.py
+    python src/legacy_demo.py
 
 The script is organised in stages, one per feature set.
 Each stage prints a banner, walks through its scenario and returns the
