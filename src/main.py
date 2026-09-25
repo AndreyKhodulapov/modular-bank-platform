@@ -29,6 +29,7 @@ appear in the terminal between the program's lines. Paths and the terminal
 level come from environment variables, see ``settings.py``.
 """
 
+from collections import Counter
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -111,8 +112,10 @@ class Simulation:
 
     def transaction(self, label: str) -> Transaction:
         """The queued transaction labelled ``label`` (without its number); the label must be unique."""
-        (transaction_id,) = (key for key, value in self._labels.items() if value.split(" ", 1)[1] == label)
-        return self._queue.get(transaction_id)
+        matches = [key for key, value in self._labels.items() if value.split(" ", 1)[1] == label]
+        if len(matches) != 1:
+            raise LookupError(f"Label {label!r} matches {len(matches)} transactions; expected exactly one.")
+        return self._queue.get(matches[0])
 
     def _account_id(self, reference: str | None) -> str | None:
         # a short name of the demo's accounts, or an account number outside them kept as is
@@ -138,9 +141,8 @@ class Simulation:
     def cancel(self, label: str) -> None:
         self._queue.cancel(self.transaction(label).transaction_id)
 
-    def process(self, moment: datetime) -> None:
-        """Move the clock to ``moment``, run everything that is due and print the feed."""
-        self._demo.clock.moment = moment
+    def process(self) -> None:
+        """Run everything that is due by the bank's clock and print the feed."""
         self._processor.process_queue(self._queue)
         self.print_feed()
 
@@ -240,11 +242,12 @@ def simulate(demo: DemoBank) -> Simulation:
     bank, clients, accounts = demo.bank, demo.clients, demo.accounts
     simulation = Simulation(demo)
 
-    def round_header(moment: datetime, title: str) -> None:
+    def start_round(moment: datetime, title: str) -> None:
+        """Move the clock to ``moment``: the round's transactions are created and processed then."""
         demo.clock.moment = moment
         print(f"\n  --- {moment:%m-%d %H:%M} {title} ---")
 
-    round_header(datetime(2026, 9, 24, 9, 0), "Morning: salaries and everyday payments")
+    start_round(datetime(2026, 9, 24, 9, 0), "Morning: salaries and everyday payments")
     simulation.enqueue(
         ("salary Maria", "deposit", 150_000, "RUB", None, "maria_rub", {"priority": "high"}),
         ("salary Dmitry", "deposit", 120_000, "RUB", None, "dmitry_rub", {"priority": "high"}),
@@ -260,9 +263,9 @@ def simulate(demo: DemoBank) -> Simulation:
         ("RUB->CNY", "transfer", 10_000, "RUB", "dmitry_rub", "dmitry_cny"),
         ("planned", "transfer", 1_000, "EUR", "elena_eur", "oleg_invest", {"scheduled_at": datetime(2026, 9, 24, 12)}),
     )
-    simulation.process(datetime(2026, 9, 24, 9, 0))
+    simulation.process()
 
-    round_header(datetime(2026, 9, 24, 12, 0), "Noon: mistakes and refusals")
+    start_round(datetime(2026, 9, 24, 12, 0), "Noon: mistakes and refusals")
     bank.freeze_account(accounts["alina_rub"].account_id)
     note("Alina lost her card: her RUB account is frozen")
     payout = bank.close_account(accounts["dmitry_cny"].account_id)
@@ -281,30 +284,30 @@ def simulate(demo: DemoBank) -> Simulation:
         ("typo", "transfer", 5_000, "RUB", "maria_rub", "dmitry_rub", {"scheduled_at": datetime(2026, 9, 24, 13)}),
     )
     simulation.cancel("typo")
-    simulation.process(datetime(2026, 9, 24, 12, 0))
+    simulation.process()
 
-    round_header(datetime(2026, 9, 24, 15, 0), "Afternoon: suspicious activity")
+    start_round(datetime(2026, 9, 24, 15, 0), "Afternoon: suspicious activity")
     simulation.enqueue(
         ("large", "transfer", 7_000, "USD", "oleg_usd", "maria_rub"),
         ("huge abroad", "external_transfer", 25_000, "USD", "oleg_usd", "CY17-0020-0128-0000-0012-0052-7600"),
         *((f"rapid {number}/6", "transfer", 10_000, "KZT", "alina_kzt", "sofia_rub") for number in range(1, 7)),
     )
-    simulation.process(datetime(2026, 9, 24, 15, 0))
+    simulation.process()
 
-    round_header(datetime(2026, 9, 24, 23, 30), "Late evening")
+    start_round(datetime(2026, 9, 24, 23, 30), "Late evening")
     simulation.enqueue(
         ("evening", "transfer", 3_000, "RUB", "maria_rub", "dmitry_rub"),
         ("late large", "transfer", 600_000, "RUB", "elena_savings", "sofia_rub"),
     )
-    simulation.process(datetime(2026, 9, 24, 23, 30))
+    simulation.process()
 
-    round_header(datetime(2026, 9, 25, 2, 0), "Night: the bank does not move money until 05:00")
+    start_round(datetime(2026, 9, 25, 2, 0), "Night: the bank does not move money until 05:00")
     simulation.enqueue(("night", "transfer", 1_000, "RUB", "dmitry_rub", "maria_rub"))
-    simulation.process(datetime(2026, 9, 25, 2, 0))
-    round_header(datetime(2026, 9, 25, 4, 0), "Night: a retry is still too early")
-    simulation.process(datetime(2026, 9, 25, 4, 0))
+    simulation.process()
+    start_round(datetime(2026, 9, 25, 4, 0), "Night: a retry is still too early")
+    simulation.process()
 
-    round_header(datetime(2026, 9, 25, 8, 0), "Next morning")
+    start_round(datetime(2026, 9, 25, 8, 0), "Next morning")
     bank.unblock_client(clients["timur"].client_id)
     note("Timur called the bank and was unblocked")
     simulation.enqueue(
@@ -318,7 +321,7 @@ def simulate(demo: DemoBank) -> Simulation:
         ("dinner", "transfer", 10_000, "RUB", "maria_rub", "elena_eur"),
         ("cash deposit", "deposit", 15_000, "RUB", None, "dmitry_rub"),
     )
-    simulation.process(datetime(2026, 9, 25, 8, 0))
+    simulation.process()
 
     print(f"\n  {simulation.queued} transactions queued")
     return simulation
@@ -328,10 +331,9 @@ def show_logging(demo: DemoBank, simulation: Simulation) -> None:
     print_section(3, "Logging")
     audit_log = demo.bank.audit_log
     print(f"  The audit log holds {len(audit_log)} events of this run, file: {audit_log.file_path}")
-    counts: dict[str, int] = {}
-    for event in audit_log:
-        if event.category in (AuditCategory.TRANSACTION, AuditCategory.RISK):
-            counts[event.event] = counts.get(event.event, 0) + 1
+    counts = Counter(
+        event.event for event in audit_log if event.category in (AuditCategory.TRANSACTION, AuditCategory.RISK)
+    )
     print("  " + ", ".join(f"{name} {count}" for name, count in counts.items()))
 
     print("\n  Life cycle of selected transactions, as the audit log holds it:")

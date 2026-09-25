@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def run_program(script: str, tmp_path: Path, log_level: str = "warning") -> subprocess.CompletedProcess[str]:
     """Run ``src/<script>`` with both logs in ``tmp_path``, so the test run stays out of the project's logs/."""
@@ -66,10 +68,17 @@ def test_legacy_demo_runs_without_errors(tmp_path):
     assert sum(record.get("event") == "operation_blocked" for record in records) == 2
 
 
-def test_main_program_plays_the_day_and_prints_the_reports(tmp_path):
-    completed = run_program("main.py", tmp_path)
+@pytest.fixture(scope="module")
+def main_run(tmp_path_factory) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """One run of the program shared by the tests that read its output and its logs."""
+    logs = tmp_path_factory.mktemp("main")
+    completed = run_program("main.py", logs)
     assert completed.returncode == 0, completed.stderr
-    output = completed.stdout
+    return completed, logs
+
+
+def test_main_program_plays_the_day_and_prints_the_reports(main_run):
+    output = main_run[0].stdout
     for section in ("1. Initialization", "2. Simulation", "3. Logging", "4. Client view: Sokolov Oleg", "5. Reports"):
         assert section in output
     # the sizes the program promises: 5-10 clients, 10-15 accounts, 30-50 transactions
@@ -91,23 +100,24 @@ def test_main_program_plays_the_day_and_prints_the_reports(tmp_path):
     assert "Top 3 clients\n    1. Sokolov Oleg" in output
     assert "Transactions: 40 (completed 31, failed 8, cancelled 1)" in output
     assert "failure rate 20.5%, blocked by risk control 2" in output
-    assert "Total balance: 4322411.00 RUB on 12 accounts" in output
+    assert "tariff fees collected 450.00 RUB" in output
+    assert "Total balance: 4322411.00 RUB on 11 accounts" in output  # the closed CNY account is not counted
+    assert "CNY" not in output.split("Total balance:")[1]
     # the terminal shows warnings and above only
     assert "CRITICAL bank.audit        operation_blocked" in output
     assert "INFO     bank." not in output
 
 
-def test_main_program_writes_both_logs(tmp_path):
-    completed = run_program("main.py", tmp_path)
-    assert completed.returncode == 0, completed.stderr
-    events = read_json_lines(tmp_path / "audit.jsonl")
+def test_main_program_writes_both_logs(main_run):
+    completed, logs = main_run
+    events = read_json_lines(logs / "audit.jsonl")
     assert f"The audit log holds {len(events)} events of this run" in completed.stdout
     names = [event["event"] for event in events]
     assert names.count("transaction_queued") >= 40  # a retry comes back through the queue
     assert names.count("transaction_cancelled") == 1
     assert names.count("operation_blocked") == 2
     assert {"client_registered", "account_opened", "account_frozen", "account_closed", "client_blocked"} <= set(names)
-    records = read_json_lines(tmp_path / "app.jsonl")
+    records = read_json_lines(logs / "app.jsonl")
     assert sum(record.get("event") == "transaction_completed" for record in records) == 31
 
 

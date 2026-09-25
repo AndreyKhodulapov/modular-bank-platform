@@ -84,7 +84,7 @@ def test_statistics_measure_completed_transactions_in_the_base_currency(report):
     assert statistics.volume == Decimal("6500.00")  # 1 000 + 50 USD * 90 + 1 000
     assert statistics.average_amount == Decimal("2166.67")
     assert (statistics.largest.amount, statistics.largest.currency) == (Decimal("50.00"), Currency.USD)
-    assert statistics.fees == Decimal("50.00")
+    assert statistics.tariff_fees == Decimal("50.00")
 
 
 def test_fees_are_converted_from_the_sender_currency(bank, clock, parties, report):
@@ -97,7 +97,7 @@ def test_fees_are_converted_from_the_sender_currency(bank, clock, parties, repor
     )
     TransactionProcessor(bank).process_queue(queue)
     # the minimal fee is 50 RUB, charged as 0.56 USD, which is 50.40 RUB back in the base currency
-    assert report.transaction_statistics().fees == Decimal("50.40")
+    assert report.transaction_statistics().tariff_fees == Decimal("50.40")
 
 
 @pytest.mark.usefixtures("processed")
@@ -107,7 +107,31 @@ def test_statistics_text_lists_every_figure(report):
     assert "by type: deposit 1, transfer 3, external_transfer 1" in text
     assert "failure rate 40.0%, blocked by risk control 1" in text
     assert "volume 6500.00 RUB, average 2166.67 RUB, largest 50.00 USD (transfer)" in text
-    assert "fees collected 50.00 RUB" in text
+    assert "tariff fees collected 50.00 RUB" in text
+
+
+def test_tariff_fees_leave_out_the_premium_account_own_fee(bank, clock, client, report):
+    premium = bank.open_account(client.client_id, "premium", currency="RUB", initial_balance=10_000, withdrawal_fee=30)
+    queue = TransactionQueue(clock=bank.now)
+    queue.add(
+        Transaction(
+            "external_transfer", 1_000, "RUB", sender_id=premium.account_id, recipient_id="DE-1", created_at=clock()
+        )
+    )
+    (transaction,) = TransactionProcessor(bank).process_queue(queue).completed
+    assert transaction.debited_amount == Decimal("1080.00")  # the amount, the tariff fee and the account's own fee
+    assert report.transaction_statistics().tariff_fees == Decimal("50.00")
+
+
+@pytest.mark.usefixtures("processed")
+def test_reports_cannot_be_changed(report):
+    statistics, summary = report.transaction_statistics(), report.total_balance()
+    with pytest.raises(TypeError):
+        statistics.by_status[TransactionStatus.FAILED] = 0
+    with pytest.raises(TypeError):
+        statistics.by_type[TransactionType.DEPOSIT] = 0
+    with pytest.raises(TypeError):
+        summary.by_currency[Currency.RUB] = Decimal(0)
 
 
 def test_top_clients_are_the_richest_first(bank, make_client, report):
@@ -146,3 +170,14 @@ def test_total_balance_by_currency_and_in_the_base_currency(bank, make_client, r
     assert summary.total == Decimal("2400.00")  # 20 * 100 - 500 + 10 * 90
     assert summary.accounts == 3
     assert str(summary).splitlines()[0] == "Total balance: 2400.00 RUB on 3 accounts"
+
+
+def test_total_balance_leaves_out_closed_accounts(bank, client, report):
+    bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    closed = bank.open_account(client.client_id, currency="CNY", initial_balance=10)
+    frozen = bank.open_account(client.client_id, currency="EUR", initial_balance=1)
+    bank.close_account(closed.account_id)
+    bank.freeze_account(frozen.account_id)
+    summary = report.total_balance()
+    assert summary.by_currency == {Currency.EUR: Decimal("1.00"), Currency.RUB: Decimal("100.00")}
+    assert (summary.accounts, summary.total) == (2, Decimal("200.00"))

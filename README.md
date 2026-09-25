@@ -227,18 +227,23 @@ for movement in bank.history.movements(account.account_id):
 
 `BankReport(bank)` builds reports from the bank's current state; it keeps
 nothing of its own. Every amount is in roubles, converted at the bank's
-rates. Each report is an immutable dataclass whose `str()` is the printed
-form:
+rates. Each report is an immutable dataclass (its mappings are read-only)
+whose `str()` is the printed form:
 
-- `transaction_statistics()` - transactions by status (completed and
-  failed from the history, cancelled from the audit log) and by type; the
-  volume, average and largest completed transaction; the fees collected
-  (charged in the sender's currency, converted); how many transactions risk
-  control blocked and the failure rate.
+- `transaction_statistics()` - transactions by status and by type; the
+  volume, average and largest completed transaction; the tariff fees
+  collected (charged in the sender's currency, converted); how many
+  transactions risk control blocked and the failure rate. Completed and
+  failed transactions come from the history, cancelled ones from the
+  bank's audit log, so they are counted only when the queue is given that
+  log (`TransactionQueue(clock=bank.now, audit_log=bank.audit_log)`). The
+  tariff fees are those of `FeePolicy`; a premium account's own withdrawal
+  fee is a term of the account and stays inside the debited amount.
 - `top_clients(limit=3)` - the richest clients by the total value of their
   accounts.
 - `total_balance()` - everything the bank holds, in roubles and by
-  currency.
+  currency, and how many open (active or frozen) accounts hold it; closed
+  accounts are left out.
 
 ```python
 report = BankReport(bank)
@@ -247,7 +252,7 @@ print(report.transaction_statistics())
 #   by type: deposit 5, withdrawal 7, transfer 25, external_transfer 2
 #   failure rate 20.5%, blocked by risk control 2
 #   volume 1839899.00 RUB, average 59351.58 RUB, largest 7000.00 USD (transfer)
-#   fees collected 450.00 RUB
+#   tariff fees collected 450.00 RUB
 ```
 
 ## Project structure
