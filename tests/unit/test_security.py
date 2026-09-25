@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, OperationTimeRestrictedError
-from services import SecurityGuard, SuspicionReason
+from services import AuditCategory, AuditLevel, AuditLog, SecurityGuard, SuspicionReason
 from tests.helpers import reasons
 
 
@@ -140,3 +140,42 @@ def test_log_is_returned_as_a_copy(security):
 def test_default_clock_is_system_time():
     before = datetime.now()
     assert before <= SecurityGuard().now() <= datetime.now()
+
+
+def test_flags_go_to_the_audit_log_with_a_level(guard, owner):
+    for _ in range(3):
+        with pytest.raises((AuthenticationError, ClientBlockedError)):
+            guard.authenticate(owner, "wrong-password")
+    events = guard.audit_log.filter(category=AuditCategory.SECURITY)
+    assert [(event.event, event.level) for event in events] == [
+        ("failed_login", AuditLevel.WARNING),
+        ("failed_login", AuditLevel.WARNING),
+        ("failed_login", AuditLevel.WARNING),
+        ("client_blocked", AuditLevel.CRITICAL),
+    ]
+    assert all(event.client_id == owner.client_id for event in events)
+
+
+def test_guard_writes_into_an_injected_audit_log(clock):
+    log = AuditLog()
+    guard = SecurityGuard(clock=clock, audit_log=log)
+    activity = guard.flag(SuspicionReason.LARGE_OPERATION, "big", client_id="C")
+    [event] = log.events
+    assert (event.timestamp, event.message, event.client_id) == (clock.moment, "big", "C")
+    assert guard.suspicious_activities == [activity]
+
+
+def test_suspicious_activities_skip_other_categories(security, clock):
+    security.audit_log.record("info", "transaction", "transaction_completed", "ok", timestamp=clock.moment)
+    assert security.suspicious_activities == []
+
+
+def test_rejects_a_foreign_audit_log():
+    with pytest.raises(InvalidOperationError):
+        SecurityGuard(audit_log=[])
+
+
+def test_suspicious_activities_skip_foreign_security_events(security, clock):
+    security.audit_log.record("info", "security", "password_changed", "changed", timestamp=clock.moment)
+    activity = security.flag(SuspicionReason.FAILED_LOGIN, "wrong")
+    assert security.suspicious_activities == [activity]

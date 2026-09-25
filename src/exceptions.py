@@ -120,3 +120,14 @@ class InvalidTransactionStateError(InvalidOperationError):
         self.current = current
         self.target = target
         super().__init__(f"Transaction {transaction_id} cannot move from {current} to {target}.")
+
+
+class RiskBlockedError(BankError):
+    """Raised when risk control scores a transaction as high risk and the bank refuses it."""
+
+    def __init__(self, transaction_id: str, score: int, factors: tuple[str, ...]) -> None:
+        self.transaction_id = transaction_id
+        self.score = score
+        self.factors = factors
+        reasons = ", ".join(factors) if factors else "no factors"
+        super().__init__(f"Transaction {transaction_id} blocked by risk control: score {score} ({reasons}).")

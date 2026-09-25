@@ -154,15 +154,19 @@ amounts and enum members are values: two equal amounts are interchangeable.
   the portfolio, so an account with invested money cannot be closed.
 - **Dependency Injection** - an object receives its collaborators instead of
   creating them. `SecurityGuard(clock=...)`, `TransactionQueue(clock=...)`,
-  `Bank(security=..., converter=...)` and
+  `SecurityGuard(audit_log=...)`,
+  `Bank(security=..., converter=..., risk_analyzer=...)` and
   `TransactionProcessor(bank, fee_policy=...)`; the defaults (`datetime.now`, reference
-  rates) are used only when nothing is passed.
+  rates, the default risk rules) are used only when nothing is passed.
 - **Value Object** - an immutable object defined by its values, not identity.
-  `SuspiciousActivity` and `TransactionErrorRecord` (frozen dataclasses),
-  money as `Decimal` and the enum members.
+  `AuditEvent`, `RiskAssessment`, `RiskFactor`, `SuspiciousActivity` and
+  `TransactionErrorRecord` (frozen dataclasses), money as `Decimal` and the
+  enum members.
 - **Strategy** - an interchangeable algorithm behind a fixed interface.
   `FeePolicy.calculate()` prices a transaction; `TransactionProcessor(bank,
-  fee_policy=...)` accepts any tariff without changing its own code.
+  fee_policy=...)` accepts any tariff without changing its own code. Each
+  `RiskRule` is a strategy too: `RiskAnalyzer` runs a list of them and only
+  adds up their scores.
 - **State machine** - an object whose allowed actions depend on its state.
   `Transaction` keeps a table of allowed status transitions and refuses any
   other move with `InvalidTransactionStateError`.
@@ -229,13 +233,61 @@ amounts and enum members are values: two equal amounts are interchangeable.
 Emitting log records as key-value data (not free text) so they can be
 filtered, aggregated and shipped to monitoring systems.
 
-*In the project:* the suspicious activity log already stores structured
-records - `SuspiciousActivity` has a timestamp, a `SuspicionReason` enum and
-the client and account ids - so it can be filtered by field. The
-processor's error log works the same way: `TransactionErrorRecord` keeps
-the time, transaction id, attempt number, error type and whether a retry
-follows. The records are
-kept in memory and are not yet sent through the `logging` module.
+*In the project:* every `AuditEvent` has fields - time, level, category,
+event name, client, account and transaction ids and a `details` mapping -
+so `AuditLog.filter()` selects by any of them and `AuditReport` counts them.
+The file format is JSON Lines: one JSON object per line, easy to append,
+to stream and to load into log tools (ELK, Loki, `jq`).
+
+## Audit logging
+
+- **Severity levels.** `INFO` - normal business events; `WARNING` -
+  something unusual that did not stop the operation; `ERROR` - an operation
+  failed; `CRITICAL` - the system protected itself (a client blocked, an
+  operation refused by risk control) or a defect. `AuditLevel` reuses the
+  numbers of Python's `logging` levels, and as an `IntEnum` it compares by
+  value, so "warnings and above" is `level >= WARNING`.
+- **Append-only and immutable.** An audit trail is evidence: entries are
+  never edited or deleted. Events are frozen dataclasses with read-only
+  `details`, the getters return copies, and the file is only appended to.
+- **Write-through to a file.** Each event is written the moment it is
+  recorded, so a crash loses nothing that was already logged. Memory is for
+  fast queries in the running process; the file is the durable record.
+- **One journal, many writers.** Security, transactions and risk control
+  share one injected `AuditLog`, so a client's whole story is in one place,
+  in time order. The old `suspicious_activities` API is kept as a
+  filtered view of it, so existing callers did not change.
+- **Audit log vs application log.** The application log (`logging`) is
+  for developers and can be sampled or rotated away; the audit log is a
+  business record of who did what and when, kept complete.
+
+## Risk analysis
+
+- **Rule-based scoring.** Each rule checks one signal and adds points;
+  the sum maps to a level through thresholds. It is transparent (the
+  factors explain every decision), easy to tune and needs no training data.
+  The weights are chosen so that one signal alone is at most `medium`,
+  while a combination (a large amount + a new recipient + night) is
+  `high`, and a very large amount (2 000 000 RUB and more) is `high` on
+  its own.
+- **Open/Closed principle.** A new check is a new `RiskRule` subclass
+  passed to `RiskAnalyzer`; the analyzer itself is not changed.
+- **Record vs block.** Hard rules (the night ban, a blocked client) refuse
+  an operation outright and run first. The risk score is softer: `low`
+  goes through, `medium` goes through but is logged as a warning for a
+  review, `high` is refused. A blocked transaction fails without retry:
+  trying it again would get the same score.
+- **State for behavioural rules.** Frequency and "new recipient" depend on
+  history, so the analyzer keeps a small `RiskHistory`: when each
+  transaction was first seen (a retry does not count as a new operation)
+  and which sender -> recipient pairs already completed a transfer. The
+  bank remembers when each account was opened, so the models stay free of
+  clocks.
+- **Rules vs machine learning.** Real anti-fraud systems combine rules
+  with ML models trained on labelled fraud (gradient boosting, anomaly
+  detection). Rules stay for regulatory limits and explainability; a model
+  catches patterns nobody wrote a rule for. Here the ML part would simply be
+  another `RiskRule` that returns a model's score.
 
 ## Preparing modules for unit testing
 
@@ -252,5 +304,7 @@ so the 18th-birthday boundary is tested on fixed dates. Services receive their
 dependencies: tests build `SecurityGuard(clock=ManualClock(...))` and move the
 clock to 00:00, 04:59:59 or 05:00 to check the night window exactly, and pass
 their own rates to `CurrencyConverter`. Tests are split into `tests/unit/`
-(one module per model, service or helper) and `tests/integration/` (cross-type
-and bank scenarios and a smoke test of the demo).
+(one module per model, service or helper) and `tests/integration/` (cross-type,
+bank, transaction and risk scenarios and a smoke test of the demo). The audit
+file is tested in pytest's `tmp_path`, and the analyzer is tested apart from
+the real rules with a stub rule that always returns a fixed score.

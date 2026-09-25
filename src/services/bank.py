@@ -1,4 +1,4 @@
-"""The bank: a single entry point to clients, accounts and their security."""
+"""The bank: a single entry point to clients, accounts, their security and risk control."""
 
 import inspect
 from collections.abc import Callable
@@ -12,14 +12,18 @@ from exceptions import (
     ClientBlockedError,
     ClientNotFoundError,
     InvalidOperationError,
+    RiskBlockedError,
 )
 from models.account import BankAccount
 from models.client import Client
-from models.enums import AccountStatus, Currency
+from models.enums import AccountStatus, Currency, TransactionType
 from models.investment_account import InvestmentAccount
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
+from models.transaction import Transaction
+from services.audit_log import AuditCategory, AuditLevel, AuditLog
 from services.currency import CurrencyConverter
+from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
 from utils import to_enum, to_money
 
@@ -34,7 +38,9 @@ class Bank:
       deposit, withdraw, unblock) are forbidden in the night window;
     - a blocked client cannot operate on their accounts;
     - failed logins, night attempts, operations on frozen or closed accounts
-      and large amounts are recorded as suspicious.
+      and large amounts are recorded as suspicious;
+    - ``screen()`` scores a transaction with the risk analyzer before money
+      moves and refuses a high-risk one.
 
     Protective actions (``freeze_account``), logins and read-only queries are
     allowed at any time. Totals and the ranking are expressed in the
@@ -55,11 +61,17 @@ class Bank:
         *,
         security: SecurityGuard | None = None,
         converter: CurrencyConverter | None = None,
+        risk_analyzer: RiskAnalyzer | None = None,
     ) -> None:
+        if risk_analyzer is not None and not isinstance(risk_analyzer, RiskAnalyzer):
+            raise InvalidOperationError("risk_analyzer must be a RiskAnalyzer instance.")
         self._security = security if security is not None else SecurityGuard()
         self._converter = converter if converter is not None else CurrencyConverter()
+        self._risk = risk_analyzer if risk_analyzer is not None else RiskAnalyzer()
         self._clients: dict[str, Client] = {}
         self._accounts: dict[str, BankAccount] = {}
+        # kept by the bank, not the account: the models have no clock
+        self._opened_at: dict[str, datetime] = {}
 
     @property
     def base_currency(self) -> Currency:
@@ -72,6 +84,15 @@ class Bank:
     @property
     def suspicious_activities(self) -> list[SuspiciousActivity]:
         return self._security.suspicious_activities
+
+    @property
+    def audit_log(self) -> AuditLog:
+        """The journal shared by security, transactions and risk control."""
+        return self._security.audit_log
+
+    @property
+    def risk_analyzer(self) -> RiskAnalyzer:
+        return self._risk
 
     def now(self) -> datetime:
         """The bank's current time, from the security guard's clock."""
@@ -88,6 +109,11 @@ class Bank:
         if account is None:
             raise AccountNotFoundError(account_id)
         return account
+
+    def account_opened_at(self, account_id: str) -> datetime:
+        """When the bank opened the account, by its own clock."""
+        self.get_account(account_id)
+        return self._opened_at[account_id]
 
     @classmethod
     def _resolve_account_class(cls, account_type: str) -> type[BankAccount]:
@@ -170,6 +196,7 @@ class Bank:
         self._guard("open_account", client)
         account = account_class(owner=client, **params)
         self._accounts[account.account_id] = account
+        self._opened_at[account.account_id] = self.now()
         client.add_account_id(account.account_id)
         self._review_amount("open_account", account, account.total_value)
         return account
@@ -204,6 +231,67 @@ class Bank:
         account = self.get_account(account_id)
         self._run_on_account(action, account, account.ensure_operational)
         return account
+
+    def screen(self, transaction: Transaction) -> RiskAssessment:
+        """Check a transaction before its money moves; refuse it when the risk is high.
+
+        The hard rules come first - the night window and a blocked client -
+        so a transaction they refuse is not scored. Then the risk analyzer
+        scores it and the result goes to the audit log: ``INFO`` for a low
+        risk, ``WARNING`` for a medium one (the transaction goes on) and
+        ``CRITICAL`` for a high one, which raises ``RiskBlockedError``.
+        """
+        if not isinstance(transaction, Transaction):
+            raise InvalidOperationError("transaction must be a Transaction instance.")
+        sender = self.get_account(transaction.sender_id) if transaction.sender_id is not None else None
+        # the recipient of an external transfer is in another bank
+        recipient = (
+            self.get_account(transaction.recipient_id)
+            if transaction.recipient_id is not None
+            and transaction.transaction_type is not TransactionType.EXTERNAL_TRANSFER
+            else None
+        )
+        initiator = sender if sender is not None else recipient
+        if initiator is None:
+            raise InvalidOperationError(f"Transaction {transaction.transaction_id} has no account in this bank.")
+        action = transaction.transaction_type.value
+        self._guard(action, initiator.owner, initiator)
+
+        assessment = self._risk.assess(
+            RiskContext(
+                transaction=transaction,
+                client_id=initiator.owner.client_id,
+                moment=self.now(),
+                amount_in_base=self._converter.to_base(transaction.amount, transaction.currency),
+                recipient_opened_at=self._opened_at[recipient.account_id] if recipient is not None else None,
+            )
+        )
+        levels = {
+            RiskLevel.LOW: AuditLevel.INFO,
+            RiskLevel.MEDIUM: AuditLevel.WARNING,
+            RiskLevel.HIGH: AuditLevel.CRITICAL,
+        }
+        rules = ", ".join(assessment.rules) or "no risk factors"
+        self.audit_log.record(
+            levels[assessment.level],
+            AuditCategory.RISK,
+            "operation_blocked" if assessment.blocked else "risk_assessed",
+            f"{action} of {transaction.amount} {transaction.currency.value}: "
+            f"{assessment.level.name.lower()} risk, score {assessment.score} ({rules})",
+            timestamp=assessment.moment,
+            client_id=assessment.client_id,
+            account_id=initiator.account_id,
+            transaction_id=transaction.transaction_id,
+            details={
+                "score": assessment.score,
+                "risk_level": assessment.level.name.lower(),
+                "factors": assessment.rules,
+                "amount_in_base": assessment.amount_in_base,
+            },
+        )
+        if assessment.blocked:
+            raise RiskBlockedError(transaction.transaction_id, assessment.score, assessment.rules)
+        return assessment
 
     def freeze_account(self, account_id: str) -> BankAccount:
         """Freeze an active account; allowed at any time, since freezing only protects money."""

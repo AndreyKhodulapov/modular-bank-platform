@@ -1,13 +1,20 @@
-"""Execution of transactions: rules, fees, currency conversion, retries and the error log."""
+"""Execution of transactions: rules, risk control, fees, currency conversion, retries and the error log."""
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from exceptions import BankError, InsufficientFundsError, InvalidOperationError, OperationTimeRestrictedError
+from exceptions import (
+    AccountNotFoundError,
+    BankError,
+    InsufficientFundsError,
+    InvalidOperationError,
+    OperationTimeRestrictedError,
+)
 from models.account import BankAccount
 from models.enums import TransactionStatus, TransactionType
 from models.transaction import Transaction
+from services.audit_log import AuditCategory, AuditLevel
 from services.bank import Bank
 from services.fees import FeePolicy
 from services.transaction_queue import TransactionQueue
@@ -46,6 +53,8 @@ class TransactionProcessor:
 
     - checks both accounts and converts the amount into their currencies
       before any money moves;
+    - lets the bank screen the transaction (``bank.screen()``): a high risk
+      fails it at once with ``RiskBlockedError``;
     - charges the fee from ``fee_policy`` together with the debit;
     - keeps a transfer atomic: if crediting the recipient fails after the
       sender was debited, the debit is put back with ``account.refund()``,
@@ -58,6 +67,13 @@ class TransactionProcessor:
     An error that is not a ``BankError`` is a defect, not a business
     outcome: the transaction is failed and logged all the same, and the
     error is raised to the caller.
+
+    Every outcome goes to the bank's audit log: a completed transaction as
+    ``INFO``, a failed attempt as ``ERROR`` (``details.will_retry`` tells
+    whether it comes back) and an unexpected error as ``CRITICAL``. If the
+    audit log cannot be written, processing stops with that error rather
+    than move more money without an audit trail; the transaction's status
+    is already set, and a pending one still returns to the queue.
 
     The queue that feeds ``process_queue()`` should share the bank's clock
     (``TransactionQueue(clock=bank.now)``): the queue decides when a delayed
@@ -109,8 +125,14 @@ class TransactionProcessor:
         # `finally` gets them back even if an attempt raises halfway through the run
         try:
             while (transaction := queue.next_ready()) is not None:
-                self.process(transaction)
-                outcome[transaction.status].append(transaction)
+                try:
+                    self.process(transaction)
+                finally:
+                    # sorted even when process() raised (e.g. the audit write failed after the status
+                    # was set): a pending one must go back to the queue, not be lost with the error
+                    bucket = outcome.get(transaction.status)
+                    if bucket is not None:
+                        bucket.append(transaction)
         finally:
             for transaction in report.rescheduled:
                 queue.add(transaction)
@@ -128,7 +150,40 @@ class TransactionProcessor:
             raise
         else:
             transaction.complete(self._bank.now(), fee=fee, debited_amount=debited, credited_amount=credited)
+            self._bank.risk_analyzer.record_completed(transaction)
+            self._audit_completed(transaction)
         return transaction
+
+    def _initiator(self, transaction: Transaction) -> tuple[str | None, str | None]:
+        """The client and account on whose behalf the transaction runs, if the bank knows them."""
+        account_id = transaction.sender_id
+        if account_id is None:
+            account_id = transaction.recipient_id
+        try:
+            account = self._bank.get_account(account_id)
+        except AccountNotFoundError:
+            return None, account_id
+        return account.owner.client_id, account.account_id
+
+    def _audit_completed(self, transaction: Transaction) -> None:
+        client_id, account_id = self._initiator(transaction)
+        self._bank.audit_log.record(
+            AuditLevel.INFO,
+            AuditCategory.TRANSACTION,
+            "transaction_completed",
+            f"{transaction.transaction_type.value} of {transaction.amount} {transaction.currency.value} completed",
+            timestamp=transaction.finished_at,
+            client_id=client_id,
+            account_id=account_id,
+            transaction_id=transaction.transaction_id,
+            details={
+                "type": transaction.transaction_type,
+                "amount": transaction.amount,
+                "currency": transaction.currency,
+                "fee": transaction.fee,
+                "attempt": transaction.attempts,
+            },
+        )
 
     def _execute(self, transaction: Transaction) -> tuple[Decimal, Decimal | None, Decimal | None]:
         """Move the money; return the fee, the amount debited and the amount credited."""
@@ -148,6 +203,8 @@ class TransactionProcessor:
         # both conversions come before the debit: a credit that rounds away to nothing must not strand it
         debit = self._convert_for(transaction, sender) if sender is not None else None
         credit = self._convert_for(transaction, recipient) if recipient is not None else None
+        # the last check before money moves: the night window, a blocked client, then the risk score
+        self._bank.screen(transaction)
 
         fee = Decimal("0.00")
         debited = credited = None
@@ -199,3 +256,16 @@ class TransactionProcessor:
             transaction.retry(reason, now, now + delay)
         else:
             transaction.fail(reason, now)
+        # logged after the status change: a failing audit write must not leave the transaction in PROCESSING
+        client_id, account_id = self._initiator(transaction)
+        self._bank.audit_log.record(
+            AuditLevel.ERROR if isinstance(error, BankError) else AuditLevel.CRITICAL,
+            AuditCategory.TRANSACTION,
+            "transaction_failed",
+            f"attempt {transaction.attempts}: {type(error).__name__}: {error}",
+            timestamp=now,
+            client_id=client_id,
+            account_id=account_id,
+            transaction_id=transaction.transaction_id,
+            details={"error_type": type(error).__name__, "attempt": transaction.attempts, "will_retry": will_retry},
+        )
