@@ -7,18 +7,30 @@ import sys
 from pathlib import Path
 
 
-def test_legacy_demo_runs_without_errors(tmp_path):
+def run_program(script: str, tmp_path: Path, log_level: str = "warning") -> subprocess.CompletedProcess[str]:
+    """Run ``src/<script>`` with both logs in ``tmp_path``, so the test run stays out of the project's logs/."""
     root = Path(__file__).resolve().parents[2]
-    # both files go to a temporary folder, so the test run stays out of the project's logs/
-    audit_path, app_log_path = tmp_path / "audit.jsonl", tmp_path / "app.jsonl"
-    completed = subprocess.run(
-        [sys.executable, str(root / "src" / "legacy_demo.py")],
+    return subprocess.run(
+        [sys.executable, str(root / "src" / script)],
         capture_output=True,
         text=True,
         check=False,
         env=os.environ
-        | {"BANK_AUDIT_LOG": str(audit_path), "BANK_LOG_FILE": str(app_log_path), "BANK_LOG_LEVEL": "warning"},
+        | {
+            "BANK_AUDIT_LOG": str(tmp_path / "audit.jsonl"),
+            "BANK_LOG_FILE": str(tmp_path / "app.jsonl"),
+            "BANK_LOG_LEVEL": log_level,
+        },
     )
+
+
+def read_json_lines(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_legacy_demo_runs_without_errors(tmp_path):
+    audit_path, app_log_path = tmp_path / "audit.jsonl", tmp_path / "app.jsonl"
+    completed = run_program("legacy_demo.py", tmp_path)
     assert completed.returncode == 0, completed.stderr
     assert "STAGE 1: Accounts Basic" in completed.stdout
     assert "STAGE 2: Accounts Advanced" in completed.stdout
@@ -41,14 +53,68 @@ def test_legacy_demo_runs_without_errors(tmp_path):
     assert "STAGE 5: Audit and Risk" in completed.stdout
     assert f"file: {audit_path}" in completed.stdout
     assert "[failed   ] huge abroad      high   score  90" in completed.stdout
-    events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    events = read_json_lines(audit_path)
     assert f"this run added {len(events)} events" in completed.stdout
     assert sum(event["event"] == "operation_blocked" for event in events) == 2
     assert {"client_registered", "account_opened", "transaction_queued"} <= {event["event"] for event in events}
     # the terminal shows warnings and above; the file has everything, the audit events of every stage included
     assert "CRITICAL bank.audit        operation_blocked: external_transfer of 25000.00 USD" in completed.stdout
     assert "INFO     bank." not in completed.stdout
-    records = [json.loads(line) for line in app_log_path.read_text(encoding="utf-8").splitlines()]
+    records = read_json_lines(app_log_path)
     assert {record["logger"] for record in records} == {"bank.audit", "bank.transactions", "bank.queue"}
     assert {record["level"] for record in records} == {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
     assert sum(record.get("event") == "operation_blocked" for record in records) == 2
+
+
+def test_main_program_plays_the_day_and_prints_the_reports(tmp_path):
+    completed = run_program("main.py", tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    output = completed.stdout
+    for section in ("1. Initialization", "2. Simulation", "3. Logging", "4. Client view: Sokolov Oleg", "5. Reports"):
+        assert section in output
+    # the sizes the program promises: 5-10 clients, 10-15 accounts, 30-50 transactions
+    assert "7 clients, 12 accounts" in output
+    assert "40 transactions queued" in output
+    # the feed shows every outcome, read from the audit log
+    assert "queued     #01 salary Maria" in output
+    assert "completed  #01 salary Maria" in output
+    assert "cancelled  #20 typo" in output
+    assert "failed     #14 to frozen            attempt 1: AccountFrozenError" in output
+    assert "failed     #16 blocked client       attempt 1: ClientBlockedError" in output
+    assert "retry      #31 night                attempt 1: OperationTimeRestrictedError" in output
+    assert "completed  #31 night" in output
+    assert "warning    #21 large                transfer of 7000.00 USD: medium risk, score 60" in output
+    assert "blocked    #22 huge abroad          external_transfer of 25000.00 USD: high risk, score 90" in output
+    assert "#19 short of money: failed" in output
+    # the client view and the reports
+    assert "PremiumAccount | Sokolov Oleg | ****" in output and "| active | -1511.00 USD" in output
+    assert "Top 3 clients\n    1. Sokolov Oleg" in output
+    assert "Transactions: 40 (completed 31, failed 8, cancelled 1)" in output
+    assert "failure rate 20.5%, blocked by risk control 2" in output
+    assert "Total balance: 4322411.00 RUB on 12 accounts" in output
+    # the terminal shows warnings and above only
+    assert "CRITICAL bank.audit        operation_blocked" in output
+    assert "INFO     bank." not in output
+
+
+def test_main_program_writes_both_logs(tmp_path):
+    completed = run_program("main.py", tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    events = read_json_lines(tmp_path / "audit.jsonl")
+    assert f"The audit log holds {len(events)} events of this run" in completed.stdout
+    names = [event["event"] for event in events]
+    assert names.count("transaction_queued") >= 40  # a retry comes back through the queue
+    assert names.count("transaction_cancelled") == 1
+    assert names.count("operation_blocked") == 2
+    assert {"client_registered", "account_opened", "account_frozen", "account_closed", "client_blocked"} <= set(names)
+    records = read_json_lines(tmp_path / "app.jsonl")
+    assert sum(record.get("event") == "transaction_completed" for record in records) == 31
+
+
+def test_main_program_reports_invalid_settings_in_one_line(tmp_path):
+    completed = run_program("main.py", tmp_path, log_level="loud")
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert completed.stderr.splitlines() == [
+        "Invalid settings: BANK_LOG_LEVEL must be one of debug, info, warning, error, critical; got 'loud'."
+    ]
