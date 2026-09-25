@@ -10,6 +10,7 @@ from enum import IntEnum
 from exceptions import InvalidOperationError
 from models.enums import TransactionType
 from models.transaction import Transaction
+from services.security import SecurityGuard
 from utils import to_money
 
 
@@ -123,13 +124,17 @@ class RiskRule(ABC):
 
 
 class LargeAmountRule(RiskRule):
-    """A large amount in the base currency; a very large one scores enough to be blocked on its own."""
+    """A large amount in the base currency; a very large one scores enough to be blocked on its own.
+
+    The default ``threshold`` is the amount the security guard already
+    reviews, so both use one notion of "large".
+    """
 
     name = "large_amount"
 
     def __init__(
         self,
-        threshold: object = "500000",
+        threshold: object = SecurityGuard.LARGE_OPERATION_THRESHOLD,
         score: int = 40,
         *,
         critical_threshold: object = "2000000",
@@ -154,17 +159,17 @@ class LargeAmountRule(RiskRule):
 
 
 class HighFrequencyRule(RiskRule):
-    """Many transactions of one client in a short window; the current one is counted too."""
+    """Many transactions of one client in a short window; the ``threshold``-th one fires, the current one included."""
 
     name = "high_frequency"
 
-    def __init__(self, max_count: int = 5, window: timedelta = timedelta(minutes=10), score: int = 30) -> None:
+    def __init__(self, threshold: int = 5, window: timedelta = timedelta(minutes=10), score: int = 30) -> None:
         super().__init__(score)
-        if not isinstance(max_count, int) or max_count < 2:
-            raise InvalidOperationError("max_count must be an integer of at least 2.")
+        if not isinstance(threshold, int) or threshold < 2:
+            raise InvalidOperationError("threshold must be an integer of at least 2.")
         if not isinstance(window, timedelta) or window <= timedelta(0):
             raise InvalidOperationError("window must be a positive timedelta.")
-        self.max_count = max_count
+        self.threshold = threshold
         self.window = window
 
     def evaluate(self, context: RiskContext, history: RiskHistory) -> RiskFactor | None:
@@ -174,7 +179,7 @@ class HighFrequencyRule(RiskRule):
             context.moment,
             current=context.transaction.transaction_id,
         )
-        if count < self.max_count:
+        if count < self.threshold:
             return None
         minutes = int(self.window.total_seconds() // 60)
         return RiskFactor(self.name, self.score, f"{count} transactions within {minutes} minutes")

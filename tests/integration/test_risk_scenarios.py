@@ -18,13 +18,12 @@ from services import (
 )
 from utils import ManualClock
 
-OPENING_DAY = datetime(2026, 9, 10, 10, 0)
 NOON = datetime(2026, 9, 24, 12, 0)
 
 
 @pytest.fixture
 def world(tmp_path, make_client):
-    clock = ManualClock(OPENING_DAY)
+    clock = ManualClock(datetime(2026, 9, 10, 10, 0))
     audit_log = AuditLog(tmp_path / "audit.jsonl")
     bank = Bank(security=SecurityGuard(clock=clock, audit_log=audit_log))
     queue = TransactionQueue(clock=bank.now)
@@ -143,4 +142,4 @@ def test_ordinary_and_suspicious_transactions(world, tmp_path):
     assert stats.events_by_level[AuditLevel.CRITICAL] == 2
 
     # the file holds exactly what memory holds
-    assert AuditLog.load(tmp_path / "audit.jsonl") == bank.audit_log.events
+    assert AuditLog.load_events(tmp_path / "audit.jsonl") == bank.audit_log.events

@@ -4,8 +4,8 @@ from collections import Counter
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from exceptions import InvalidOperationError
-from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog
+from exceptions import InvalidOperationError, RiskBlockedError
+from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog, TransactionEvent
 from services.risk import RiskAnalyzer, RiskAssessment, RiskLevel
 from utils import to_enum
 
@@ -135,17 +135,17 @@ class AuditReport:
             average_score=average.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP),
             top_factors=tuple(factors.most_common()),
             security_events=len(self._log.filter(category=AuditCategory.SECURITY, client_id=client_id)),
-            failed_attempts=len(self._log.filter(event="transaction_failed", client_id=client_id)),
+            failed_attempts=len(self._log.filter(event=TransactionEvent.FAILED.value, client_id=client_id)),
             level=max((item.level for item in assessments), default=RiskLevel.LOW),
         )
 
     def error_statistics(self) -> ErrorStatistics:
         events = self._log.events
-        failures = [event for event in events if event.event == "transaction_failed"]
+        failures = [event for event in events if event.event == TransactionEvent.FAILED.value]
         errors_by_type = Counter(str(event.details.get("error_type")) for event in failures)
         retried = sum(1 for event in failures if event.details.get("will_retry"))
         final_failures = len(failures) - retried
-        completed = sum(1 for event in events if event.event == "transaction_completed")
+        completed = sum(1 for event in events if event.event == TransactionEvent.COMPLETED.value)
         finished = completed + final_failures
         rate = Decimal(100 * final_failures) / finished if finished else Decimal(0)
         return ErrorStatistics(
@@ -155,6 +155,6 @@ class AuditReport:
             retried=retried,
             final_failures=final_failures,
             completed=completed,
-            blocked_by_risk=errors_by_type.get("RiskBlockedError", 0),
+            blocked_by_risk=errors_by_type.get(RiskBlockedError.__name__, 0),
             failure_rate=rate.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP),
         )

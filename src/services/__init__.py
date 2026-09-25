@@ -1,6 +1,6 @@
 """Services that coordinate the domain models: the bank, security, currency, transactions, audit and risk."""
 
-from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog
+from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog, RiskEvent, TransactionEvent
 from services.audit_report import AuditReport, ClientRiskProfile, ErrorStatistics, SuspiciousOperationsReport
 from services.bank import Bank
 from services.currency import CurrencyConverter
@@ -30,26 +30,28 @@ __all__ = [
     "AuditReport",
     "Bank",
     "ClientRiskProfile",
+    "CurrencyConverter",
     "ErrorStatistics",
+    "FeePolicy",
     "HighFrequencyRule",
     "LargeAmountRule",
     "NewRecipientRule",
     "NightOperationRule",
+    "ProcessingReport",
     "RiskAnalyzer",
     "RiskAssessment",
     "RiskContext",
+    "RiskEvent",
     "RiskFactor",
     "RiskHistory",
     "RiskLevel",
     "RiskRule",
-    "SuspiciousOperationsReport",
-    "CurrencyConverter",
-    "FeePolicy",
-    "ProcessingReport",
     "SecurityGuard",
     "SuspicionReason",
     "SuspiciousActivity",
+    "SuspiciousOperationsReport",
     "TransactionErrorRecord",
+    "TransactionEvent",
     "TransactionProcessor",
     "TransactionQueue",
 ]

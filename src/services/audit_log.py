@@ -37,6 +37,20 @@ class AuditCategory(Enum):
     RISK = "risk"
 
 
+class TransactionEvent(Enum):
+    """Names of the ``transaction`` events; the ``security`` ones are named after ``SuspicionReason``."""
+
+    COMPLETED = "transaction_completed"
+    FAILED = "transaction_failed"
+
+
+class RiskEvent(Enum):
+    """Names of the ``risk`` events."""
+
+    ASSESSED = "risk_assessed"
+    BLOCKED = "operation_blocked"
+
+
 def _plain(value: object) -> DetailValue:
     """Turn a detail value into a JSON-friendly one, so the file keeps exactly what memory keeps."""
     if value is None or isinstance(value, str | bool | int | float):
@@ -109,17 +123,17 @@ class AuditEvent:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "AuditEvent":
+    def from_dict(cls, raw: Mapping[str, Any]) -> "AuditEvent":
         return cls(
-            timestamp=datetime.fromisoformat(data["timestamp"]),
-            level=AuditLevel[data["level"]],
-            category=AuditCategory(data["category"]),
-            event=data["event"],
-            message=data["message"],
-            client_id=data.get("client_id"),
-            account_id=data.get("account_id"),
-            transaction_id=data.get("transaction_id"),
-            details=data.get("details", {}),
+            timestamp=datetime.fromisoformat(raw["timestamp"]),
+            level=AuditLevel[raw["level"]],
+            category=AuditCategory(raw["category"]),
+            event=raw["event"],
+            message=raw["message"],
+            client_id=raw.get("client_id"),
+            account_id=raw.get("account_id"),
+            transaction_id=raw.get("transaction_id"),
+            details=raw.get("details", {}),
         )
 
     def __str__(self) -> str:
@@ -136,7 +150,7 @@ class AuditLog:
     The file is in JSON Lines format: one JSON object per line. Each event
     is appended as soon as it is recorded, so nothing is lost if the
     process stops, and the file is never rewritten. Memory holds the events
-    of this run; ``load()`` reads a whole file back. A failed file write is
+    of this run; ``load_events()`` reads a whole file back. A failed file write is
     not hidden: the error reaches the caller and the event is not kept.
     """
 
@@ -232,7 +246,7 @@ class AuditLog:
         ]
 
     @staticmethod
-    def load(file_path: str | Path) -> list[AuditEvent]:
+    def load_events(file_path: str | Path) -> list[AuditEvent]:
         """Read every event from a JSON Lines audit file, skipping blank lines."""
         with Path(file_path).open(encoding="utf-8") as file:
             return [AuditEvent.from_dict(json.loads(line)) for line in file if line.strip()]

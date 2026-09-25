@@ -29,17 +29,18 @@ def test_new_transaction_is_pending_with_normalised_fields():
 
 
 @pytest.mark.parametrize(
-    ("transaction_type", "sender_id", "recipient_id"),
+    ("transaction_type", "sender_id", "recipient_id", "initiator_id", "internal_recipient_id"),
     [
-        ("deposit", None, "A-1"),
-        ("withdrawal", "A-1", None),
-        ("transfer", "A-1", "A-2"),
-        ("external_transfer", "A-1", "DE89-3704-0044"),
+        ("deposit", None, "A-1", "A-1", "A-1"),
+        ("withdrawal", "A-1", None, "A-1", None),
+        ("transfer", "A-1", "A-2", "A-1", "A-2"),
+        ("external_transfer", "A-1", "DE89-3704-0044", "A-1", None),  # the recipient is in another bank
     ],
 )
-def test_each_type_accepts_its_parties(transaction_type, sender_id, recipient_id):
+def test_each_type_accepts_its_parties(transaction_type, sender_id, recipient_id, initiator_id, internal_recipient_id):
     transaction = Transaction(transaction_type, 10, "RUB", sender_id=sender_id, recipient_id=recipient_id)
     assert (transaction.sender_id, transaction.recipient_id) == (sender_id, recipient_id)
+    assert (transaction.initiator_id, transaction.internal_recipient_id) == (initiator_id, internal_recipient_id)
 
 
 @pytest.mark.parametrize(

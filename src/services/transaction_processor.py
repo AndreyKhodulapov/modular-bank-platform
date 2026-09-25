@@ -12,9 +12,9 @@ from exceptions import (
     OperationTimeRestrictedError,
 )
 from models.account import BankAccount
-from models.enums import TransactionStatus, TransactionType
+from models.enums import TransactionStatus
 from models.transaction import Transaction
-from services.audit_log import AuditCategory, AuditLevel
+from services.audit_log import AuditCategory, AuditLevel, TransactionEvent
 from services.bank import Bank
 from services.fees import FeePolicy
 from services.transaction_queue import TransactionQueue
@@ -156,13 +156,10 @@ class TransactionProcessor:
 
     def _initiator(self, transaction: Transaction) -> tuple[str | None, str | None]:
         """The client and account on whose behalf the transaction runs, if the bank knows them."""
-        account_id = transaction.sender_id
-        if account_id is None:
-            account_id = transaction.recipient_id
         try:
-            account = self._bank.get_account(account_id)
+            account = self._bank.get_account(transaction.initiator_id)
         except AccountNotFoundError:
-            return None, account_id
+            return None, transaction.initiator_id
         return account.owner.client_id, account.account_id
 
     def _audit_completed(self, transaction: Transaction) -> None:
@@ -170,7 +167,7 @@ class TransactionProcessor:
         self._bank.audit_log.record(
             AuditLevel.INFO,
             AuditCategory.TRANSACTION,
-            "transaction_completed",
+            TransactionEvent.COMPLETED.value,
             f"{transaction.transaction_type.value} of {transaction.amount} {transaction.currency.value} completed",
             timestamp=transaction.finished_at,
             client_id=client_id,
@@ -193,12 +190,8 @@ class TransactionProcessor:
             else None
         )
         # the recipient of an external transfer is in another bank, nothing to credit here
-        recipient = (
-            self._bank.ensure_operational("deposit", transaction.recipient_id)
-            if transaction.recipient_id is not None
-            and transaction.transaction_type is not TransactionType.EXTERNAL_TRANSFER
-            else None
-        )
+        recipient_id = transaction.internal_recipient_id
+        recipient = self._bank.ensure_operational("deposit", recipient_id) if recipient_id is not None else None
         converter = self._bank.converter
         # both conversions come before the debit: a credit that rounds away to nothing must not strand it
         debit = self._convert_for(transaction, sender) if sender is not None else None
@@ -261,7 +254,7 @@ class TransactionProcessor:
         self._bank.audit_log.record(
             AuditLevel.ERROR if isinstance(error, BankError) else AuditLevel.CRITICAL,
             AuditCategory.TRANSACTION,
-            "transaction_failed",
+            TransactionEvent.FAILED.value,
             f"attempt {transaction.attempts}: {type(error).__name__}: {error}",
             timestamp=now,
             client_id=client_id,

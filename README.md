@@ -130,7 +130,7 @@ Processing rules:
   `risk`), event name, message, client, account and transaction ids and a
   `details` mapping. Events are kept in memory and, when a `file_path` is
   given, appended to a JSON Lines file as soon as they are recorded;
-  `AuditLog.load()` reads a file back. `filter()` combines a minimum or
+  `AuditLog.load_events()` reads a file back. `filter()` combines a minimum or
   exact level, category, event, client, account, transaction and a time
   range.
 - Who writes to it: `SecurityGuard` (every suspicious activity, as
@@ -146,7 +146,7 @@ Processing rules:
   | --- | --- | --- |
   | `large_amount` | the amount is at least 500 000 RUB / at least 2 000 000 RUB | 40 / 70 |
   | `high_frequency` | the client's 5th transaction within 10 minutes (a retry is not a new transaction) | 30 |
-  | `new_recipient` | a transfer to an account opened less than 7 days ago, or to a recipient the sender has never paid | 20 |
+  | `new_recipient` | a transfer to an account opened less than 7 days ago, or to a recipient the sender has never paid before (the client's own accounts included) | 20 |
   | `night_operation` | between 22:00 and 06:00 | 20 |
 
   Levels: `low` below 40, `medium` from 40, `high` from 70.
@@ -269,7 +269,7 @@ grep '"level": "CRITICAL"' logs/audit.jsonl                  # blocked operation
 jq -c 'select(.category == "risk") | [.timestamp, .message]' logs/audit.jsonl
 ```
 
-In code, `AuditLog.load("logs/audit.jsonl")` reads the file back into
+In code, `AuditLog.load_events("logs/audit.jsonl")` reads the file back into
 `AuditEvent` objects. The tests never write to `logs/`: the demo smoke test
 points `BANK_AUDIT_LOG` to a temporary folder.
 

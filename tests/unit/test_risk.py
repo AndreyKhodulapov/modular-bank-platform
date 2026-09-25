@@ -110,7 +110,7 @@ def test_retries_of_one_transaction_count_once():
     assert history.count_recent("C", NOW - timedelta(minutes=10), NOW) == 1
 
 
-@pytest.mark.parametrize("params", [{"max_count": 1}, {"window": timedelta(0)}, {"score": -1}])
+@pytest.mark.parametrize("params", [{"threshold": 1}, {"window": timedelta(0)}, {"score": -1}])
 def test_frequency_rejects_invalid_settings(params):
     with pytest.raises(InvalidOperationError):
         HighFrequencyRule(**params)
@@ -214,7 +214,7 @@ def test_record_completed_ignores_one_sided_transactions():
 
 
 def test_analyzer_counts_the_current_transaction_for_frequency():
-    analyzer = RiskAnalyzer(rules=[HighFrequencyRule(max_count=2)])
+    analyzer = RiskAnalyzer(rules=[HighFrequencyRule(threshold=2)])
     assert analyzer.assess(context(transfer())).level is RiskLevel.LOW
     assert analyzer.assess(context(transfer())).rules == ("high_frequency",)
 

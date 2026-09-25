@@ -33,6 +33,7 @@ def filled(log) -> AuditLog:
         timestamp=NOW + timedelta(minutes=3),
         client_id="A",
         transaction_id="T1",
+        details={"score": 90, "factors": ["large_amount", "night_operation"]},
     )
     return log
 
@@ -135,21 +136,21 @@ def test_file_gets_one_json_line_per_event(tmp_path, filled):
             client_id=event.client_id,
             account_id=event.account_id,
             transaction_id=event.transaction_id,
+            details=event.details,
         )
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 4
     assert json.loads(lines[1])["level"] == "WARNING"
-    assert AuditLog.load(path) == filled.events
+    assert AuditLog.load_events(path) == filled.events
 
 
 def test_file_is_appended_across_logs(tmp_path):
     path = tmp_path / "audit.jsonl"
     AuditLog(path).record("info", "risk", "risk_assessed", "first", timestamp=NOW)
     second = AuditLog(path)
-    second.record("info", "risk", "risk_assessed", "second", timestamp=NOW, details={"factors": ["a"]})
+    second.record("info", "risk", "risk_assessed", "second", timestamp=NOW)
     assert len(second) == 1  # memory holds this log's events only
-    assert [event.message for event in AuditLog.load(path)] == ["first", "second"]
-    assert AuditLog.load(path)[1] == second.events[0]
+    assert [event.message for event in AuditLog.load_events(path)] == ["first", "second"]
 
 
 def test_event_round_trips_through_a_dict(filled):
@@ -169,9 +170,6 @@ def test_failed_file_write_keeps_nothing_in_memory(tmp_path):
     assert log.events == []
 
 
-def test_events_are_hashable_by_value(tmp_path, filled):
-    path = tmp_path / "audit.jsonl"
-    log = AuditLog(path)
-    log.record("info", "risk", "risk_assessed", "ok", timestamp=NOW, details={"factors": ["a"], "score": 20})
-    assert set(AuditLog.load(path)) == set(log.events)
+def test_events_are_hashable_by_value(filled):
     assert len(set(filled.events + filled.events)) == 4
+    assert {AuditEvent.from_dict(event.to_dict()) for event in filled.events} == set(filled.events)

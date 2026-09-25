@@ -51,14 +51,13 @@ from services import (
 )
 from utils import ManualClock
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_AUDIT_LOG = PROJECT_ROOT / "logs" / "audit.jsonl"
-
 
 def audit_log_path() -> Path:
     """Where the demo writes its audit log: ``BANK_AUDIT_LOG`` if set, else ``logs/audit.jsonl``."""
-    value = os.environ.get("BANK_AUDIT_LOG", "").strip()
-    return Path(value).expanduser() if value else DEFAULT_AUDIT_LOG
+    configured = os.environ.get("BANK_AUDIT_LOG", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"
 
 
 def print_stage(number: int, title: str) -> None:
@@ -463,7 +462,7 @@ def run_transactions() -> list[AbstractAccount]:
 def run_audit_and_risk() -> list[AbstractAccount]:
     print_stage(5, "Audit and Risk")
     clock = ManualClock(datetime(2026, 9, 10, 10, 0))
-    # the journal is append-only: every run adds its events to the same file (logs/ is ignored by git)
+    # the journal is append-only: every run adds its events to the same file
     audit_path = audit_log_path()
     audit_log = AuditLog(audit_path)
     bank = Bank(security=SecurityGuard(clock=clock, audit_log=audit_log))
@@ -565,7 +564,7 @@ def run_audit_and_risk() -> list[AbstractAccount]:
         print(f"  {account}")
 
     print_step(4, "Audit log")
-    stored = AuditLog.load(audit_path)
+    stored = AuditLog.load_events(audit_path)
     print(f"  file: {audit_path}")
     print(f"  this run added {len(audit_log)} events; the file holds {len(stored)} events from all runs")
     print("  WARNING and above:")

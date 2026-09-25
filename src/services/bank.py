@@ -16,12 +16,12 @@ from exceptions import (
 )
 from models.account import BankAccount
 from models.client import Client
-from models.enums import AccountStatus, Currency, TransactionType
+from models.enums import AccountStatus, Currency
 from models.investment_account import InvestmentAccount
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
 from models.transaction import Transaction
-from services.audit_log import AuditCategory, AuditLevel, AuditLog
+from services.audit_log import AuditCategory, AuditLevel, AuditLog, RiskEvent
 from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
@@ -243,17 +243,9 @@ class Bank:
         """
         if not isinstance(transaction, Transaction):
             raise InvalidOperationError("transaction must be a Transaction instance.")
-        sender = self.get_account(transaction.sender_id) if transaction.sender_id is not None else None
-        # the recipient of an external transfer is in another bank
-        recipient = (
-            self.get_account(transaction.recipient_id)
-            if transaction.recipient_id is not None
-            and transaction.transaction_type is not TransactionType.EXTERNAL_TRANSFER
-            else None
-        )
-        initiator = sender if sender is not None else recipient
-        if initiator is None:
-            raise InvalidOperationError(f"Transaction {transaction.transaction_id} has no account in this bank.")
+        initiator = self.get_account(transaction.initiator_id)
+        recipient_id = transaction.internal_recipient_id
+        recipient = self.get_account(recipient_id) if recipient_id is not None else None
         action = transaction.transaction_type.value
         self._guard(action, initiator.owner, initiator)
 
@@ -275,7 +267,7 @@ class Bank:
         self.audit_log.record(
             levels[assessment.level],
             AuditCategory.RISK,
-            "operation_blocked" if assessment.blocked else "risk_assessed",
+            (RiskEvent.BLOCKED if assessment.blocked else RiskEvent.ASSESSED).value,
             f"{action} of {transaction.amount} {transaction.currency.value}: "
             f"{assessment.level.name.lower()} risk, score {assessment.score} ({rules})",
             timestamp=assessment.moment,

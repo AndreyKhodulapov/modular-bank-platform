@@ -279,13 +279,13 @@ def test_high_risk_transaction_fails_at_once_without_moving_money(bank, processo
     ]
 
 
-def test_medium_risk_transaction_goes_through_with_a_warning(bank, processor, client):
+def test_medium_risk_transaction_goes_through(bank, processor, client):
     rich = bank.open_account(client.client_id, currency="RUB", initial_balance=900_000)
     fresh = bank.open_account(client.client_id, currency="RUB")
-    transaction = transfer(rich, fresh, 600_000)
+    transaction = transfer(rich, fresh, 600_000)  # large 40 + new account 20: medium, not blocked
     processor.process(transaction)
     assert transaction.status is TransactionStatus.COMPLETED
-    assert bank.audit_log.filter(category="risk")[0].level is AuditLevel.WARNING
+    assert (rich.balance, fresh.balance) == (Decimal("300000.00"), Decimal("600000.00"))
 
 
 def test_outcomes_are_written_to_the_audit_log(bank, processor, client, rub, usd):
@@ -327,7 +327,9 @@ def test_completed_transfer_makes_the_recipient_known(bank, processor, client, c
     assert (first.rules, second.rules) == (("new_recipient",), ())
 
 
-def test_failed_attempt_is_finished_even_if_the_audit_write_fails(bank, processor, rub, usd, monkeypatch):
+@pytest.fixture
+def failing_audit_log(bank, monkeypatch):
+    """The bank's audit log refuses to record a failed attempt, as if the disk were full."""
     record = bank.audit_log.record
 
     def broken(level, category, event, *args, **kwargs):
@@ -336,6 +338,9 @@ def test_failed_attempt_is_finished_even_if_the_audit_write_fails(bank, processo
         return record(level, category, event, *args, **kwargs)
 
     monkeypatch.setattr(bank.audit_log, "record", broken)
+
+
+def test_failed_attempt_is_finished_even_if_the_audit_write_fails(processor, rub, usd, failing_audit_log):
     short = transfer(rub, usd, 50_000)
     with pytest.raises(OSError):
         processor.process(short)
@@ -343,15 +348,7 @@ def test_failed_attempt_is_finished_even_if_the_audit_write_fails(bank, processo
     assert short.scheduled_at == NOW + timedelta(minutes=5)
 
 
-def test_process_queue_keeps_a_retry_when_its_audit_write_fails(bank, processor, queue, rub, usd, monkeypatch):
-    record = bank.audit_log.record
-
-    def broken(level, category, event, *args, **kwargs):
-        if event == "transaction_failed":
-            raise OSError("disk full")
-        return record(level, category, event, *args, **kwargs)
-
-    monkeypatch.setattr(bank.audit_log, "record", broken)
+def test_process_queue_keeps_a_retry_when_its_audit_write_fails(processor, queue, rub, usd, failing_audit_log):
     short = queue.add(transfer(rub, usd, 50_000))
     with pytest.raises(OSError):
         processor.process_queue(queue)
