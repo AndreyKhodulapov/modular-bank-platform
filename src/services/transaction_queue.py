@@ -2,12 +2,15 @@
 
 import heapq
 import itertools
+import logging
 from collections.abc import Callable
 from datetime import datetime
 
 from exceptions import InvalidOperationError, TransactionNotFoundError
 from models.enums import TransactionStatus
 from models.transaction import Transaction
+
+_logger = logging.getLogger("bank.queue")
 
 
 class TransactionQueue:
@@ -76,7 +79,18 @@ class TransactionQueue:
         while self._delayed and self._delayed[0][0] <= now:
             _, sequence, transaction_id = heapq.heappop(self._delayed)
             if self._is_live(transaction_id, sequence):
-                self._push_ready(self._transactions[transaction_id], sequence)
+                transaction = self._transactions[transaction_id]
+                self._push_ready(transaction, sequence)
+                _logger.debug(
+                    "delayed transaction is due",
+                    extra={
+                        "fields": {
+                            "event_time": now,
+                            "transaction_id": transaction_id,
+                            "scheduled_at": transaction.scheduled_at,
+                        }
+                    },
+                )
 
     def next_ready(self) -> Transaction | None:
         """Remove and return the most urgent transaction that is due now, or ``None``."""

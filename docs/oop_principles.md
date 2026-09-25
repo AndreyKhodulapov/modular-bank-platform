@@ -236,8 +236,38 @@ filtered, aggregated and shipped to monitoring systems.
 *In the project:* every `AuditEvent` has fields - time, level, category,
 event name, client, account and transaction ids and a `details` mapping -
 so `AuditLog.filter()` selects by any of them and `AuditReport` counts them.
-The file format is JSON Lines: one JSON object per line, easy to append,
-to stream and to load into log tools (ELK, Loki, `jq`).
+The application log does the same with the standard `logging` module: the
+fields travel in `extra={"fields": {...}}` (one key, so they never clash with
+`LogRecord` attributes), a message stays constant (`attempt started`) while
+the values go to fields, and a formatter decides the output - JSON Lines in
+the file, `key=value` lines in the terminal. JSON Lines means one JSON object
+per line: easy to append, to stream and to load into log tools (ELK, Loki,
+`jq`).
+
+- **Libraries do not configure logging.** The services only call
+  `logging.getLogger("bank.<component>")`; handlers, formats and levels are
+  chosen once by the program (`configure_logging()` in `main.py`). Until then
+  a `NullHandler` on `bank` drops the records quietly, so the services work
+  the same in tests, in a script or inside another application.
+- **A named hierarchy.** Loggers live under `bank` (`bank.audit`,
+  `bank.transactions`, `bank.queue`), so one call configures all of them and
+  a single component can be turned up or down.
+- **Levels per handler.** The logger passes everything any handler wants;
+  each handler keeps its own threshold - the file stores `DEBUG` and up, the
+  terminal shows `WARNING` and up.
+- **Two moments.** `logged_at` is when the line was written (wall clock);
+  `event_time` is when the event happened by the bank's clock. They differ
+  whenever time is simulated or events are logged late, and mixing them up
+  makes a night operation look like it happened at lunch.
+- **Configuration from the environment.** Paths and the terminal level come
+  from environment variables, read and checked once by `Settings.from_env()`
+  into a frozen dataclass that is passed on (the twelve-factor "config in the
+  environment" rule plus dependency injection). A wrong value fails at start
+  with a clear message. Business rules - thresholds, the night window,
+  rates - are not settings: they are the bank's policy and stay constructor
+  arguments. The standard library is enough for three variables; a library
+  such as `pydantic-settings` pays off with nested configuration, `.env`
+  files or an HTTP layer.
 
 ## Audit logging
 
@@ -259,7 +289,13 @@ to stream and to load into log tools (ELK, Loki, `jq`).
   filtered view of it, so existing callers did not change.
 - **Audit log vs application log.** The application log (`logging`) is
   for developers and can be sampled or rotated away; the audit log is a
-  business record of who did what and when, kept complete.
+  business record of who did what and when, kept complete. They also fail
+  differently: `logging` swallows a handler error (it prints it and goes
+  on), which is right for diagnostics and wrong for evidence, so the audit
+  log writes its own file and a failed write stops the operation. The two
+  are joined in one direction: every recorded audit event is copied to the
+  `bank.audit` logger, so the application log shows business events in
+  order with the technical ones, and one source feeds both.
 
 ## Risk analysis
 

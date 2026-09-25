@@ -86,13 +86,15 @@ def test_every_account_type_honours_base_contract(owner, account_type):
 
 def test_demo_script_runs_without_errors(tmp_path):
     root = Path(__file__).resolve().parents[2]
-    audit_path = tmp_path / "audit.jsonl"  # keeps the test run out of the project's logs/ folder
+    # both files go to a temporary folder, so the test run stays out of the project's logs/
+    audit_path, app_log_path = tmp_path / "audit.jsonl", tmp_path / "app.jsonl"
     completed = subprocess.run(
         [sys.executable, str(root / "src" / "main.py")],
         capture_output=True,
         text=True,
         check=False,
-        env=os.environ | {"BANK_AUDIT_LOG": str(audit_path)},
+        env=os.environ
+        | {"BANK_AUDIT_LOG": str(audit_path), "BANK_LOG_FILE": str(app_log_path), "BANK_LOG_LEVEL": "warning"},
     )
     assert completed.returncode == 0, completed.stderr
     assert "STAGE 1: Accounts Basic" in completed.stdout
@@ -119,3 +121,10 @@ def test_demo_script_runs_without_errors(tmp_path):
     events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
     assert f"this run added {len(events)} events" in completed.stdout
     assert sum(event["event"] == "operation_blocked" for event in events) == 2
+    # the terminal shows warnings and above; the file has everything, the audit events of every stage included
+    assert "CRITICAL bank.audit        operation_blocked: external_transfer of 25000.00 USD" in completed.stdout
+    assert "INFO     bank." not in completed.stdout
+    records = [json.loads(line) for line in app_log_path.read_text(encoding="utf-8").splitlines()]
+    assert {record["logger"] for record in records} == {"bank.audit", "bank.transactions", "bank.queue"}
+    assert {record["level"] for record in records} == {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    assert sum(record.get("event") == "operation_blocked" for record in records) == 2

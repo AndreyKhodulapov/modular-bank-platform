@@ -132,7 +132,8 @@ Processing rules:
   given, appended to a JSON Lines file as soon as they are recorded;
   `AuditLog.load_events()` reads a file back. `filter()` combines a minimum or
   exact level, category, event, client, account, transaction and a time
-  range.
+  range. Every event is also passed to the application log (see
+  [Logs](#logs)).
 - Who writes to it: `SecurityGuard` (every suspicious activity, as
   `WARNING`; a blocked client as `CRITICAL`), `Bank.screen()` (every risk
   assessment) and `TransactionProcessor` (completed transactions as
@@ -178,6 +179,8 @@ modular-bank-platform/
 ├── requirements-dev.txt    # pytest, ruff
 ├── src/
 │   ├── main.py             # demonstration script, one function per stage
+│   ├── settings.py         # Settings read from environment variables
+│   ├── logging_setup.py    # application logging: console and JSON Lines formatters
 │   ├── exceptions.py       # custom exception hierarchy
 │   ├── utils.py            # value normalisation helpers, ManualClock
 │   ├── services/
@@ -206,7 +209,8 @@ modular-bank-platform/
 ├── docs/
 │   └── oop_principles.md   # interview-style notes on OOP, patterns, security
 └── logs/                   # created by the demo, ignored by git
-    └── audit.jsonl         # the audit log, one JSON event per line
+    ├── audit.jsonl         # the audit log, one JSON event per line
+    └── app.jsonl           # the application log, one JSON record per line
 ```
 
 ## Setup
@@ -249,29 +253,57 @@ The script runs one stage per feature set and prints a banner before each:
    summarised in the three reports.
 
 A final summary treats all created accounts through the common interface.
+Warnings and errors of the application log appear in the terminal between
+the demo's lines; the full log goes to `logs/app.jsonl` (see below).
 
-### Audit log file
+## Logs
 
-The demo writes its audit log to `logs/audit.jsonl` in the project root; the
-folder is created on the first run and is ignored by git. The log is
-append-only, so each run adds its events to the same file (delete the file
-to start over). Set `BANK_AUDIT_LOG` to write somewhere else:
+The demo writes two logs into `logs/` in the project root; the folder is
+created on the first run and is ignored by git. Both files are JSON Lines
+(one JSON object per line) and are only appended to, so each run adds to
+them (delete a file to start over).
 
-```bash
-BANK_AUDIT_LOG=/tmp/bank/audit.jsonl python src/main.py
+| File | What it holds | Who reads it |
+| --- | --- | --- |
+| `logs/audit.jsonl` | the audit log: security, transaction and risk events of stage 5, complete and never rewritten | auditors, `AuditLog.load_events()`, the audit reports |
+| `logs/app.jsonl` | the application log: every audit event of every stage plus technical `DEBUG` traces (a transaction attempt started, a delayed transaction became due) and infrastructure errors such as a failed audit write | developers, log tools |
+
+The terminal shows the same application log as readable lines, from
+`WARNING` up by default, mixed in order with the demo's own output:
+
+```
+09-24 13:00:00 CRITICAL bank.audit        operation_blocked: external_transfer of 25000.00 USD: high risk, score 90 (large_amount, new_recipient) category=risk client_id=7db525f8 ...
 ```
 
-Every line is one event, so standard tools work on the file:
+Every application log record carries two moments: `logged_at` - when it
+was written, by the wall clock - and `event_time` - when it happened by the
+bank's clock, which the demo moves by hand (into the night, a day later).
+
+Environment variables (read once at start by `Settings.from_env()`):
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `BANK_AUDIT_LOG` | the audit log file | `logs/audit.jsonl` |
+| `BANK_LOG_FILE` | the application log file | `logs/app.jsonl` |
+| `BANK_LOG_LEVEL` | the lowest level shown in the terminal: `debug`, `info`, `warning`, `error`, `critical`; the file always gets everything from `DEBUG` | `warning` |
 
 ```bash
-tail -n 5 logs/audit.jsonl                                   # the latest events
-grep '"level": "CRITICAL"' logs/audit.jsonl                  # blocked operations and clients
+BANK_LOG_LEVEL=info python src/main.py                        # show every business event in the terminal
+BANK_AUDIT_LOG=/tmp/bank/audit.jsonl python src/main.py       # write the audit log somewhere else
+```
+
+Every line is one record, so standard tools work on the files:
+
+```bash
+tail -n 5 logs/audit.jsonl                                           # the latest audit events
+grep '"level": "CRITICAL"' logs/audit.jsonl                          # blocked operations and clients
 jq -c 'select(.category == "risk") | [.timestamp, .message]' logs/audit.jsonl
+jq -c 'select(.logger == "bank.transactions") | [.event_time, .transaction_id, .attempt]' logs/app.jsonl
 ```
 
-In code, `AuditLog.load_events("logs/audit.jsonl")` reads the file back into
-`AuditEvent` objects. The tests never write to `logs/`: the demo smoke test
-points `BANK_AUDIT_LOG` to a temporary folder.
+In code, `AuditLog.load_events("logs/audit.jsonl")` reads the audit log
+back into `AuditEvent` objects. The tests never write to `logs/`: the demo
+smoke test points both variables to a temporary folder.
 
 ## Run the tests and linter
 

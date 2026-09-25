@@ -1,5 +1,7 @@
 """Services that coordinate the domain models: the bank, security, currency, transactions, audit and risk."""
 
+import logging
+
 from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog, RiskEvent, TransactionEvent
 from services.audit_report import AuditReport, ClientRiskProfile, ErrorStatistics, SuspiciousOperationsReport
 from services.bank import Bank
@@ -21,6 +23,9 @@ from services.risk import (
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
 from services.transaction_processor import ProcessingReport, TransactionErrorRecord, TransactionProcessor
 from services.transaction_queue import TransactionQueue
+
+# a library does not decide where its logs go: without the program's configuration they are dropped quietly
+logging.getLogger("bank").addHandler(logging.NullHandler())
 
 __all__ = [
     "AuditCategory",

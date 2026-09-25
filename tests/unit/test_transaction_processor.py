@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -172,6 +173,21 @@ def test_night_window_is_retried_with_exponential_delay(processor, rub, usd, clo
     assert transaction.failure_reason.startswith("OperationTimeRestrictedError")
     assert [(record.attempt, record.will_retry) for record in processor.errors] == [(1, True), (2, True), (3, False)]
     assert {record.error_type for record in processor.errors} == {"OperationTimeRestrictedError"}
+
+
+def test_each_attempt_is_traced(processor, rub, usd, clock, caplog):
+    caplog.set_level(logging.DEBUG, logger="bank.transactions")
+    clock.moment = NIGHT
+    transaction = transfer(rub, usd, 900)
+    processor.process(transaction)
+    clock.moment = transaction.scheduled_at
+    processor.process(transaction)
+    traces = [record for record in caplog.records if record.name == "bank.transactions"]
+    assert [(record.getMessage(), record.fields["attempt"], record.fields["event_time"]) for record in traces] == [
+        ("attempt started", 1, NIGHT),
+        ("attempt started", 2, NIGHT + timedelta(minutes=5)),
+    ]
+    assert {record.fields["transaction_id"] for record in traces} == {transaction.transaction_id}
 
 
 def test_retry_succeeds_once_money_arrives(bank, processor, rub, usd, clock):

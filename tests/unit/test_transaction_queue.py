@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 
 import pytest
@@ -46,6 +47,18 @@ def test_due_delayed_transaction_competes_by_priority(queue, clock):
     queue.add(deposit("normal"))
     clock.moment = NOW + timedelta(minutes=5)
     assert drain(queue) == ["delayed-high", "normal"]
+
+
+def test_a_delayed_transaction_that_becomes_due_is_traced(queue, clock, caplog):
+    caplog.set_level(logging.DEBUG, logger="bank.queue")
+    later = NOW + timedelta(hours=1)
+    transaction = queue.add(deposit("later", scheduled_at=later))
+    queue.next_ready()
+    clock.moment = later
+    queue.next_ready()
+    [record] = [record for record in caplog.records if record.name == "bank.queue"]
+    assert (record.levelno, record.getMessage()) == (logging.DEBUG, "delayed transaction is due")
+    assert record.fields == {"event_time": later, "transaction_id": transaction.transaction_id, "scheduled_at": later}
 
 
 def test_cancel_removes_a_waiting_transaction(queue, clock):

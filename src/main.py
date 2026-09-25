@@ -17,17 +17,20 @@ Stages:
    processor: fees, conversion, rules, delays, cancellation and retries.
 5. Audit and Risk - ordinary and suspicious transactions are scored,
    dangerous ones are blocked; the audit log is appended to
-   ``logs/audit.jsonl`` (or the file in ``BANK_AUDIT_LOG``), filtered and
-   summarised in reports.
+   ``logs/audit.jsonl``, filtered and summarised in reports.
+
+The application log goes to the terminal (warnings and above) and, in full,
+to ``logs/app.jsonl``. Paths and the terminal level come from environment
+variables, see ``settings.py``.
 """
 
-import os
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from exceptions import BankError
+from logging_setup import configure_logging
 from models import (
     AbstractAccount,
     AccountStatus,
@@ -49,15 +52,8 @@ from services import (
     TransactionProcessor,
     TransactionQueue,
 )
+from settings import Settings
 from utils import ManualClock
-
-
-def audit_log_path() -> Path:
-    """Where the demo writes its audit log: ``BANK_AUDIT_LOG`` if set, else ``logs/audit.jsonl``."""
-    configured = os.environ.get("BANK_AUDIT_LOG", "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return Path(__file__).resolve().parent.parent / "logs" / "audit.jsonl"
 
 
 def print_stage(number: int, title: str) -> None:
@@ -459,11 +455,10 @@ def run_transactions() -> list[AbstractAccount]:
     return accounts
 
 
-def run_audit_and_risk() -> list[AbstractAccount]:
+def run_audit_and_risk(audit_path: Path) -> list[AbstractAccount]:
     print_stage(5, "Audit and Risk")
     clock = ManualClock(datetime(2026, 9, 10, 10, 0))
     # the journal is append-only: every run adds its events to the same file
-    audit_path = audit_log_path()
     audit_log = AuditLog(audit_path)
     bank = Bank(security=SecurityGuard(clock=clock, audit_log=audit_log))
     queue = TransactionQueue(clock=bank.now)
@@ -605,6 +600,8 @@ def print_summary(accounts: list[AbstractAccount]) -> None:
 
 
 def main() -> None:
+    settings = Settings.from_env()
+    configure_logging(console_level=settings.console_log_level, file_path=settings.log_file_path)
     owner = Client(
         first_name="Ivan",
         last_name="Petrov",
@@ -618,7 +615,7 @@ def main() -> None:
         + run_accounts_advanced(owner)
         + run_bank_system()
         + run_transactions()
-        + run_audit_and_risk()
+        + run_audit_and_risk(settings.audit_log_path)
     )
     print_summary(accounts)
 

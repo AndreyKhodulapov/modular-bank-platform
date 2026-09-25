@@ -1,5 +1,6 @@
 """Execution of transactions: rules, risk control, fees, currency conversion, retries and the error log."""
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -18,6 +19,8 @@ from services.audit_log import AuditCategory, AuditLevel, TransactionEvent
 from services.bank import Bank
 from services.fees import FeePolicy
 from services.transaction_queue import TransactionQueue
+
+_logger = logging.getLogger("bank.transactions")
 
 
 @dataclass(frozen=True)
@@ -141,6 +144,16 @@ class TransactionProcessor:
     def process(self, transaction: Transaction) -> Transaction:
         """Make one attempt; the transaction ends completed, failed or pending for a retry."""
         transaction.start(self._bank.now())
+        _logger.debug(
+            "attempt started",
+            extra={
+                "fields": {
+                    "event_time": transaction.updated_at,
+                    "transaction_id": transaction.transaction_id,
+                    "attempt": transaction.attempts,
+                }
+            },
+        )
         try:
             fee, debited, credited = self._execute(transaction)
         except BankError as error:
