@@ -81,7 +81,7 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     output = main_run[0].stdout
     for section in ("1. Initialization", "2. Simulation", "3. Logging", "4. Client view: Sokolov Oleg", "5. Reports"):
         assert section in output
-    # the sizes the program promises: 5-10 clients, 10-15 accounts, 30-50 transactions
+    # the sizes the program's docstring promises
     assert "7 clients, 12 accounts" in output
     assert "40 transactions queued" in output
     # the feed shows every outcome, read from the audit log
@@ -96,7 +96,8 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "blocked    #22 huge abroad          external_transfer of 25000.00 USD: high risk, score 90" in output
     assert "#19 short of money: failed" in output
     # the client view and the reports
-    assert "PremiumAccount | Sokolov Oleg | ****" in output and "| active | -1511.00 USD" in output
+    assert "PremiumAccount | Sokolov Oleg | ****" in output
+    assert "| active | -1511.00 USD" in output
     assert "Top 3 clients\n    1. Sokolov Oleg" in output
     assert "Transactions: 40 (completed 31, failed 8, cancelled 1)" in output
     assert "failure rate 20.5% of 39 finished, blocked by risk control 2" in output
