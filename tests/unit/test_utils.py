@@ -6,7 +6,7 @@ import pytest
 
 from exceptions import InvalidOperationError
 from models import AccountStatus, Currency, TransactionPriority
-from utils import ManualClock, resolve_identifier, to_enum, to_money, to_positive_decimal, to_rate
+from utils import ManualClock, resolve_identifier, to_enum, to_money, to_positive_decimal, to_positive_int, to_rate
 
 
 @pytest.mark.parametrize(
@@ -115,6 +115,16 @@ def test_to_enum_rejects_unknown_value_and_lists_allowed():
         to_enum(Currency, "GBP", field="currency")
     with pytest.raises(InvalidOperationError, match="allowed: low, normal, high, urgent"):
         to_enum(TransactionPriority, "asap", field="priority")
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True, "3", None])
+def test_to_positive_int_rejects_anything_but_a_positive_integer(value):
+    with pytest.raises(InvalidOperationError, match="limit must be a positive integer"):
+        to_positive_int(value, field="limit")
+
+
+def test_to_positive_int_returns_the_integer():
+    assert to_positive_int(3, field="limit") == 3
 
 
 def test_to_positive_decimal_keeps_precision():

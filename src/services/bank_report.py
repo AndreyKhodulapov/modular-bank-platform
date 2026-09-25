@@ -13,6 +13,7 @@ from exceptions import InvalidOperationError
 from models import AccountStatus, Client, Currency, Transaction, TransactionStatus, TransactionType
 from services.audit_log import TransactionEvent
 from services.bank import Bank
+from utils import to_positive_int
 
 
 def _freeze_mappings(report: object, *names: str) -> None:
@@ -37,8 +38,8 @@ class TransactionStatistics:
       completed transactions; a premium account's own withdrawal fee is a
       term of the account, is part of the debit and is not in this sum;
     - ``blocked_by_risk`` counts the failed transactions refused by risk
-      control; ``failure_rate`` is the share of finished transactions that
-      failed, in percent.
+      control; ``failure_rate`` is the share of the finished transactions
+      (``finished``) that failed, in percent.
     """
 
     currency: Currency
@@ -49,6 +50,7 @@ class TransactionStatistics:
     largest: Transaction | None
     tariff_fees: Decimal
     blocked_by_risk: int
+    finished: int
     failure_rate: Decimal
 
     def __post_init__(self) -> None:
@@ -69,7 +71,8 @@ class TransactionStatistics:
             [
                 f"Transactions: {self.total} ({statuses})",
                 f"  by type: {types}",
-                f"  failure rate {self.failure_rate}%, blocked by risk control {self.blocked_by_risk}",
+                f"  failure rate {self.failure_rate}% of {self.finished} finished, "
+                f"blocked by risk control {self.blocked_by_risk}",
                 f"  volume {self.volume} {code}, average {self.average_amount} {code}, largest {largest}",
                 f"  tariff fees collected {self.tariff_fees} {code}",
             ]
@@ -168,15 +171,14 @@ class BankReport:
             largest=max(completed, key=lambda transaction: amounts[transaction.transaction_id], default=None),
             tariff_fees=tariff_fees,
             blocked_by_risk=sum(1 for transaction in failed if transaction.transaction_id in blocked_ids),
+            finished=len(finished),
             failure_rate=rate.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP),
         )
 
     def top_clients(self, limit: int = 3) -> ClientRanking:
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
-            raise InvalidOperationError(f"limit must be a positive integer; got {limit!r}.")
         return ClientRanking(
             currency=self._bank.base_currency,
-            clients=tuple(self._bank.get_clients_ranking()[:limit]),
+            clients=tuple(self._bank.get_clients_ranking()[: to_positive_int(limit, field="limit")]),
         )
 
     def total_balance(self) -> BalanceSummary:
@@ -186,7 +188,7 @@ class BankReport:
             by_currency[account.currency] = by_currency.get(account.currency, Decimal("0.00")) + account.total_value
         return BalanceSummary(
             currency=self._bank.base_currency,
-            total=self._bank.get_total_balance(),
+            total=sum((self._in_base(amount, currency) for currency, amount in by_currency.items()), Decimal("0.00")),
             by_currency=dict(sorted(by_currency.items(), key=lambda item: item[0].value)),
             accounts=len(accounts),
         )

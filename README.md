@@ -233,7 +233,8 @@ whose `str()` is the printed form:
 - `transaction_statistics()` - transactions by status and by type; the
   volume, average and largest completed transaction; the tariff fees
   collected (charged in the sender's currency, converted); how many
-  transactions risk control blocked and the failure rate. Completed and
+  transactions risk control blocked and the failure rate (the share of
+  the finished transactions, cancelled ones never ran). Completed and
   failed transactions come from the history, cancelled ones from the
   bank's audit log, so they are counted only when the queue is given that
   log (`TransactionQueue(clock=bank.now, audit_log=bank.audit_log)`). The
@@ -250,7 +251,7 @@ report = BankReport(bank)
 print(report.transaction_statistics())
 # Transactions: 40 (completed 31, failed 8, cancelled 1)
 #   by type: deposit 5, withdrawal 7, transfer 25, external_transfer 2
-#   failure rate 20.5%, blocked by risk control 2
+#   failure rate 20.5% of 39 finished, blocked by risk control 2
 #   volume 1839899.00 RUB, average 59351.58 RUB, largest 7000.00 USD (transfer)
 #   tariff fees collected 450.00 RUB
 ```

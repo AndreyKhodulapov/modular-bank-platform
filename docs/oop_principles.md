@@ -373,12 +373,12 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   the read side of command/query separation: operations change the state,
   reports only query it.
 - **Data first, format second.** A report returns an immutable dataclass
-  (`TransactionStatistics`, `ClientRanking`, `BalanceSummary`; `frozen=True`
-  alone would still let its dicts change, so they are wrapped in read-only
-  `MappingProxyType` views) and `str()`
+  (`TransactionStatistics`, `ClientRanking`, `BalanceSummary`) and `str()`
   is just one way to show it. The same object can be exported to JSON or
   CSV or drawn as a chart without computing anything again (Single
-  Responsibility: computing and presenting are separate jobs).
+  Responsibility: computing and presenting are separate jobs). `frozen=True`
+  alone would still let the dicts inside change, so they are wrapped in
+  read-only `MappingProxyType` views.
 - **One currency for totals.** Amounts in different currencies cannot be
   added, so every total is converted into the base currency at the bank's
   rates; a tariff fee is converted from the sender's currency, in which it

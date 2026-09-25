@@ -99,7 +99,7 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "PremiumAccount | Sokolov Oleg | ****" in output and "| active | -1511.00 USD" in output
     assert "Top 3 clients\n    1. Sokolov Oleg" in output
     assert "Transactions: 40 (completed 31, failed 8, cancelled 1)" in output
-    assert "failure rate 20.5%, blocked by risk control 2" in output
+    assert "failure rate 20.5% of 39 finished, blocked by risk control 2" in output
     assert "tariff fees collected 450.00 RUB" in output
     assert "Total balance: 4322411.00 RUB on 11 accounts" in output  # the closed CNY account is not counted
     assert "CNY" not in output.split("Total balance:")[1]

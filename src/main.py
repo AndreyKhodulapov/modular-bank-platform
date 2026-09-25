@@ -103,7 +103,6 @@ class Simulation:
 
     @property
     def queued(self) -> int:
-        """How many transactions the simulation has queued."""
         return len(self._labels)
 
     def label(self, transaction_id: str | None) -> str:
@@ -214,11 +213,10 @@ def open_bank(audit_log: AuditLog) -> DemoBank:
             {"currency": "RUB", "initial_balance": 700_000, "min_balance": 50_000, "monthly_rate": "0.012"},
         ),
         ("timur_rub", "timur", "basic", {"currency": "RUB", "initial_balance": 15_000}),
-        ("sofia_rub", "sofia", "basic", {"currency": "RUB"}),
     ):
-        if owner == "sofia":
-            clock.moment = datetime(2026, 9, 24, 9, 0)  # an account opened on the day itself
         accounts[name] = bank.open_account(clients[owner].client_id, account_type, **params)
+    clock.moment = datetime(2026, 9, 24, 9, 0)
+    accounts["sofia_rub"] = bank.open_account(clients["sofia"].client_id, "basic", currency="RUB")
     return DemoBank(bank=bank, clock=clock, clients=clients, accounts=accounts, passwords=passwords)
 
 

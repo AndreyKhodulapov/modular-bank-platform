@@ -19,6 +19,7 @@ from services.audit_log import AuditCategory, AuditLevel, TransactionEvent
 from services.bank import Bank
 from services.fees import FeePolicy
 from services.transaction_queue import TransactionQueue
+from utils import to_positive_int
 
 _logger = logging.getLogger("bank.transactions")
 
@@ -101,13 +102,11 @@ class TransactionProcessor:
     ) -> None:
         if not isinstance(bank, Bank):
             raise InvalidOperationError("bank must be a Bank instance.")
-        if not isinstance(max_attempts, int) or max_attempts < 1:
-            raise InvalidOperationError("max_attempts must be a positive integer.")
         if not isinstance(retry_delay, timedelta) or retry_delay <= timedelta(0):
             raise InvalidOperationError("retry_delay must be a positive timedelta.")
         self._bank = bank
         self._fee_policy = fee_policy if fee_policy is not None else FeePolicy()
-        self._max_attempts = max_attempts
+        self._max_attempts = to_positive_int(max_attempts, field="max_attempts")
         self._retry_delay = retry_delay
         self._errors: list[TransactionErrorRecord] = []
         self._collected_fees = Decimal("0.00")
