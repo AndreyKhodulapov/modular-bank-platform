@@ -121,6 +121,7 @@ def test_demo_script_runs_without_errors(tmp_path):
     events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
     assert f"this run added {len(events)} events" in completed.stdout
     assert sum(event["event"] == "operation_blocked" for event in events) == 2
+    assert {"client_registered", "account_opened", "transaction_queued"} <= {event["event"] for event in events}
     # the terminal shows warnings and above; the file has everything, the audit events of every stage included
     assert "CRITICAL bank.audit        operation_blocked: external_transfer of 25000.00 USD" in completed.stdout
     assert "INFO     bank." not in completed.stdout

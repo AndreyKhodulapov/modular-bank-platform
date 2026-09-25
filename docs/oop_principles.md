@@ -283,10 +283,17 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
 - **Write-through to a file.** Each event is written the moment it is
   recorded, so a crash loses nothing that was already logged. Memory is for
   fast queries in the running process; the file is the durable record.
-- **One journal, many writers.** Security, transactions and risk control
-  share one injected `AuditLog`, so a client's whole story is in one place,
-  in time order. The old `suspicious_activities` API is kept as a
+- **One journal, many writers.** Security, the bank (client and account
+  life cycle), the queue, the processor and risk control share one injected
+  `AuditLog`, so a client's whole story is in one place, in time order. The old `suspicious_activities` API is kept as a
   filtered view of it, so existing callers did not change.
+- **What is worth auditing.** Changes of state that someone may have to
+  answer for: an account opened, frozen or closed, a client unblocked, a
+  transaction accepted, executed, refused or cancelled. A change is recorded
+  after it is made, so the journal never claims what did not happen; a
+  refused attempt is recorded as a security event instead. Event names are
+  enums (`AccountEvent`, `ClientEvent`, `TransactionEvent`, `RiskEvent`), so
+  writers and reports cannot drift apart on a typo.
 - **Audit log vs application log.** The application log (`logging`) is
   for developers and can be sampled or rotated away; the audit log is a
   business record of who did what and when, kept complete. They also fail

@@ -317,14 +317,21 @@ def test_outcomes_are_written_to_the_audit_log(bank, processor, client, rub, usd
         ("transaction_failed", AuditLevel.ERROR, short.transaction_id),
     ]
     assert all((event.client_id, event.account_id) == (client.client_id, rub.account_id) for event in events)
+    parties = {"sender_id": rub.account_id, "recipient_id": usd.account_id}
     assert dict(events[0].details) == {
         "type": "transfer",
         "amount": "900.00",
         "currency": "RUB",
+        **parties,
         "fee": "0.00",
         "attempt": 1,
     }
-    assert dict(events[1].details) == {"error_type": "InsufficientFundsError", "attempt": 1, "will_retry": True}
+    assert dict(events[1].details) == {
+        **parties,
+        "error_type": "InsufficientFundsError",
+        "attempt": 1,
+        "will_retry": True,
+    }
 
 
 def test_failure_for_an_unknown_account_is_logged_without_a_client(bank, processor, rub):

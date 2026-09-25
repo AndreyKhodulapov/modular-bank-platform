@@ -2,7 +2,16 @@
 
 import logging
 
-from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog, RiskEvent, TransactionEvent
+from services.audit_log import (
+    AccountEvent,
+    AuditCategory,
+    AuditEvent,
+    AuditLevel,
+    AuditLog,
+    ClientEvent,
+    RiskEvent,
+    TransactionEvent,
+)
 from services.audit_report import AuditReport, ClientRiskProfile, ErrorStatistics, SuspiciousOperationsReport
 from services.bank import Bank
 from services.currency import CurrencyConverter
@@ -28,12 +37,14 @@ from services.transaction_queue import TransactionQueue
 logging.getLogger("bank").addHandler(logging.NullHandler())
 
 __all__ = [
+    "AccountEvent",
     "AuditCategory",
     "AuditEvent",
     "AuditLevel",
     "AuditLog",
     "AuditReport",
     "Bank",
+    "ClientEvent",
     "ClientRiskProfile",
     "CurrencyConverter",
     "ErrorStatistics",

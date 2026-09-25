@@ -38,13 +38,33 @@ class AuditCategory(Enum):
     SECURITY = "security"
     TRANSACTION = "transaction"
     RISK = "risk"
+    ACCOUNT = "account"
+    CLIENT = "client"
 
 
 class TransactionEvent(Enum):
     """Names of the ``transaction`` events; the ``security`` ones are named after ``SuspicionReason``."""
 
+    QUEUED = "transaction_queued"
+    CANCELLED = "transaction_cancelled"
     COMPLETED = "transaction_completed"
     FAILED = "transaction_failed"
+
+
+class AccountEvent(Enum):
+    """Names of the ``account`` events: the life cycle of an account."""
+
+    OPENED = "account_opened"
+    FROZEN = "account_frozen"
+    UNFROZEN = "account_unfrozen"
+    CLOSED = "account_closed"
+
+
+class ClientEvent(Enum):
+    """Names of the ``client`` events."""
+
+    REGISTERED = "client_registered"
+    UNBLOCKED = "client_unblocked"
 
 
 class RiskEvent(Enum):

@@ -5,7 +5,7 @@ import pytest
 
 from exceptions import InvalidOperationError, InvalidTransactionStateError, TransactionNotFoundError
 from models import Transaction, TransactionPriority, TransactionStatus
-from services import TransactionQueue
+from services import AuditLevel, AuditLog, TransactionQueue
 
 NOW = datetime(2026, 9, 24, 14, 0)
 
@@ -130,3 +130,68 @@ def test_cancel_forgets_a_transaction_that_changed_status_elsewhere(queue):
     with pytest.raises(InvalidTransactionStateError):
         queue.cancel(transaction.transaction_id)
     assert len(queue) == 0
+
+
+@pytest.fixture
+def audit_log() -> AuditLog:
+    return AuditLog()
+
+
+@pytest.fixture
+def journaled(clock, audit_log) -> TransactionQueue:
+    return TransactionQueue(clock=clock, audit_log=audit_log)
+
+
+def test_adding_and_cancelling_are_recorded(journaled, audit_log):
+    later = NOW + timedelta(hours=1)
+    transfer = journaled.add(
+        Transaction("transfer", 10, "RUB", sender_id="S", recipient_id="R", created_at=NOW, scheduled_at=later)
+    )
+    top_up = journaled.add(deposit("R", priority="urgent"))
+    journaled.cancel(transfer.transaction_id)
+
+    events = audit_log.events
+    assert [(event.event, event.transaction_id, event.account_id) for event in events] == [
+        ("transaction_queued", transfer.transaction_id, "S"),
+        ("transaction_queued", top_up.transaction_id, "R"),
+        ("transaction_cancelled", transfer.transaction_id, "S"),
+    ]
+    assert [event.message for event in events] == [
+        "transfer of 10.00 RUB queued for 09-24 15:00",
+        "deposit of 10.00 RUB queued",
+        "transfer of 10.00 RUB cancelled",
+    ]
+    assert {(event.level, event.client_id, event.timestamp) for event in events} == {(AuditLevel.INFO, None, NOW)}
+    assert dict(events[0].details) == {
+        "type": "transfer",
+        "amount": "10.00",
+        "currency": "RUB",
+        "sender_id": "S",
+        "recipient_id": "R",
+        "priority": "normal",
+        "scheduled_at": later.isoformat(),
+        "attempts": 0,
+    }
+
+
+def test_a_retry_is_recorded_as_queued_again(journaled, audit_log):
+    transaction = journaled.add(deposit("a"))
+    journaled.next_ready().start(NOW)
+    transaction.retry("night window", NOW, NOW + timedelta(minutes=5))
+    journaled.add(transaction)
+    assert [event.details["attempts"] for event in audit_log.filter(event="transaction_queued")] == [0, 1]
+
+
+def test_failed_audit_write_leaves_nothing_queued(clock, tmp_path):
+    queue = TransactionQueue(clock=clock, audit_log=AuditLog(tmp_path))  # a folder, so the write fails
+    transaction = deposit("a")
+    with pytest.raises(OSError):
+        queue.add(transaction)
+    assert len(queue) == 0
+    with pytest.raises(TransactionNotFoundError):
+        queue.get(transaction.transaction_id)
+
+
+def test_audit_log_must_be_an_audit_log(clock):
+    with pytest.raises(InvalidOperationError):
+        TransactionQueue(clock=clock, audit_log="audit.jsonl")

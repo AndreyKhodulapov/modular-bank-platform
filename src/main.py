@@ -305,7 +305,7 @@ def run_transactions() -> list[AbstractAccount]:
     print_stage(4, "Transactions")
     clock = ManualClock(datetime(2026, 9, 24, 14, 0))
     bank = Bank(security=SecurityGuard(clock=clock))
-    queue = TransactionQueue(clock=bank.now)
+    queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
     # a long retry delay lets a transaction refused at night succeed in the morning
     processor = TransactionProcessor(bank, retry_delay=timedelta(hours=2))
 
@@ -461,7 +461,7 @@ def run_audit_and_risk(audit_path: Path) -> list[AbstractAccount]:
     # the journal is append-only: every run adds its events to the same file
     audit_log = AuditLog(audit_path)
     bank = Bank(security=SecurityGuard(clock=clock, audit_log=audit_log))
-    queue = TransactionQueue(clock=bank.now)
+    queue = TransactionQueue(clock=bank.now, audit_log=audit_log)
     processor = TransactionProcessor(bank)
 
     print_step(1, "Accounts opened two weeks ago, and one opened today")

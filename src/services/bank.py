@@ -21,7 +21,7 @@ from models.investment_account import InvestmentAccount
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
 from models.transaction import Transaction
-from services.audit_log import AuditCategory, AuditLevel, AuditLog, RiskEvent
+from services.audit_log import AccountEvent, AuditCategory, AuditLevel, AuditLog, ClientEvent, RiskEvent
 from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
@@ -40,7 +40,10 @@ class Bank:
     - failed logins, night attempts, operations on frozen or closed accounts
       and large amounts are recorded as suspicious;
     - ``screen()`` scores a transaction with the risk analyzer before money
-      moves and refuses a high-risk one.
+      moves and refuses a high-risk one;
+    - the life cycle of clients and accounts (registered, unblocked; opened,
+      frozen, unfrozen, closed) goes to the audit log as ``INFO`` once the
+      change is made; a refused change is recorded only as suspicious.
 
     Protective actions (``freeze_account``), logins and read-only queries are
     allowed at any time. Totals and the ranking are expressed in the
@@ -136,6 +139,37 @@ class Bank:
             )
             raise ClientBlockedError(client.client_id)
 
+    def _record(
+        self,
+        category: AuditCategory,
+        event: AccountEvent | ClientEvent,
+        message: str,
+        *,
+        client_id: str,
+        account_id: str | None = None,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        self.audit_log.record(
+            AuditLevel.INFO,
+            category,
+            event.value,
+            message,
+            timestamp=self.now(),
+            client_id=client_id,
+            account_id=account_id,
+            details=details,
+        )
+
+    def _record_account(self, event: AccountEvent, account: BankAccount, message: str, **details: object) -> None:
+        self._record(
+            AuditCategory.ACCOUNT,
+            event,
+            message,
+            client_id=account.owner.client_id,
+            account_id=account.account_id,
+            details=details,
+        )
+
     def _review_amount(self, action: str, account: BankAccount, amount: Decimal) -> None:
         self._security.review_amount(
             self._converter.to_base(amount, account.currency),
@@ -152,6 +186,7 @@ class Bank:
             raise InvalidOperationError(f"Client {client.client_id} is already registered.")
         self._security.register_password(client.client_id, password)
         self._clients[client.client_id] = client
+        self._record(AuditCategory.CLIENT, ClientEvent.REGISTERED, "client registered", client_id=client.client_id)
         return client
 
     def authenticate_client(self, client_id: str, password: str) -> Client:
@@ -173,6 +208,7 @@ class Bank:
         if client.is_blocked:
             self._security.ensure_daytime("unblock_client", client_id=client_id)
         client.unblock()
+        self._record(AuditCategory.CLIENT, ClientEvent.UNBLOCKED, "client unblocked", client_id=client_id)
         return client
 
     def open_account(self, client_id: str, account_type: str = "basic", **params: object) -> BankAccount:
@@ -198,6 +234,14 @@ class Bank:
         self._accounts[account.account_id] = account
         self._opened_at[account.account_id] = self.now()
         client.add_account_id(account.account_id)
+        self._record_account(
+            AccountEvent.OPENED,
+            account,
+            f"{account_class.__name__} opened with {account.total_value} {account.currency.value}",
+            account_type=str(account_type).lower(),
+            currency=account.currency,
+            initial_balance=account.total_value,
+        )
         self._review_amount("open_account", account, account.total_value)
         return account
 
@@ -219,6 +263,13 @@ class Bank:
         account = self.get_account(account_id)
         self._guard("close_account", account.owner, account)
         payout = self._run_on_account("close_account", account, account.close)
+        self._record_account(
+            AccountEvent.CLOSED,
+            account,
+            f"account closed, {payout} {account.currency.value} paid out",
+            payout=payout,
+            currency=account.currency,
+        )
         self._review_amount("close_account", account, payout)
         return payout
 
@@ -289,12 +340,14 @@ class Bank:
         """Freeze an active account; allowed at any time, since freezing only protects money."""
         account = self.get_account(account_id)
         self._run_on_account("freeze_account", account, account.freeze)
+        self._record_account(AccountEvent.FROZEN, account, "account frozen")
         return account
 
     def unfreeze_account(self, account_id: str) -> BankAccount:
         account = self.get_account(account_id)
         self._guard("unfreeze_account", account.owner, account)
         self._run_on_account("unfreeze_account", account, account.unfreeze)
+        self._record_account(AccountEvent.UNFROZEN, account, "account unfrozen")
         return account
 
     def deposit(self, account_id: str, amount: object) -> Decimal:

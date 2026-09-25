@@ -73,7 +73,8 @@ class TransactionProcessor:
 
     Every outcome goes to the bank's audit log: a completed transaction as
     ``INFO``, a failed attempt as ``ERROR`` (``details.will_retry`` tells
-    whether it comes back) and an unexpected error as ``CRITICAL``. If the
+    whether it comes back) and an unexpected error as ``CRITICAL``; the
+    details name both parties, ``sender_id`` and ``recipient_id``. If the
     audit log cannot be written, processing stops with that error rather
     than move more money without an audit trail; the transaction's status
     is already set, and a pending one still returns to the queue.
@@ -190,6 +191,8 @@ class TransactionProcessor:
                 "type": transaction.transaction_type,
                 "amount": transaction.amount,
                 "currency": transaction.currency,
+                "sender_id": transaction.sender_id,
+                "recipient_id": transaction.recipient_id,
                 "fee": transaction.fee,
                 "attempt": transaction.attempts,
             },
@@ -273,5 +276,11 @@ class TransactionProcessor:
             client_id=client_id,
             account_id=account_id,
             transaction_id=transaction.transaction_id,
-            details={"error_type": type(error).__name__, "attempt": transaction.attempts, "will_retry": will_retry},
+            details={
+                "sender_id": transaction.sender_id,
+                "recipient_id": transaction.recipient_id,
+                "error_type": type(error).__name__,
+                "attempt": transaction.attempts,
+                "will_retry": will_retry,
+            },
         )

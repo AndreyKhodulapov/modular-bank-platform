@@ -9,6 +9,7 @@ from datetime import datetime
 from exceptions import InvalidOperationError, TransactionNotFoundError
 from models.enums import TransactionStatus
 from models.transaction import Transaction
+from services.audit_log import AuditCategory, AuditLevel, AuditLog, TransactionEvent
 
 _logger = logging.getLogger("bank.queue")
 
@@ -34,10 +35,18 @@ class TransactionQueue:
     A waiting transaction is expected to stay ``PENDING``. One whose status
     was changed elsewhere (cancelled or processed outside the queue) is
     dropped when it surfaces instead of being handed out.
+
+    With an ``audit_log`` the queue records every ``add()`` - a retry coming
+    back included, told apart by ``details.attempts`` - and every
+    ``cancel()``, both as ``INFO``. The queue does not know the clients, so
+    these events name the initiating account, not its owner.
     """
 
-    def __init__(self, clock: Callable[[], datetime] = datetime.now) -> None:
+    def __init__(self, clock: Callable[[], datetime] = datetime.now, audit_log: AuditLog | None = None) -> None:
+        if audit_log is not None and not isinstance(audit_log, AuditLog):
+            raise InvalidOperationError("audit_log must be an AuditLog instance.")
         self._clock = clock
+        self._audit_log = audit_log
         self._sequence = itertools.count()
         self._ready: list[tuple[int, int, str]] = []  # (-priority, sequence, transaction_id)
         self._delayed: list[tuple[datetime, int, str]] = []  # (scheduled_at, sequence, transaction_id)
@@ -59,10 +68,23 @@ class TransactionQueue:
         if transaction.transaction_id in self._queued:
             raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already queued.")
 
+        now = self._clock()
+        due = transaction.is_due(now)
+        when = "" if due else f" for {transaction.scheduled_at:%m-%d %H:%M}"
+        # recorded before the transaction enters the queue: a failed write leaves nothing queued
+        self._audit(
+            TransactionEvent.QUEUED,
+            transaction,
+            now,
+            f"queued{when}",
+            priority=transaction.priority.name.lower(),
+            scheduled_at=transaction.scheduled_at,
+            attempts=transaction.attempts,
+        )
         sequence = next(self._sequence)
         self._queued[transaction.transaction_id] = sequence
         self._transactions[transaction.transaction_id] = transaction
-        if transaction.is_due(self._clock()):
+        if due:
             self._push_ready(transaction, sequence)
         else:
             heapq.heappush(self._delayed, (transaction.scheduled_at, sequence, transaction.transaction_id))
@@ -115,8 +137,33 @@ class TransactionQueue:
             )
         # forget the entry first: whatever cancel() says, this transaction must not be handed out
         del self._queued[transaction_id]
-        transaction.cancel(self._clock())
+        now = self._clock()
+        transaction.cancel(now)
+        self._audit(TransactionEvent.CANCELLED, transaction, now, "cancelled")
         return transaction
+
+    def _audit(
+        self, event: TransactionEvent, transaction: Transaction, moment: datetime, outcome: str, **details: object
+    ) -> None:
+        if self._audit_log is None:
+            return
+        self._audit_log.record(
+            AuditLevel.INFO,
+            AuditCategory.TRANSACTION,
+            event.value,
+            f"{transaction.transaction_type.value} of {transaction.amount} {transaction.currency.value} {outcome}",
+            timestamp=moment,
+            account_id=transaction.initiator_id,
+            transaction_id=transaction.transaction_id,
+            details={
+                "type": transaction.transaction_type,
+                "amount": transaction.amount,
+                "currency": transaction.currency,
+                "sender_id": transaction.sender_id,
+                "recipient_id": transaction.recipient_id,
+                **details,
+            },
+        )
 
     def get(self, transaction_id: str) -> Transaction:
         """Any transaction that has passed through the queue, whatever its status."""

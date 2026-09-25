@@ -93,7 +93,9 @@ Known limitations:
   (`urgent`, `high`, `normal`, `low`; first in, first out within one
   priority), holds delayed ones until their `scheduled_at` and cancels the
   ones still waiting. Two heaps keep a delayed urgent transaction from
-  blocking the ready ones.
+  blocking the ready ones. Given an `audit_log`, it records every
+  transaction it takes in (a retry coming back included) and every
+  cancellation.
 - `TransactionProcessor` - executes transactions through `Bank`, so the
   night window, blocked clients, limits and the suspicious activity log
   apply. It converts amounts into each account's currency, charges fees,
@@ -127,17 +129,28 @@ Processing rules:
 - `AuditLog` - one append-only journal for the whole bank. Every
   `AuditEvent` is immutable and structured: timestamp, level (`INFO`,
   `WARNING`, `ERROR`, `CRITICAL`), category (`security`, `transaction`,
-  `risk`), event name, message, client, account and transaction ids and a
+  `risk`, `account`, `client`), event name, message, client, account and transaction ids and a
   `details` mapping. Events are kept in memory and, when a `file_path` is
   given, appended to a JSON Lines file as soon as they are recorded;
   `AuditLog.load_events()` reads a file back. `filter()` combines a minimum or
   exact level, category, event, client, account, transaction and a time
   range. Every event is also passed to the application log (see
   [Logs](#logs)).
-- Who writes to it: `SecurityGuard` (every suspicious activity, as
-  `WARNING`; a blocked client as `CRITICAL`), `Bank.screen()` (every risk
-  assessment) and `TransactionProcessor` (completed transactions as
-  `INFO`, failed attempts as `ERROR`, unexpected errors as `CRITICAL`).
+- Who writes to it:
+
+  | Writer | Category | Events | Level |
+  | --- | --- | --- | --- |
+  | `SecurityGuard` | `security` | every suspicious activity (named after `SuspicionReason`) | `WARNING`; a blocked client `CRITICAL` |
+  | `Bank` | `client` | `client_registered`, `client_unblocked` | `INFO` |
+  | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed` | `INFO` |
+  | `Bank.screen()` | `risk` | `risk_assessed`, `operation_blocked` | `INFO` / `WARNING` for a medium risk / `CRITICAL` |
+  | `TransactionQueue` | `transaction` | `transaction_queued`, `transaction_cancelled` | `INFO` |
+  | `TransactionProcessor` | `transaction` | `transaction_completed`; `transaction_failed` (`details.will_retry` tells a retry from a final failure) | `INFO`; `ERROR`, an unexpected error `CRITICAL` |
+
+  Life-cycle events are recorded once the change is made; a refused change
+  appears only as a `security` event. Transaction events name both parties
+  in `details` (`sender_id`, `recipient_id`). The queue does not know the
+  clients, so its events carry the initiating account without a client id.
   `bank.suspicious_activities` is a view of the `security` events.
 - `RiskAnalyzer` - scores a transaction with independent rules and turns
   the score into a level. Rules and thresholds are constructor arguments;
