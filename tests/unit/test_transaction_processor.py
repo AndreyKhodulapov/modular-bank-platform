@@ -132,24 +132,10 @@ def test_closed_or_unknown_account_fails(bank, processor, rub, usd):
     assert to_nowhere.failure_reason.startswith("AccountNotFoundError")
 
 
-def test_failed_credit_returns_the_debit(bank, processor, premium, client, make_client):
-    other = bank.add_client(make_client("Boris"), "boris-password")
-    recipient = bank.open_account(other.client_id, currency="RUB")
-    for _ in range(3):  # three wrong passwords block the recipient's owner
-        with pytest.raises((AuthenticationError, ClientBlockedError)):
-            bank.authenticate_client(other.client_id, "wrong-password")
-    transaction = transfer(premium, recipient, 500)
-    processor.process(transaction)
-    assert transaction.status is TransactionStatus.FAILED
-    assert transaction.failure_reason.startswith("ClientBlockedError")
-    assert premium.balance == Decimal("1000.00")  # debit of 510 returned
-    assert recipient.balance == Decimal("0.00")
-
-
 def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(bank, processor, client, make_client):
     other = bank.add_client(make_client("Boris"), "boris-password")
     recipient = bank.open_account(other.client_id, currency="RUB")
-    for _ in range(3):
+    for _ in range(3):  # three wrong passwords block the recipient's owner
         with pytest.raises((AuthenticationError, ClientBlockedError)):
             bank.authenticate_client(other.client_id, "wrong-password")
     cap = bank.open_account(
