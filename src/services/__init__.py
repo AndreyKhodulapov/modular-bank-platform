@@ -1,6 +1,17 @@
-"""Services that coordinate the domain models: the bank, security, currency, transactions, audit and risk."""
+"""Services that coordinate the domain models: the bank, security, currency, transactions, history, audit and risk."""
 
-from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog, RiskEvent, TransactionEvent
+import logging
+
+from services.audit_log import (
+    AccountEvent,
+    AuditCategory,
+    AuditEvent,
+    AuditLevel,
+    AuditLog,
+    ClientEvent,
+    RiskEvent,
+    TransactionEvent,
+)
 from services.audit_report import AuditReport, ClientRiskProfile, ErrorStatistics, SuspiciousOperationsReport
 from services.bank import Bank
 from services.currency import CurrencyConverter
@@ -19,22 +30,30 @@ from services.risk import (
     RiskRule,
 )
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
+from services.transaction_history import BalanceMovement, MovementKind, TransactionHistory
 from services.transaction_processor import ProcessingReport, TransactionErrorRecord, TransactionProcessor
 from services.transaction_queue import TransactionQueue
 
+# a library does not decide where its logs go: without the program's configuration they are dropped quietly
+logging.getLogger("bank").addHandler(logging.NullHandler())
+
 __all__ = [
+    "AccountEvent",
     "AuditCategory",
     "AuditEvent",
     "AuditLevel",
     "AuditLog",
     "AuditReport",
+    "BalanceMovement",
     "Bank",
+    "ClientEvent",
     "ClientRiskProfile",
     "CurrencyConverter",
     "ErrorStatistics",
     "FeePolicy",
     "HighFrequencyRule",
     "LargeAmountRule",
+    "MovementKind",
     "NewRecipientRule",
     "NightOperationRule",
     "ProcessingReport",
@@ -52,6 +71,7 @@ __all__ = [
     "SuspiciousOperationsReport",
     "TransactionErrorRecord",
     "TransactionEvent",
+    "TransactionHistory",
     "TransactionProcessor",
     "TransactionQueue",
 ]

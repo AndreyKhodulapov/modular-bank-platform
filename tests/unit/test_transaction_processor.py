@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -5,7 +6,16 @@ import pytest
 
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, RiskBlockedError
 from models import Transaction, TransactionStatus
-from services import AuditLevel, Bank, FeePolicy, RiskAnalyzer, SuspicionReason, TransactionProcessor
+from services import (
+    AuditLevel,
+    Bank,
+    FeePolicy,
+    MovementKind,
+    RiskAnalyzer,
+    SuspicionReason,
+    TransactionProcessor,
+    TransactionQueue,
+)
 from tests.helpers import reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
@@ -153,9 +163,18 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     assert (cap.balance, recipient.balance) == (Decimal("10000000.00"), Decimal("0.00"))
     # the refund is not a client operation: one large withdrawal is reviewed, the refund is not
     assert reasons(bank).count(SuspicionReason.LARGE_OPERATION) == 2  # opening the account, then the withdrawal
+    # but it is a movement: the debit and its refund cancel out, and the history still adds up to the balance
+    movements = bank.history.movements(cap.account_id)
+    assert [(m.kind, m.amount, m.balance_after, m.transaction_id) for m in movements] == [
+        (MovementKind.OPENING, Decimal("10000000.00"), Decimal("10000000.00"), None),
+        (MovementKind.WITHDRAWAL, Decimal("-10000010.00"), Decimal("-10.00"), transaction.transaction_id),
+        (MovementKind.REFUND, Decimal("10000010.00"), Decimal("10000000.00"), transaction.transaction_id),
+    ]
+    assert bank.history.movements(recipient.account_id) == []
+    assert bank.history.transactions() == [transaction]
 
 
-def test_night_window_is_retried_with_exponential_delay(processor, rub, usd, clock):
+def test_night_window_is_retried_with_exponential_delay(bank, processor, rub, usd, clock):
     clock.moment = NIGHT
     transaction = transfer(rub, usd, 900)
     processor.process(transaction)
@@ -172,16 +191,34 @@ def test_night_window_is_retried_with_exponential_delay(processor, rub, usd, clo
     assert transaction.failure_reason.startswith("OperationTimeRestrictedError")
     assert [(record.attempt, record.will_retry) for record in processor.errors] == [(1, True), (2, True), (3, False)]
     assert {record.error_type for record in processor.errors} == {"OperationTimeRestrictedError"}
+    assert bank.history.transactions() == [transaction]  # once, after the last attempt
+
+
+def test_each_attempt_is_traced(processor, rub, usd, clock, caplog):
+    caplog.set_level(logging.DEBUG, logger="bank.transactions")
+    clock.moment = NIGHT
+    transaction = transfer(rub, usd, 900)
+    processor.process(transaction)
+    clock.moment = transaction.scheduled_at
+    processor.process(transaction)
+    traces = [record for record in caplog.records if record.name == "bank.transactions"]
+    assert [(record.getMessage(), record.fields["attempt"], record.fields["event_time"]) for record in traces] == [
+        ("attempt started", 1, NIGHT),
+        ("attempt started", 2, NIGHT + timedelta(minutes=5)),
+    ]
+    assert {record.fields["transaction_id"] for record in traces} == {transaction.transaction_id}
 
 
 def test_retry_succeeds_once_money_arrives(bank, processor, rub, usd, clock):
     transaction = transfer(rub, usd, 12_000)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.PENDING
+    assert bank.history.transactions() == []  # a retry is not final yet
     bank.deposit(rub.account_id, 5_000)
     clock.moment = transaction.scheduled_at
     processor.process(transaction)
     assert transaction.status is TransactionStatus.COMPLETED
+    assert bank.history.transactions() == [transaction]
     assert transaction.failure_reason is None
     assert rub.balance == Decimal("3000.00")
 
@@ -225,7 +262,7 @@ def test_process_queue_requeues_retries_even_if_an_attempt_raises(processor, que
 
 
 def test_unexpected_error_fails_the_transaction_and_is_raised(bank, processor, rub, usd, monkeypatch):
-    def withdraw(account_id, amount):
+    def withdraw(account_id, amount, **kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(bank, "withdraw", withdraw)
@@ -233,6 +270,7 @@ def test_unexpected_error_fails_the_transaction_and_is_raised(bank, processor, r
     with pytest.raises(RuntimeError):
         processor.process(transaction)
     assert transaction.status is TransactionStatus.FAILED
+    assert bank.history.transactions() == [transaction]
     assert transaction.failure_reason == "RuntimeError: boom"
     assert [(record.error_type, record.will_retry) for record in processor.errors] == [("RuntimeError", False)]
     [event] = bank.audit_log.filter(event="transaction_failed")
@@ -261,6 +299,35 @@ def test_rejects_invalid_settings(bank, params):
 def test_requires_a_bank():
     with pytest.raises(InvalidOperationError):
         TransactionProcessor("bank")
+
+
+def test_transfer_moves_money_on_both_accounts_under_one_transaction(bank, processor, premium, usd):
+    transaction = transfer(premium, usd, 1_800)  # 20 USD out of the overdraft, with the premium fee
+    processor.process(transaction)
+    moved = bank.history.movements()[-2:]
+    assert [(m.account_id, m.kind, m.amount, m.currency.value, m.balance_after) for m in moved] == [
+        (premium.account_id, MovementKind.WITHDRAWAL, Decimal("-1810.00"), "RUB", Decimal("-810.00")),
+        (usd.account_id, MovementKind.DEPOSIT, Decimal("20.00"), "USD", Decimal("120.00")),
+    ]
+    assert {m.transaction_id for m in moved} == {transaction.transaction_id}
+    assert {m.moment for m in moved} == {transaction.finished_at}
+    assert bank.history.transactions(account_ids=[usd.account_id]) == [transaction]
+
+
+def test_failed_transaction_enters_the_history_without_movements(bank, processor, rub, usd):
+    bank.freeze_account(usd.account_id)
+    moved = bank.history.movements()
+    transaction = transfer(rub, usd, 100)
+    processor.process(transaction)
+    assert bank.history.transactions(status="failed") == [transaction]
+    assert bank.history.movements() == moved
+
+
+def test_cancelled_transaction_stays_out_of_the_history(bank, processor, queue, rub, usd):
+    cancelled = queue.add(transfer(rub, usd, 100))
+    queue.cancel(cancelled.transaction_id)
+    processor.process_queue(queue)
+    assert bank.history.transactions() == []
 
 
 def test_high_risk_transaction_fails_at_once_without_moving_money(bank, processor, client, clock):
@@ -301,14 +368,21 @@ def test_outcomes_are_written_to_the_audit_log(bank, processor, client, rub, usd
         ("transaction_failed", AuditLevel.ERROR, short.transaction_id),
     ]
     assert all((event.client_id, event.account_id) == (client.client_id, rub.account_id) for event in events)
+    parties = {"sender_id": rub.account_id, "recipient_id": usd.account_id}
     assert dict(events[0].details) == {
         "type": "transfer",
         "amount": "900.00",
         "currency": "RUB",
+        **parties,
         "fee": "0.00",
         "attempt": 1,
     }
-    assert dict(events[1].details) == {"error_type": "InsufficientFundsError", "attempt": 1, "will_retry": True}
+    assert dict(events[1].details) == {
+        **parties,
+        "error_type": "InsufficientFundsError",
+        "attempt": 1,
+        "will_retry": True,
+    }
 
 
 def test_failure_for_an_unknown_account_is_logged_without_a_client(bank, processor, rub):
@@ -329,17 +403,21 @@ def test_completed_transfer_makes_the_recipient_known(bank, processor, client, c
     assert (first.rules, second.rules) == (("new_recipient",), ())
 
 
-@pytest.fixture
-def failing_audit_log(bank, monkeypatch):
-    """The bank's audit log refuses to record a failed attempt, as if the disk were full."""
+def break_audit_log(bank, monkeypatch, *events: str) -> None:
+    """Make the bank's audit log refuse to record ``events``, as if the disk were full."""
     record = bank.audit_log.record
 
     def broken(level, category, event, *args, **kwargs):
-        if event == "transaction_failed":
+        if event in events:
             raise OSError("disk full")
         return record(level, category, event, *args, **kwargs)
 
     monkeypatch.setattr(bank.audit_log, "record", broken)
+
+
+@pytest.fixture
+def failing_audit_log(bank, monkeypatch):
+    break_audit_log(bank, monkeypatch, "transaction_failed")
 
 
 def test_failed_attempt_is_finished_even_if_the_audit_write_fails(processor, rub, usd, failing_audit_log):
@@ -350,8 +428,20 @@ def test_failed_attempt_is_finished_even_if_the_audit_write_fails(processor, rub
     assert short.scheduled_at == NOW + timedelta(minutes=5)
 
 
-def test_process_queue_keeps_a_retry_when_its_audit_write_fails(processor, queue, rub, usd, failing_audit_log):
+def test_final_failure_enters_the_history_even_if_the_audit_write_fails(bank, rub, usd, failing_audit_log):
+    processor = TransactionProcessor(bank, max_attempts=1)
+    short = transfer(rub, usd, 50_000)
+    with pytest.raises(OSError):
+        processor.process(short)
+    assert bank.history.transactions() == [short]
+
+
+@pytest.mark.parametrize("journaled", [False, True], ids=["plain queue", "journaled queue"])
+def test_process_queue_keeps_a_retry_when_the_audit_write_fails(bank, processor, rub, usd, monkeypatch, journaled):
+    queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log if journaled else None)
     short = queue.add(transfer(rub, usd, 50_000))
+    # neither the failed attempt nor the retry coming back can be recorded
+    break_audit_log(bank, monkeypatch, "transaction_failed", "transaction_queued")
     with pytest.raises(OSError):
         processor.process_queue(queue)
     assert short.status is TransactionStatus.PENDING

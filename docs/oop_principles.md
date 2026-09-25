@@ -213,12 +213,13 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **Atomicity and compensation.** A transfer has two steps (debit, credit)
   and must not stop halfway. Both accounts are checked and both amounts
   converted before money moves; if the bank still refuses the credit, a
-  compensating operation returns the debit. The compensation goes straight
-  to the account (`refund()`), not through the bank: a rollback must not be
-  refused by a deposit limit or the night window, and must not be reviewed
-  as a new client operation. This is the idea behind the Saga pattern for
-  operations that span several services, where one database transaction is
-  not available.
+  compensating operation returns the debit. The compensation is
+  `bank.refund()`, which skips the checks of a client operation: a rollback
+  must not be refused by a deposit limit or the night window, and must not
+  be reviewed as a new client operation. It still goes through the bank, so
+  the history records it next to the debit it cancels. This is the idea
+  behind the Saga pattern for operations that span several services, where
+  one database transaction is not available.
 - **Retries with exponential backoff.** Only temporary errors are retried
   (the night window ends, money may arrive); permanent ones (a frozen
   account, bad input) fail at once, because retrying them only adds load.
@@ -228,6 +229,32 @@ amounts and enum members are values: two equal amounts are interchangeable.
   foreign currencies goes through the base currency (a cross rate) and is
   rounded once, at the end, so rounding errors do not accumulate.
 
+## Transaction history
+
+- **State, not a log.** The history is a separate store owned by the bank,
+  not a query over the logs. A log describes what the system did and may be
+  sampled, rotated or lost; the audit log is evidence, but it records
+  events, not balances. Questions like "what did this account look like on
+  Monday" need the bank's own record, written in the same step as the change
+  of the balance. Real systems keep it as a ledger table in the database;
+  the logs point at it by transaction id.
+- **One writer.** Only `Bank` records movements, in the same methods that
+  change balances, so a movement cannot be forgotten or written twice, and
+  a refused operation leaves none. The processor passes the transaction id
+  through `deposit()` / `withdraw()` / `refund()` and adds the finished
+  transaction itself - once, after its last attempt.
+- **The actual change.** A movement stores the balance after minus the
+  balance before, not the requested amount, so fees charged by the account
+  (the premium withdrawal fee) are not lost. The invariant "the movements of
+  an account add up to its balance" is checked by the integration tests.
+- **`balance_after`.** Each movement keeps the balance right after it, so a
+  balance chart or a statement for any period is a plain filter, without
+  replaying every earlier movement (a running balance, as on a bank
+  statement).
+- **Immutability.** Movements are frozen dataclasses and the getters return
+  copies; a finished transaction has no status transitions left, so what is
+  in the history cannot change.
+
 ## Structured logging
 
 Emitting log records as key-value data (not free text) so they can be
@@ -236,8 +263,38 @@ filtered, aggregated and shipped to monitoring systems.
 *In the project:* every `AuditEvent` has fields - time, level, category,
 event name, client, account and transaction ids and a `details` mapping -
 so `AuditLog.filter()` selects by any of them and `AuditReport` counts them.
-The file format is JSON Lines: one JSON object per line, easy to append,
-to stream and to load into log tools (ELK, Loki, `jq`).
+The application log does the same with the standard `logging` module: the
+fields travel in `extra={"fields": {...}}` (one key, so they never clash with
+`LogRecord` attributes), a message stays constant (`attempt started`) while
+the values go to fields, and a formatter decides the output - JSON Lines in
+the file, `key=value` lines in the terminal. JSON Lines means one JSON object
+per line: easy to append, to stream and to load into log tools (ELK, Loki,
+`jq`).
+
+- **Libraries do not configure logging.** The services only call
+  `logging.getLogger("bank.<component>")`; handlers, formats and levels are
+  chosen once by the program (`configure_logging()` in `main.py`). Until then
+  a `NullHandler` on `bank` drops the records quietly, so the services work
+  the same in tests, in a script or inside another application.
+- **A named hierarchy.** Loggers live under `bank` (`bank.audit`,
+  `bank.transactions`, `bank.queue`), so one call configures all of them and
+  a single component can be turned up or down.
+- **Levels per handler.** The logger passes everything any handler wants;
+  each handler keeps its own threshold - the file stores `DEBUG` and up, the
+  terminal shows `WARNING` and up.
+- **Two moments.** `logged_at` is when the line was written (wall clock);
+  `event_time` is when the event happened by the bank's clock. They differ
+  whenever time is simulated or events are logged late, and mixing them up
+  makes a night operation look like it happened at lunch.
+- **Configuration from the environment.** Paths and the terminal level come
+  from environment variables, read and checked once by `Settings.from_env()`
+  into a frozen dataclass that is passed on (the twelve-factor "config in the
+  environment" rule plus dependency injection). A wrong value fails at start
+  with a clear message. Business rules - thresholds, the night window,
+  rates - are not settings: they are the bank's policy and stay constructor
+  arguments. The standard library is enough for three variables; a library
+  such as `pydantic-settings` pays off with nested configuration, `.env`
+  files or an HTTP layer.
 
 ## Audit logging
 
@@ -253,13 +310,32 @@ to stream and to load into log tools (ELK, Loki, `jq`).
 - **Write-through to a file.** Each event is written the moment it is
   recorded, so a crash loses nothing that was already logged. Memory is for
   fast queries in the running process; the file is the durable record.
-- **One journal, many writers.** Security, transactions and risk control
-  share one injected `AuditLog`, so a client's whole story is in one place,
-  in time order. The old `suspicious_activities` API is kept as a
+- **One journal, many writers.** Security, the bank (client and account
+  life cycle), the queue, the processor and risk control share one injected
+  `AuditLog`, so a client's whole story is in one place, in time order. The old `suspicious_activities` API is kept as a
   filtered view of it, so existing callers did not change.
+- **What is worth auditing.** Changes of state that someone may have to
+  answer for: an account opened, frozen or closed, a client unblocked, a
+  transaction accepted, executed, refused or cancelled. A change is recorded
+  after it is made, so the journal never claims what did not happen; a
+  refused attempt is recorded as a security event instead. The price is the
+  opposite gap: if the write fails, the change is already made (an account
+  closed, a client registered) and the caller gets the error, with nothing
+  to undo it. Here the error at least stops further work, and money
+  movements are in the history before the journal is written; a real system
+  closes the gap by storing the change and its event in one database
+  transaction (the transactional outbox pattern). Event names are enums
+  (`AccountEvent`, `ClientEvent`, `TransactionEvent`, `RiskEvent`), so
+  writers and reports cannot drift apart on a typo.
 - **Audit log vs application log.** The application log (`logging`) is
   for developers and can be sampled or rotated away; the audit log is a
-  business record of who did what and when, kept complete.
+  business record of who did what and when, kept complete. They also fail
+  differently: `logging` swallows a handler error (it prints it and goes
+  on), which is right for diagnostics and wrong for evidence, so the audit
+  log writes its own file and a failed write stops the operation. The two
+  are joined in one direction: every recorded audit event is copied to the
+  `bank.audit` logger, so the application log shows business events in
+  order with the technical ones, and one source feeds both.
 
 ## Risk analysis
 

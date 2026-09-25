@@ -1,10 +1,11 @@
+import logging
 from datetime import datetime, timedelta
 
 import pytest
 
 from exceptions import InvalidOperationError, InvalidTransactionStateError, TransactionNotFoundError
 from models import Transaction, TransactionPriority, TransactionStatus
-from services import TransactionQueue
+from services import AuditLevel, AuditLog, TransactionQueue
 
 NOW = datetime(2026, 9, 24, 14, 0)
 
@@ -46,6 +47,18 @@ def test_due_delayed_transaction_competes_by_priority(queue, clock):
     queue.add(deposit("normal"))
     clock.moment = NOW + timedelta(minutes=5)
     assert drain(queue) == ["delayed-high", "normal"]
+
+
+def test_a_delayed_transaction_that_becomes_due_is_traced(queue, clock, caplog):
+    caplog.set_level(logging.DEBUG, logger="bank.queue")
+    later = NOW + timedelta(hours=1)
+    transaction = queue.add(deposit("later", scheduled_at=later))
+    queue.next_ready()
+    clock.moment = later
+    queue.next_ready()
+    [record] = [record for record in caplog.records if record.name == "bank.queue"]
+    assert (record.levelno, record.getMessage()) == (logging.DEBUG, "delayed transaction is due")
+    assert record.fields == {"event_time": later, "transaction_id": transaction.transaction_id, "scheduled_at": later}
 
 
 def test_cancel_removes_a_waiting_transaction(queue, clock):
@@ -117,3 +130,102 @@ def test_cancel_forgets_a_transaction_that_changed_status_elsewhere(queue):
     with pytest.raises(InvalidTransactionStateError):
         queue.cancel(transaction.transaction_id)
     assert len(queue) == 0
+
+
+@pytest.fixture
+def audit_log() -> AuditLog:
+    return AuditLog()
+
+
+@pytest.fixture
+def journaled(clock, audit_log) -> TransactionQueue:
+    return TransactionQueue(clock=clock, audit_log=audit_log)
+
+
+def test_adding_and_cancelling_are_recorded(journaled, audit_log):
+    later = NOW + timedelta(hours=1)
+    transfer = journaled.add(
+        Transaction("transfer", 10, "RUB", sender_id="S", recipient_id="R", created_at=NOW, scheduled_at=later)
+    )
+    top_up = journaled.add(deposit("R", priority="urgent"))
+    journaled.cancel(transfer.transaction_id)
+
+    events = audit_log.events
+    assert [(event.event, event.transaction_id, event.account_id) for event in events] == [
+        ("transaction_queued", transfer.transaction_id, "S"),
+        ("transaction_queued", top_up.transaction_id, "R"),
+        ("transaction_cancelled", transfer.transaction_id, "S"),
+    ]
+    assert [event.message for event in events] == [
+        "transfer of 10.00 RUB queued for 09-24 15:00",
+        "deposit of 10.00 RUB queued",
+        "transfer of 10.00 RUB cancelled",
+    ]
+    assert {(event.level, event.client_id, event.timestamp) for event in events} == {(AuditLevel.INFO, None, NOW)}
+    assert dict(events[0].details) == {
+        "type": "transfer",
+        "amount": "10.00",
+        "currency": "RUB",
+        "sender_id": "S",
+        "recipient_id": "R",
+        "priority": "normal",
+        "scheduled_at": later.isoformat(),
+        "attempts": 0,
+    }
+
+
+def handed_out_for_retry(queue: TransactionQueue, *labels: str) -> list[Transaction]:
+    """Queue deposits, hand them out and schedule each for a retry in five minutes, as the processor does."""
+    transactions = [queue.add(deposit(label)) for label in labels]
+    for _ in transactions:
+        queue.next_ready().start(NOW)
+    for transaction in transactions:
+        transaction.retry("night window", NOW, NOW + timedelta(minutes=5))
+    return transactions
+
+
+def test_a_retry_is_recorded_as_queued_again(journaled, audit_log):
+    retries = handed_out_for_retry(journaled, "a", "b")
+    journaled.requeue(retries)
+    assert journaled.pending() == retries
+    queued = audit_log.filter(event="transaction_queued")
+    assert [(event.transaction_id, event.details["attempts"]) for event in queued[2:]] == [
+        (transaction.transaction_id, 1) for transaction in retries
+    ]
+
+
+def test_failed_audit_write_does_not_drop_a_retry(journaled, audit_log, monkeypatch):
+    retries = handed_out_for_retry(journaled, "a", "b")
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(audit_log, "record", broken)
+    with pytest.raises(OSError):
+        journaled.requeue(retries)
+    assert journaled.pending() == retries  # both are back, though neither was recorded
+
+
+def test_requeue_checks_the_whole_batch_before_queuing(queue):
+    [retry] = handed_out_for_retry(queue, "a")
+    cancelled = deposit("b")
+    cancelled.cancel(NOW)
+    for batch in ([retry, cancelled], [retry, retry], [retry, "not a transaction"]):
+        with pytest.raises(InvalidOperationError):
+            queue.requeue(batch)
+        assert len(queue) == 0  # the valid retry was not queued either
+
+
+def test_failed_audit_write_leaves_nothing_queued(clock, tmp_path):
+    queue = TransactionQueue(clock=clock, audit_log=AuditLog(tmp_path))  # a folder, so the write fails
+    transaction = deposit("a")
+    with pytest.raises(OSError):
+        queue.add(transaction)
+    assert len(queue) == 0
+    with pytest.raises(TransactionNotFoundError):
+        queue.get(transaction.transaction_id)
+
+
+def test_audit_log_must_be_an_audit_log(clock):
+    with pytest.raises(InvalidOperationError):
+        TransactionQueue(clock=clock, audit_log="audit.jsonl")

@@ -2,12 +2,16 @@
 
 import heapq
 import itertools
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Iterable
 from datetime import datetime
 
 from exceptions import InvalidOperationError, TransactionNotFoundError
 from models.enums import TransactionStatus
 from models.transaction import Transaction
+from services.audit_log import AuditCategory, AuditLevel, AuditLog, TransactionEvent
+
+_logger = logging.getLogger("bank.queue")
 
 
 class TransactionQueue:
@@ -31,10 +35,19 @@ class TransactionQueue:
     A waiting transaction is expected to stay ``PENDING``. One whose status
     was changed elsewhere (cancelled or processed outside the queue) is
     dropped when it surfaces instead of being handed out.
+
+    With an ``audit_log`` the queue records every transaction it takes in -
+    a retry coming back through ``requeue()`` included, told apart by
+    ``details.attempts`` - and every ``cancel()``, both as ``INFO``. The
+    queue does not know the clients, so these events name the initiating
+    account, not its owner.
     """
 
-    def __init__(self, clock: Callable[[], datetime] = datetime.now) -> None:
+    def __init__(self, clock: Callable[[], datetime] = datetime.now, audit_log: AuditLog | None = None) -> None:
+        if audit_log is not None and not isinstance(audit_log, AuditLog):
+            raise InvalidOperationError("audit_log must be an AuditLog instance.")
         self._clock = clock
+        self._audit_log = audit_log
         self._sequence = itertools.count()
         self._ready: list[tuple[int, int, str]] = []  # (-priority, sequence, transaction_id)
         self._delayed: list[tuple[datetime, int, str]] = []  # (scheduled_at, sequence, transaction_id)
@@ -46,7 +59,36 @@ class TransactionQueue:
         return len(self._queued)
 
     def add(self, transaction: Transaction) -> Transaction:
-        """Queue a pending transaction; its ``priority`` and ``scheduled_at`` decide the order."""
+        """Queue a pending transaction; its ``priority`` and ``scheduled_at`` decide the order.
+
+        The audit event is recorded first: if it cannot be written, the
+        transaction is not queued and the caller gets the error.
+        """
+        self._check_queueable(transaction)
+        now = self._clock()
+        self._audit_queued(transaction, now)
+        self._enqueue(transaction, now)
+        return transaction
+
+    def requeue(self, transactions: Iterable[Transaction]) -> None:
+        """Put pending transactions back for a retry; used by the processor after a run.
+
+        Unlike ``add()``, every transaction is queued before any audit event
+        is recorded: they were accepted earlier, so a failing audit write
+        raises but cannot drop a retry.
+        """
+        batch = list(transactions)
+        for transaction in batch:
+            self._check_queueable(transaction)
+        if len({transaction.transaction_id for transaction in batch}) != len(batch):
+            raise InvalidOperationError("A transaction can be requeued only once.")
+        now = self._clock()
+        for transaction in batch:
+            self._enqueue(transaction, now)
+        for transaction in batch:
+            self._audit_queued(transaction, now)
+
+    def _check_queueable(self, transaction: Transaction) -> None:
         if not isinstance(transaction, Transaction):
             raise InvalidOperationError("transaction must be a Transaction instance.")
         if transaction.status is not TransactionStatus.PENDING:
@@ -56,14 +98,26 @@ class TransactionQueue:
         if transaction.transaction_id in self._queued:
             raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already queued.")
 
+    def _enqueue(self, transaction: Transaction, now: datetime) -> None:
         sequence = next(self._sequence)
         self._queued[transaction.transaction_id] = sequence
         self._transactions[transaction.transaction_id] = transaction
-        if transaction.is_due(self._clock()):
+        if transaction.is_due(now):
             self._push_ready(transaction, sequence)
         else:
             heapq.heappush(self._delayed, (transaction.scheduled_at, sequence, transaction.transaction_id))
-        return transaction
+
+    def _audit_queued(self, transaction: Transaction, now: datetime) -> None:
+        when = "" if transaction.is_due(now) else f" for {transaction.scheduled_at:%m-%d %H:%M}"
+        self._audit(
+            TransactionEvent.QUEUED,
+            transaction,
+            now,
+            f"queued{when}",
+            priority=transaction.priority.name.lower(),
+            scheduled_at=transaction.scheduled_at,
+            attempts=transaction.attempts,
+        )
 
     def _push_ready(self, transaction: Transaction, sequence: int) -> None:
         heapq.heappush(self._ready, (-transaction.priority.value, sequence, transaction.transaction_id))
@@ -76,7 +130,18 @@ class TransactionQueue:
         while self._delayed and self._delayed[0][0] <= now:
             _, sequence, transaction_id = heapq.heappop(self._delayed)
             if self._is_live(transaction_id, sequence):
-                self._push_ready(self._transactions[transaction_id], sequence)
+                transaction = self._transactions[transaction_id]
+                self._push_ready(transaction, sequence)
+                _logger.debug(
+                    "delayed transaction is due",
+                    extra={
+                        "fields": {
+                            "event_time": now,
+                            "transaction_id": transaction_id,
+                            "scheduled_at": transaction.scheduled_at,
+                        }
+                    },
+                )
 
     def next_ready(self) -> Transaction | None:
         """Remove and return the most urgent transaction that is due now, or ``None``."""
@@ -101,8 +166,33 @@ class TransactionQueue:
             )
         # forget the entry first: whatever cancel() says, this transaction must not be handed out
         del self._queued[transaction_id]
-        transaction.cancel(self._clock())
+        now = self._clock()
+        transaction.cancel(now)
+        self._audit(TransactionEvent.CANCELLED, transaction, now, "cancelled")
         return transaction
+
+    def _audit(
+        self, event: TransactionEvent, transaction: Transaction, moment: datetime, outcome: str, **details: object
+    ) -> None:
+        if self._audit_log is None:
+            return
+        self._audit_log.record(
+            AuditLevel.INFO,
+            AuditCategory.TRANSACTION,
+            event.value,
+            f"{transaction.transaction_type.value} of {transaction.amount} {transaction.currency.value} {outcome}",
+            timestamp=moment,
+            account_id=transaction.initiator_id,
+            transaction_id=transaction.transaction_id,
+            details={
+                "type": transaction.transaction_type,
+                "amount": transaction.amount,
+                "currency": transaction.currency,
+                "sender_id": transaction.sender_id,
+                "recipient_id": transaction.recipient_id,
+                **details,
+            },
+        )
 
     def get(self, transaction_id: str) -> Transaction:
         """Any transaction that has passed through the queue, whatever its status."""

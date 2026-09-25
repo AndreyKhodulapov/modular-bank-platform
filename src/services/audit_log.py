@@ -1,6 +1,7 @@
 """Audit log: one append-only journal of security, transaction and risk events."""
 
 import json
+import logging
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,6 +15,8 @@ from exceptions import InvalidOperationError
 from utils import to_enum
 
 type DetailValue = str | int | float | bool | None | tuple[DetailValue, ...]
+
+_logger = logging.getLogger("bank.audit")
 
 
 class AuditLevel(IntEnum):
@@ -35,13 +38,33 @@ class AuditCategory(Enum):
     SECURITY = "security"
     TRANSACTION = "transaction"
     RISK = "risk"
+    ACCOUNT = "account"
+    CLIENT = "client"
 
 
 class TransactionEvent(Enum):
     """Names of the ``transaction`` events; the ``security`` ones are named after ``SuspicionReason``."""
 
+    QUEUED = "transaction_queued"
+    CANCELLED = "transaction_cancelled"
     COMPLETED = "transaction_completed"
     FAILED = "transaction_failed"
+
+
+class AccountEvent(Enum):
+    """Names of the ``account`` events: the life cycle of an account."""
+
+    OPENED = "account_opened"
+    FROZEN = "account_frozen"
+    UNFROZEN = "account_unfrozen"
+    CLOSED = "account_closed"
+
+
+class ClientEvent(Enum):
+    """Names of the ``client`` events."""
+
+    REGISTERED = "client_registered"
+    UNBLOCKED = "client_unblocked"
 
 
 class RiskEvent(Enum):
@@ -152,6 +175,11 @@ class AuditLog:
     process stops, and the file is never rewritten. Memory holds the events
     of this run; ``load_events()`` reads a whole file back. A failed file write is
     not hidden: the error reaches the caller and the event is not kept.
+
+    Every recorded event is also passed to the ``bank.audit`` logger at its
+    own level, with its fields and ``event_time``, so the application log
+    shows the business events among the technical ones. A failed file write
+    is logged there as an ``ERROR`` before it is raised.
     """
 
     def __init__(self, file_path: str | Path | None = None) -> None:
@@ -205,10 +233,27 @@ class AuditLog:
         )
         # the file first: if the write fails, memory does not get an event the file lacks
         if self._file_path is not None:
-            with self._file_path.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
+            try:
+                with self._file_path.open("a", encoding="utf-8") as file:
+                    file.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
+            except OSError:
+                _logger.error(
+                    "audit event could not be written",
+                    exc_info=True,
+                    extra={"fields": {"file": str(self._file_path)} | self._log_fields(entry)},
+                )
+                raise
         self._events.append(entry)
+        # a copy for the application log; logging never raises, so it cannot undo a recorded event
+        _logger.log(int(entry.level), entry.message, extra={"fields": self._log_fields(entry)})
         return entry
+
+    @staticmethod
+    def _log_fields(entry: AuditEvent) -> dict[str, Any]:
+        fields = entry.to_dict()
+        for key in ("timestamp", "level", "message"):  # the log record has its own
+            del fields[key]
+        return {"event_time": entry.timestamp} | fields
 
     def filter(
         self,

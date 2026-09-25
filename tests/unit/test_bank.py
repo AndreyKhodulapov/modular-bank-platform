@@ -16,8 +16,18 @@ from exceptions import (
     RiskBlockedError,
 )
 from models import AccountStatus, BankAccount, InvestmentAccount, SavingsAccount, Transaction
-from services import AuditLevel, Bank, CurrencyConverter, RiskAnalyzer, RiskLevel, SuspicionReason
-from tests.helpers import reasons
+from services import (
+    AuditCategory,
+    AuditLevel,
+    Bank,
+    CurrencyConverter,
+    MovementKind,
+    RiskAnalyzer,
+    RiskLevel,
+    SuspicionReason,
+    TransactionHistory,
+)
+from tests.helpers import lifecycle, reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
 
@@ -161,6 +171,31 @@ def test_freeze_is_allowed_at_night(bank, client, clock):
     assert bank.suspicious_activities == []
 
 
+def test_life_cycle_of_clients_and_accounts_is_recorded(bank, client, clock):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    bank.freeze_account(account.account_id)
+    bank.unfreeze_account(account.account_id)
+    client.block()
+    bank.unblock_client(client.client_id)
+    clock.moment += timedelta(hours=1)
+    bank.close_account(account.account_id)
+
+    events = [event for event in bank.audit_log if event.category in (AuditCategory.ACCOUNT, AuditCategory.CLIENT)]
+    cid, aid = client.client_id, account.account_id
+    assert [(event.event, event.client_id, event.account_id) for event in events] == [
+        ("client_registered", cid, None),
+        ("account_opened", cid, aid),
+        ("account_frozen", cid, aid),
+        ("account_unfrozen", cid, aid),
+        ("client_unblocked", cid, None),
+        ("account_closed", cid, aid),
+    ]
+    assert {event.level for event in events} == {AuditLevel.INFO}
+    assert events[-1].timestamp == clock.moment
+    assert dict(events[1].details) == {"account_type": "basic", "currency": "RUB", "initial_balance": "100.00"}
+    assert dict(events[-1].details) == {"payout": "100.00", "currency": "RUB"}
+
+
 def test_close_account_returns_the_payout_and_keeps_the_history(bank, client):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     assert bank.close_account(account.account_id) == Decimal("100.00")
@@ -189,11 +224,12 @@ def test_large_payout_on_close_is_flagged(bank, client):
 def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     prepare(bank, client, account)
-    status, blocked = account.status, client.is_blocked
+    status, blocked, recorded, moved = account.status, client.is_blocked, lifecycle(bank), bank.history.movements()
     clock.moment = NIGHT
     with pytest.raises(OperationTimeRestrictedError):
         operation(bank, client, account)
     assert reasons(bank) == [SuspicionReason.NIGHT_OPERATION]
+    assert (lifecycle(bank), bank.history.movements()) == (recorded, moved)
     assert (account.status, account.balance, client.is_blocked) == (status, Decimal("100.00"), blocked)
     assert client.account_ids == [account.account_id]
 
@@ -202,11 +238,12 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepa
 def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     prepare(bank, client, account)
-    status = account.status
+    status, recorded, moved = account.status, lifecycle(bank), bank.history.movements()
     client.block()
     with pytest.raises(ClientBlockedError):
         operation(bank, client, account)
     assert reasons(bank) == [SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
+    assert (lifecycle(bank), bank.history.movements()) == (recorded, moved)
     assert (account.status, account.balance) == (status, Decimal("100.00"))
     assert client.account_ids == [account.account_id]
 
@@ -241,9 +278,11 @@ def test_deposit_and_withdraw(bank, client):
 def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operation, error_type):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=10)
     getattr(bank, prepare)(account.account_id)
+    recorded, moved = lifecycle(bank), bank.history.movements()
     arguments = (account.account_id, 10) if operation in ("deposit", "withdraw") else (account.account_id,)
     with pytest.raises(error_type):
         getattr(bank, operation)(*arguments)
+    assert (lifecycle(bank), bank.history.movements()) == (recorded, moved)
     [activity] = bank.suspicious_activities
     assert activity.reason is SuspicionReason.INACTIVE_ACCOUNT_OPERATION
     assert activity.account_id == account.account_id
@@ -294,6 +333,7 @@ def test_unblocking_an_active_client_is_not_a_night_operation(bank, client, cloc
     with pytest.raises(InvalidOperationError, match="not blocked"):
         bank.unblock_client(client.client_id)
     assert bank.suspicious_activities == []
+    assert lifecycle(bank) == ["client_registered"]
 
 
 @pytest.fixture
@@ -513,3 +553,76 @@ def test_bank_uses_injected_risk_analyzer_and_shares_the_audit_log(security):
     assert bank.audit_log is security.audit_log
     with pytest.raises(InvalidOperationError):
         Bank(risk_analyzer="strict")
+
+
+# transaction history
+
+
+def test_every_balance_change_through_the_bank_is_a_movement(bank, client, clock):
+    account = bank.open_account(
+        client.client_id, "premium", currency="RUB", initial_balance=1_000, overdraft_limit=500, withdrawal_fee=10
+    )
+    clock.moment += timedelta(minutes=1)
+    bank.deposit(account.account_id, 200, transaction_id="T-1")
+    clock.moment += timedelta(minutes=1)
+    bank.withdraw(account.account_id, 1_400)  # the account's own fee on top, into the overdraft
+    clock.moment += timedelta(minutes=1)
+    bank.deposit(account.account_id, 210)
+    bank.close_account(account.account_id)
+
+    movements = bank.history.movements(account.account_id)
+    assert [(m.kind, m.amount, m.balance_after, m.transaction_id) for m in movements] == [
+        (MovementKind.OPENING, Decimal("1000.00"), Decimal("1000.00"), None),
+        (MovementKind.DEPOSIT, Decimal("200.00"), Decimal("1200.00"), "T-1"),
+        (MovementKind.WITHDRAWAL, Decimal("-1410.00"), Decimal("-210.00"), None),
+        (MovementKind.DEPOSIT, Decimal("210.00"), Decimal("0.00"), None),
+    ]  # nothing is paid out on closing an empty account
+    assert movements[0].moment == bank.account_opened_at(account.account_id)
+    assert movements[-1].moment == clock.moment
+    assert {movement.currency for movement in movements} == {account.currency}
+
+
+def test_opening_and_closing_move_only_cash(bank, client):
+    empty = bank.open_account(client.client_id, currency="USD")
+    investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=300)
+    bank.close_account(investment.account_id)
+    assert bank.history.movements(empty.account_id) == []
+    assert [(m.kind, m.amount, m.balance_after) for m in bank.history.movements(investment.account_id)] == [
+        (MovementKind.OPENING, Decimal("300.00"), Decimal("300.00")),
+        (MovementKind.PAYOUT, Decimal("-300.00"), Decimal("0.00")),
+    ]
+
+
+def test_refused_money_movement_is_not_recorded(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    moved = bank.history.movements()
+    with pytest.raises(InsufficientFundsError):
+        bank.withdraw(account.account_id, 500)
+    with pytest.raises(InvalidOperationError):
+        bank.deposit(account.account_id, 0)
+    assert bank.history.movements() == moved
+
+
+def test_refund_ignores_the_bank_rules_but_is_recorded(bank, client, clock):
+    account = bank.open_account(client.client_id, currency="RUB")
+    bank.freeze_account(account.account_id)
+    client.block()
+    clock.moment = NIGHT
+    assert bank.refund(account.account_id, 600_000, transaction_id="T-1") == Decimal("600000.00")
+    [movement] = bank.history.movements(account.account_id)
+    assert (movement.kind, movement.amount, movement.transaction_id, movement.moment) == (
+        MovementKind.REFUND,
+        Decimal("600000.00"),
+        "T-1",
+        NIGHT,
+    )
+    assert bank.suspicious_activities == []  # neither the night, the status nor the amount is reviewed
+
+
+def test_bank_uses_injected_history(security):
+    history = TransactionHistory()
+    bank = Bank(security=security, history=history)
+    assert bank.history is history
+    assert Bank(security=security).history is not history
+    with pytest.raises(InvalidOperationError):
+        Bank(history=[])

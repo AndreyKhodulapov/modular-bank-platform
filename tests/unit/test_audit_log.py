@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -163,11 +164,30 @@ def test_str_shows_level_event_and_message(filled):
     assert "CRITICAL" in text and "operation_blocked" in text and "high risk" in text
 
 
-def test_failed_file_write_keeps_nothing_in_memory(tmp_path):
+def test_failed_file_write_keeps_nothing_in_memory_and_is_logged(tmp_path, caplog):
     log = AuditLog(tmp_path)  # a folder, so appending to it fails
     with pytest.raises(OSError):
         log.record("info", "risk", "risk_assessed", "lost", timestamp=NOW)
     assert log.events == []
+    [record] = caplog.records
+    assert (record.name, record.levelno, record.exc_info[0]) == ("bank.audit", logging.ERROR, IsADirectoryError)
+    assert (record.fields["file"], record.fields["event"]) == (str(tmp_path), "risk_assessed")
+
+
+def test_every_event_is_passed_to_the_application_log(filled, caplog):
+    caplog.clear()
+    filled.record("warning", "security", "failed_login", "wrong", timestamp=NOW, client_id="C", details={"attempt": 1})
+    [record] = caplog.records
+    assert (record.name, record.levelno, record.getMessage()) == ("bank.audit", logging.WARNING, "wrong")
+    assert record.fields == {
+        "event_time": NOW,
+        "category": "security",
+        "event": "failed_login",
+        "client_id": "C",
+        "account_id": None,
+        "transaction_id": None,
+        "details": {"attempt": 1},
+    }
 
 
 def test_events_are_hashable_by_value(filled):
