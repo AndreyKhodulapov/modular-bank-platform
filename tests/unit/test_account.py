@@ -77,6 +77,12 @@ def test_withdraw_entire_balance_is_allowed(active_account):
     assert active_account.withdraw(100) == Decimal("0.00")
 
 
+def test_refund_ignores_status_and_deposit_limit(frozen_account):
+    assert frozen_account.refund(BankAccount.MAX_DEPOSIT + 1) == BankAccount.MAX_DEPOSIT + 101
+    with pytest.raises(InvalidOperationError):
+        frozen_account.refund(0)
+
+
 def test_withdraw_more_than_balance_raises(active_account):
     with pytest.raises(InsufficientFundsError) as info:
         active_account.withdraw("100.01")

@@ -9,7 +9,7 @@ from utils import to_money, to_rate
 
 
 class FeePolicy:
-    """Calculates the commission for a transaction (the Strategy pattern).
+    """Calculates the commission for a transaction.
 
     The processor only calls ``calculate()``, so another tariff is introduced
     by passing a different policy object, without touching the processor.

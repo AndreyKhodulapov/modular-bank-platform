@@ -44,11 +44,12 @@ charges a fee and dips into overdraft on a premium account, and only spends
 free cash on an investment account. The demo's summary and the integration
 test iterate over a `list[AbstractAccount]` without checking concrete types.
 Subclasses extend rather than replace behaviour: `get_account_info()` and
-`__str__()` call `super()` and append their own fields. Polymorphism also
-works through class attributes: `TransactionProcessor` asks
-`account.ALLOWS_NEGATIVE_BALANCE` instead of checking
-`isinstance(account, PremiumAccount)`, so a new account type with an
-overdraft needs no change in the processor.
+`__str__()` call `super()` and append their own fields. The same
+polymorphism keeps `TransactionProcessor` free of account types: it only
+calls `bank.withdraw()`, and each account decides how far it can be
+debited (a regular account stops at zero, a premium account uses its
+overdraft), so a new account type with its own rule needs no change in the
+processor.
 
 ## Abstraction
 
@@ -206,11 +207,14 @@ amounts and enum members are values: two equal amounts are interchangeable.
   instead, `cancel()` only marks the transaction and forgets its entry, and
   stale entries are skipped when they reach the top.
 - **Atomicity and compensation.** A transfer has two steps (debit, credit)
-  and must not stop halfway. The processor's own checks run before money
-  moves; if the bank still refuses the credit, a compensating operation
-  returns the debit. This is
-  the idea behind the Saga pattern for operations that span several
-  services, where one database transaction is not available.
+  and must not stop halfway. Both accounts are checked and both amounts
+  converted before money moves; if the bank still refuses the credit, a
+  compensating operation returns the debit. The compensation goes straight
+  to the account (`refund()`), not through the bank: a rollback must not be
+  refused by a deposit limit or the night window, and must not be reviewed
+  as a new client operation. This is the idea behind the Saga pattern for
+  operations that span several services, where one database transaction is
+  not available.
 - **Retries with exponential backoff.** Only temporary errors are retried
   (the night window ends, money may arrive); permanent ones (a frozen
   account, bad input) fail at once, because retrying them only adds load.

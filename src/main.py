@@ -287,7 +287,7 @@ def run_transactions() -> list[AbstractAccount]:
     print_stage(4, "Transactions")
     clock = ManualClock(datetime(2026, 9, 24, 14, 0))
     bank = Bank(security=SecurityGuard(clock=clock))
-    queue = TransactionQueue(clock=clock)
+    queue = TransactionQueue(clock=bank.now)
     # a long retry delay lets a transaction refused at night succeed in the morning
     processor = TransactionProcessor(bank, retry_delay=timedelta(hours=2))
 

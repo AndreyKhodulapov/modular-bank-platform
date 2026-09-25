@@ -124,8 +124,8 @@ def client(bank: Bank, owner: Client, password: str) -> Client:
 
 
 @pytest.fixture
-def queue(clock: ManualClock) -> TransactionQueue:
-    return TransactionQueue(clock=clock)
+def queue(bank: Bank) -> TransactionQueue:
+    return TransactionQueue(clock=bank.now)
 
 
 @pytest.fixture

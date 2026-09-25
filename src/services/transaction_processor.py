@@ -37,26 +37,31 @@ class ProcessingReport:
 class TransactionProcessor:
     """Executes transactions through the ``Bank`` facade.
 
-    Money moves only through ``bank.withdraw()`` and ``bank.deposit()``, so the
-    bank's own rules apply to every transaction: the night window, blocked
-    clients, account limits and the suspicious activity log. On top of them
-    the processor:
+    Money moves only through ``bank.withdraw()`` and ``bank.deposit()``, so
+    every rule of the bank and of the account types applies to every
+    transaction: the night window, blocked clients, frozen and closed
+    accounts, operation limits, the suspicious activity log, and how far an
+    account may be debited (a regular account never goes below zero, a
+    premium account has its overdraft). On top of them the processor:
 
-    - refuses a transaction when any account involved is frozen or closed;
-    - refuses a debit that would take the balance below zero, unless the
-      account type allows it (``ALLOWS_NEGATIVE_BALANCE``, premium accounts);
-    - converts the amount into the currency of each account;
+    - checks both accounts and converts the amount into their currencies
+      before any money moves;
     - charges the fee from ``fee_policy`` together with the debit;
     - keeps a transfer atomic: if crediting the recipient fails after the
-      sender was debited, the debit is returned (a compensating operation).
+      sender was debited, the debit is put back with ``account.refund()``,
+      which no bank rule or limit can refuse.
 
-    These checks run before any money moves. The bank's own checks on the
-    recipient (a blocked owner, the deposit limit) can still refuse the credit
-    after the debit; the compensation then leaves both balances as they were.
-    Errors in ``RETRYABLE_ERRORS`` are temporary - the night window
-    ends, money may arrive - so the transaction goes back to the queue with an
+    Errors in ``RETRYABLE_ERRORS`` are temporary - the night window ends,
+    money may arrive - so the transaction goes back to the queue with an
     exponential delay (``retry_delay``, then twice as long, ...) until
     ``max_attempts`` is used up. Any other ``BankError`` fails it at once.
+    An error that is not a ``BankError`` is a defect, not a business
+    outcome: the transaction is failed and logged all the same, and the
+    error is raised to the caller.
+
+    The queue that feeds ``process_queue()`` should share the bank's clock
+    (``TransactionQueue(clock=bank.now)``): the queue decides when a delayed
+    or retried transaction is due, the processor stamps the moments.
     """
 
     RETRYABLE_ERRORS: tuple[type[BankError], ...] = (OperationTimeRestrictedError, InsufficientFundsError)
@@ -71,7 +76,7 @@ class TransactionProcessor:
     ) -> None:
         if not isinstance(bank, Bank):
             raise InvalidOperationError("bank must be a Bank instance.")
-        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+        if not isinstance(max_attempts, int) or max_attempts < 1:
             raise InvalidOperationError("max_attempts must be a positive integer.")
         if not isinstance(retry_delay, timedelta) or retry_delay <= timedelta(0):
             raise InvalidOperationError("retry_delay must be a positive timedelta.")
@@ -118,43 +123,47 @@ class TransactionProcessor:
             fee, debited, credited = self._execute(transaction)
         except BankError as error:
             self._handle_failure(transaction, error)
+        except Exception as error:
+            self._handle_failure(transaction, error)
+            raise
         else:
             transaction.complete(self._bank.now(), fee=fee, debited_amount=debited, credited_amount=credited)
         return transaction
 
     def _execute(self, transaction: Transaction) -> tuple[Decimal, Decimal | None, Decimal | None]:
         """Move the money; return the fee, the amount debited and the amount credited."""
-        action = transaction.transaction_type.value
         sender = (
-            self._bank.ensure_operational(action, transaction.sender_id) if transaction.sender_id is not None else None
+            self._bank.ensure_operational("withdraw", transaction.sender_id)
+            if transaction.sender_id is not None
+            else None
         )
         # the recipient of an external transfer is in another bank, nothing to credit here
         recipient = (
-            self._bank.ensure_operational(action, transaction.recipient_id)
+            self._bank.ensure_operational("deposit", transaction.recipient_id)
             if transaction.recipient_id is not None
             and transaction.transaction_type is not TransactionType.EXTERNAL_TRANSFER
             else None
         )
         converter = self._bank.converter
+        # both conversions come before the debit: a credit that rounds away to nothing must not strand it
+        debit = self._convert_for(transaction, sender) if sender is not None else None
+        credit = self._convert_for(transaction, recipient) if recipient is not None else None
 
         fee = Decimal("0.00")
         debited = credited = None
         if sender is not None:
-            debit = self._convert_for(transaction, sender)
             fee = self._fee_policy.calculate(transaction.transaction_type, debit, sender.currency, converter)
-            self._ensure_no_negative_balance(sender, debit, fee)
             before = sender.balance
             self._bank.withdraw(sender.account_id, debit + fee)
             # the account may charge its own fee on top (premium), so measure what actually left it
             debited = before - sender.balance
 
         if recipient is not None:
-            credit = self._convert_for(transaction, recipient)
             try:
                 self._bank.deposit(recipient.account_id, credit)
-            except BankError:
+            except Exception:
                 if sender is not None:
-                    self._bank.deposit(sender.account_id, debited)
+                    sender.refund(debited)
                 raise
             credited = credit
 
@@ -171,16 +180,7 @@ class TransactionProcessor:
             )
         return value
 
-    @staticmethod
-    def _ensure_no_negative_balance(account: BankAccount, debit: Decimal, fee: Decimal) -> None:
-        if account.ALLOWS_NEGATIVE_BALANCE or debit + fee <= account.balance:
-            return
-        hint = "This account type may not go below zero."
-        if fee:
-            hint = f"{hint} The fee {fee} is charged on top."
-        raise InsufficientFundsError(requested=debit, available=max(account.balance - fee, Decimal("0.00")), hint=hint)
-
-    def _handle_failure(self, transaction: Transaction, error: BankError) -> None:
+    def _handle_failure(self, transaction: Transaction, error: Exception) -> None:
         now = self._bank.now()
         will_retry = isinstance(error, self.RETRYABLE_ERRORS) and transaction.attempts < self._max_attempts
         self._errors.append(

@@ -126,13 +126,11 @@ class BankAccount(AbstractAccount):
     """A regular currency account with validation and status enforcement.
 
     ``MAX_DEPOSIT`` and ``MAX_WITHDRAWAL`` cap a single operation; subclasses
-    override them to offer higher limits. ``ALLOWS_NEGATIVE_BALANCE`` tells
-    whether the account type may go below zero (only with an overdraft).
+    override them to offer higher limits.
     """
 
     MAX_DEPOSIT = Decimal("1000000.00")
     MAX_WITHDRAWAL = Decimal("1000000.00")
-    ALLOWS_NEGATIVE_BALANCE = False
 
     def __init__(
         self,
@@ -195,6 +193,16 @@ class BankAccount(AbstractAccount):
         if value > self._balance:
             raise InsufficientFundsError(requested=value, available=self._balance)
         self._balance -= value
+        return self._balance
+
+    def refund(self, amount: object) -> Decimal:
+        """Put back money that a rolled-back operation took from the account.
+
+        This is not a client operation: the status and the deposit limit are
+        ignored, because the money was on the account a moment ago and must
+        come back whatever happened in between.
+        """
+        self._balance += to_money(amount, require="positive")
         return self._balance
 
     def get_account_info(self) -> dict[str, Any]:

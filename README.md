@@ -99,7 +99,9 @@ Known limitations:
   apply. It converts amounts into each account's currency, charges fees,
   retries temporary failures and keeps an error log (`errors`) of every
   failed attempt. `process_queue()` runs everything that is due and returns
-  a `ProcessingReport` (completed, failed, rescheduled).
+  a `ProcessingReport` (completed, failed, rescheduled). The queue should
+  share the bank's clock (`TransactionQueue(clock=bank.now)`), so that
+  delays and retries are measured by the same time.
 - `FeePolicy` - the tariff: external transfers pay 1% of the amount, at
   least 50 and at most 5 000 RUB (converted into the sender's currency);
   everything else is free. Pass another policy to change the tariff.
@@ -111,11 +113,11 @@ Processing rules:
 | Rule | Behaviour |
 | --- | --- |
 | Frozen or closed account | the transaction fails at once; no money moves |
-| Negative balance | refused for every account type except premium (`ALLOWS_NEGATIVE_BALANCE`), which may use its overdraft |
+| Negative balance | decided by the account type itself through `withdraw()`: a regular account never goes below zero, a premium account may use its overdraft |
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
-| Atomic transfer | the processor's checks run before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is returned |
-| Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other errors fail at once |
+| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `refund()`, which no bank rule or limit can refuse |
+| Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
 
 ## Project structure
 

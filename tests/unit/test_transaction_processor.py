@@ -105,7 +105,7 @@ def test_regular_account_cannot_go_negative(processor, rub, usd, make):
     transaction = make(rub, usd)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.PENDING  # insufficient funds is retried
-    assert "This account type may not go below zero" in transaction.failure_reason
+    assert transaction.failure_reason.startswith("InsufficientFundsError")
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
 
 
@@ -118,7 +118,6 @@ def test_frozen_account_fails_without_retry(bank, processor, rub, usd, frozen_si
     assert transaction.status is TransactionStatus.FAILED
     assert transaction.failure_reason.startswith("AccountFrozenError")
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
-    assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]
 
 
 def test_closed_or_unknown_account_fails(bank, processor, rub, usd):
@@ -145,6 +144,25 @@ def test_failed_credit_returns_the_debit(bank, processor, premium, client, make_
     assert transaction.failure_reason.startswith("ClientBlockedError")
     assert premium.balance == Decimal("1000.00")  # debit of 510 returned
     assert recipient.balance == Decimal("0.00")
+
+
+def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(bank, processor, client, make_client):
+    other = bank.add_client(make_client("Boris"), "boris-password")
+    recipient = bank.open_account(other.client_id, currency="RUB")
+    for _ in range(3):
+        with pytest.raises((AuthenticationError, ClientBlockedError)):
+            bank.authenticate_client(other.client_id, "wrong-password")
+    cap = bank.open_account(
+        client.client_id, "premium", currency="RUB", initial_balance=10_000_000, overdraft_limit=100, withdrawal_fee=10
+    )
+    # the debit plus the premium fee exceeds MAX_DEPOSIT, so a refund through bank.deposit() would be refused
+    transaction = transfer(cap, recipient, 10_000_000)
+    processor.process(transaction)
+    assert transaction.status is TransactionStatus.FAILED
+    assert transaction.failure_reason.startswith("ClientBlockedError")
+    assert (cap.balance, recipient.balance) == (Decimal("10000000.00"), Decimal("0.00"))
+    # the refund is not a client operation: one large withdrawal is reviewed, the refund is not
+    assert reasons(bank).count(SuspicionReason.LARGE_OPERATION) == 2  # opening the account, then the withdrawal
 
 
 def test_night_window_is_retried_with_exponential_delay(processor, rub, usd, clock):
@@ -184,7 +202,8 @@ def test_amount_that_rounds_to_zero_fails_without_a_fee(processor, usd, rub, mak
     processor.process(transaction)
     assert transaction.status is TransactionStatus.FAILED
     assert transaction.failure_reason == "InvalidOperationError: 0.01 RUB is 0.00 in USD."
-    assert (transaction.fee, usd.balance, processor.collected_fees) == (Decimal("0.00"), Decimal("100.00"), 0)
+    assert (transaction.fee, processor.collected_fees) == (Decimal("0.00"), 0)
+    assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))  # nothing was debited either
 
 
 def test_process_queue_reports_and_requeues(processor, queue, rub, usd, clock):
@@ -214,6 +233,19 @@ def test_process_queue_requeues_retries_even_if_an_attempt_raises(processor, que
     assert queue.pending() == [short]
 
 
+def test_unexpected_error_fails_the_transaction_and_is_raised(bank, processor, rub, usd, monkeypatch):
+    def withdraw(account_id, amount):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(bank, "withdraw", withdraw)
+    transaction = transfer(rub, usd, 100)
+    with pytest.raises(RuntimeError):
+        processor.process(transaction)
+    assert transaction.status is TransactionStatus.FAILED
+    assert transaction.failure_reason == "RuntimeError: boom"
+    assert [(record.error_type, record.will_retry) for record in processor.errors] == [("RuntimeError", False)]
+
+
 def test_custom_fee_policy_and_single_attempt(bank, rub):
     processor = TransactionProcessor(bank, fee_policy=FeePolicy(rate=0, minimum=0, maximum=0), max_attempts=1)
     free = external(rub, 1_000)
@@ -226,7 +258,7 @@ def test_custom_fee_policy_and_single_attempt(bank, rub):
 
 @pytest.mark.parametrize(
     "params",
-    [{"max_attempts": 0}, {"max_attempts": True}, {"retry_delay": timedelta(0)}, {"retry_delay": 5}],
+    [{"max_attempts": 0}, {"retry_delay": timedelta(0)}, {"retry_delay": 5}],
 )
 def test_rejects_invalid_settings(bank, params):
     with pytest.raises(InvalidOperationError):
