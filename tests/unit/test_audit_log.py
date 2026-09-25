@@ -173,3 +173,15 @@ def test_failed_file_write_keeps_nothing_in_memory(tmp_path):
 def test_events_are_hashable_by_value(filled):
     assert len(set(filled.events + filled.events)) == 4
     assert {AuditEvent.from_dict(event.to_dict()) for event in filled.events} == set(filled.events)
+
+
+@pytest.mark.parametrize(
+    "line", ["not json", '{"level": "INFO"}', '{"timestamp": "2026-09-24T14:00:00", "level": "LOUD"}', "[1, 2]"]
+)
+def test_load_events_names_the_damaged_line(tmp_path, line):
+    path = tmp_path / "audit.jsonl"
+    AuditLog(path).record("info", "risk", "risk_assessed", "fine", timestamp=NOW)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(line + "\n")
+    with pytest.raises(InvalidOperationError, match="line 2"):
+        AuditLog.load_events(path)

@@ -4,8 +4,8 @@ from collections import Counter
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from exceptions import InvalidOperationError, RiskBlockedError
-from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog, TransactionEvent
+from exceptions import InvalidOperationError
+from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog, RiskEvent, TransactionEvent
 from services.risk import RiskAnalyzer, RiskAssessment, RiskLevel
 from utils import to_enum
 
@@ -70,6 +70,9 @@ class ErrorStatistics:
 
     ``failure_rate`` is the share of finished transactions that failed, in
     percent: final failures / (completed + final failures).
+    ``blocked_by_risk`` counts the ``operation_blocked`` events, so a
+    refusal by ``bank.screen()`` is counted whether or not the processor
+    was involved.
     """
 
     events_by_level: dict[AuditLevel, int]
@@ -155,6 +158,6 @@ class AuditReport:
             retried=retried,
             final_failures=final_failures,
             completed=completed,
-            blocked_by_risk=errors_by_type.get(RiskBlockedError.__name__, 0),
+            blocked_by_risk=sum(1 for event in events if event.event == RiskEvent.BLOCKED.value),
             failure_rate=rate.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP),
         )

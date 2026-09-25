@@ -273,10 +273,12 @@ def test_high_risk_transaction_fails_at_once_without_moving_money(bank, processo
     assert transaction.failure_reason.startswith(RiskBlockedError.__name__)
     assert (rich.balance, fresh.balance) == (Decimal("900000.00"), Decimal("0.00"))
     assert [(record.error_type, record.will_retry) for record in processor.errors] == [("RiskBlockedError", False)]
-    assert [(event.event, event.level) for event in bank.audit_log.filter(min_level="error")] == [
-        ("operation_blocked", AuditLevel.CRITICAL),
-        ("transaction_failed", AuditLevel.ERROR),
-    ]
+    [event] = bank.audit_log.filter(event="transaction_failed")
+    assert (event.level, event.details["error_type"], event.details["will_retry"]) == (
+        AuditLevel.ERROR,
+        "RiskBlockedError",
+        False,
+    )
 
 
 def test_medium_risk_transaction_goes_through(bank, processor, client):

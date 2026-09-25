@@ -248,9 +248,10 @@ class RiskAnalyzer:
     ``HIGH`` from ``high_threshold``. A new check is a new ``RiskRule``
     passed in ``rules`` - the analyzer itself does not change.
 
-    The analyzer only assesses; the bank decides what to do with the
-    result. ``record_completed()`` tells it which transfers went through, so
-    their recipients stop being new for that sender.
+    The analyzer moves no money and refuses nothing: an assessment marked
+    ``blocked`` is a verdict, and the bank acts on it in ``screen()``.
+    ``record_completed()`` tells the analyzer which transfers went through,
+    so their recipients stop being new for that sender.
     """
 
     def __init__(

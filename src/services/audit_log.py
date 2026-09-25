@@ -247,6 +247,18 @@ class AuditLog:
 
     @staticmethod
     def load_events(file_path: str | Path) -> list[AuditEvent]:
-        """Read every event from a JSON Lines audit file, skipping blank lines."""
+        """Read every event from a JSON Lines audit file, skipping blank lines.
+
+        A line that is not a valid event raises ``InvalidOperationError``
+        naming the line, so a damaged file is reported, not half-read.
+        """
+        events = []
         with Path(file_path).open(encoding="utf-8") as file:
-            return [AuditEvent.from_dict(json.loads(line)) for line in file if line.strip()]
+            for number, line in enumerate(file, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    events.append(AuditEvent.from_dict(json.loads(line)))
+                except (ValueError, KeyError, TypeError) as error:
+                    raise InvalidOperationError(f"{file_path}, line {number}: not an audit event ({error}).") from error
+        return events

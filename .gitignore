@@ -57,8 +57,6 @@ cover/
 
 # Django stuff:
 *.log
-# Audit log written by the demo
-logs/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -218,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Audit log written by the demo
+logs/
