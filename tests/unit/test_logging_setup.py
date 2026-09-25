@@ -36,8 +36,8 @@ def test_json_line_has_the_standard_keys_and_the_fields():
     payload = json.loads(JsonFormatter().format(record))
     assert list(payload)[:4] == ["logged_at", "level", "logger", "message"]
     assert datetime.fromisoformat(payload["logged_at"]).tzinfo is not None
+    # the field named "level" is dropped: a field cannot overwrite a standard key
     assert (payload["level"], payload["logger"], payload["message"]) == ("INFO", "bank.test", "attempt started")
-    # a field cannot overwrite a standard key
     assert payload["event_time"] == "2026-09-25T02:30:00"
     assert (payload["transaction_id"], payload["details"]) == ("T-1", {"attempt": 2})
 

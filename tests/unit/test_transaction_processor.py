@@ -403,17 +403,21 @@ def test_completed_transfer_makes_the_recipient_known(bank, processor, client, c
     assert (first.rules, second.rules) == (("new_recipient",), ())
 
 
-@pytest.fixture
-def failing_audit_log(bank, monkeypatch):
-    """The bank's audit log refuses to record a failed attempt, as if the disk were full."""
+def break_audit_log(bank, monkeypatch, *events: str) -> None:
+    """Make the bank's audit log refuse to record ``events``, as if the disk were full."""
     record = bank.audit_log.record
 
     def broken(level, category, event, *args, **kwargs):
-        if event == "transaction_failed":
+        if event in events:
             raise OSError("disk full")
         return record(level, category, event, *args, **kwargs)
 
     monkeypatch.setattr(bank.audit_log, "record", broken)
+
+
+@pytest.fixture
+def failing_audit_log(bank, monkeypatch):
+    break_audit_log(bank, monkeypatch, "transaction_failed")
 
 
 def test_failed_attempt_is_finished_even_if_the_audit_write_fails(processor, rub, usd, failing_audit_log):
@@ -432,26 +436,12 @@ def test_final_failure_enters_the_history_even_if_the_audit_write_fails(bank, ru
     assert bank.history.transactions() == [short]
 
 
-def test_process_queue_keeps_a_retry_when_its_audit_write_fails(processor, queue, rub, usd, failing_audit_log):
+@pytest.mark.parametrize("journaled", [False, True], ids=["plain queue", "journaled queue"])
+def test_process_queue_keeps_a_retry_when_the_audit_write_fails(bank, processor, rub, usd, monkeypatch, journaled):
+    queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log if journaled else None)
     short = queue.add(transfer(rub, usd, 50_000))
-    with pytest.raises(OSError):
-        processor.process_queue(queue)
-    assert short.status is TransactionStatus.PENDING
-    assert queue.pending() == [short]
-
-
-def test_journaled_queue_keeps_a_retry_when_the_audit_log_is_broken(bank, processor, rub, usd, monkeypatch):
-    queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
-    short = queue.add(transfer(rub, usd, 50_000))
-    record = bank.audit_log.record
-
-    def broken(level, category, event, *args, **kwargs):
-        # neither the failed attempt nor the retry coming back can be recorded
-        if event in ("transaction_failed", "transaction_queued"):
-            raise OSError("disk full")
-        return record(level, category, event, *args, **kwargs)
-
-    monkeypatch.setattr(bank.audit_log, "record", broken)
+    # neither the failed attempt nor the retry coming back can be recorded
+    break_audit_log(bank, monkeypatch, "transaction_failed", "transaction_queued")
     with pytest.raises(OSError):
         processor.process_queue(queue)
     assert short.status is TransactionStatus.PENDING
