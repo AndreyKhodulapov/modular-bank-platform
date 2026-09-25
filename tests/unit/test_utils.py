@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from exceptions import InvalidOperationError
-from models import AccountStatus, Currency
+from models import AccountStatus, Currency, TransactionPriority
 from utils import ManualClock, resolve_identifier, to_enum, to_money, to_positive_decimal, to_rate
 
 
@@ -103,15 +103,18 @@ def test_resolve_identifier_rejects_invalid_value(value):
         (Currency, Currency.USD, Currency.USD),
         (Currency, "usd", Currency.USD),
         (AccountStatus, "FROZEN", AccountStatus.FROZEN),
+        (TransactionPriority, "Urgent", TransactionPriority.URGENT),  # numeric values: matched by name
     ],
 )
-def test_to_enum_accepts_member_or_value_in_any_case(enum_type, value, expected):
+def test_to_enum_accepts_member_value_or_name_in_any_case(enum_type, value, expected):
     assert to_enum(enum_type, value, field="x") is expected
 
 
 def test_to_enum_rejects_unknown_value_and_lists_allowed():
     with pytest.raises(InvalidOperationError, match="Unsupported currency 'GBP'; allowed: RUB, USD"):
         to_enum(Currency, "GBP", field="currency")
+    with pytest.raises(InvalidOperationError, match="allowed: low, normal, high, urgent"):
+        to_enum(TransactionPriority, "asap", field="priority")
 
 
 def test_to_positive_decimal_keeps_precision():

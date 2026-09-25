@@ -8,25 +8,6 @@ from exceptions import InvalidOperationError, InvalidTransactionStateError
 from models.enums import Currency, TransactionPriority, TransactionStatus, TransactionType
 from utils import resolve_identifier, to_enum, to_money
 
-# which parties each transaction type needs: (sender, recipient)
-_PARTIES: dict[TransactionType, tuple[bool, bool]] = {
-    TransactionType.DEPOSIT: (False, True),
-    TransactionType.WITHDRAWAL: (True, False),
-    TransactionType.TRANSFER: (True, True),
-    TransactionType.EXTERNAL_TRANSFER: (True, True),
-}
-
-# the status machine: every allowed move from one status to the next
-_TRANSITIONS: dict[TransactionStatus, frozenset[TransactionStatus]] = {
-    TransactionStatus.PENDING: frozenset({TransactionStatus.PROCESSING, TransactionStatus.CANCELLED}),
-    TransactionStatus.PROCESSING: frozenset(
-        {TransactionStatus.COMPLETED, TransactionStatus.FAILED, TransactionStatus.PENDING}
-    ),
-    TransactionStatus.COMPLETED: frozenset(),
-    TransactionStatus.FAILED: frozenset(),
-    TransactionStatus.CANCELLED: frozenset(),
-}
-
 
 class Transaction:
     """A single money movement between accounts.
@@ -49,6 +30,24 @@ class Transaction:
     soon as possible.
     """
 
+    # which parties each transaction type needs: (sender, recipient)
+    PARTIES: dict[TransactionType, tuple[bool, bool]] = {
+        TransactionType.DEPOSIT: (False, True),
+        TransactionType.WITHDRAWAL: (True, False),
+        TransactionType.TRANSFER: (True, True),
+        TransactionType.EXTERNAL_TRANSFER: (True, True),
+    }
+    # the status machine: every allowed move from one status to the next
+    TRANSITIONS: dict[TransactionStatus, frozenset[TransactionStatus]] = {
+        TransactionStatus.PENDING: frozenset({TransactionStatus.PROCESSING, TransactionStatus.CANCELLED}),
+        TransactionStatus.PROCESSING: frozenset(
+            {TransactionStatus.COMPLETED, TransactionStatus.FAILED, TransactionStatus.PENDING}
+        ),
+        TransactionStatus.COMPLETED: frozenset(),
+        TransactionStatus.FAILED: frozenset(),
+        TransactionStatus.CANCELLED: frozenset(),
+    }
+
     def __init__(
         self,
         transaction_type: TransactionType | str,
@@ -66,7 +65,7 @@ class Transaction:
         self._type = to_enum(TransactionType, transaction_type, field="transaction type")
         self._amount = to_money(amount, require="positive")
         self._currency = to_enum(Currency, currency, field="currency")
-        self._priority = self._resolve_priority(priority)
+        self._priority = to_enum(TransactionPriority, priority, field="priority")
         self._sender_id, self._recipient_id = self._validate_parties(self._type, sender_id, recipient_id)
 
         self._created_at = self._validate_moment(created_at if created_at is not None else datetime.now(), "created_at")
@@ -82,21 +81,10 @@ class Transaction:
         self._credited_amount: Decimal | None = None
 
     @staticmethod
-    def _resolve_priority(priority: TransactionPriority | str) -> TransactionPriority:
-        # priorities are ints internally, so strings are matched by member name ("high")
-        if isinstance(priority, TransactionPriority):
-            return priority
-        try:
-            return TransactionPriority[str(priority).upper()]
-        except KeyError:
-            allowed = ", ".join(member.name.lower() for member in TransactionPriority)
-            raise InvalidOperationError(f"Unsupported priority {priority!r}; allowed: {allowed}.") from None
-
-    @staticmethod
     def _validate_parties(
         transaction_type: TransactionType, sender_id: str | None, recipient_id: str | None
     ) -> tuple[str | None, str | None]:
-        needs_sender, needs_recipient = _PARTIES[transaction_type]
+        needs_sender, needs_recipient = Transaction.PARTIES[transaction_type]
 
         def party(field: str, value: str | None, needed: bool) -> str | None:
             if needed and value is None:
@@ -194,7 +182,7 @@ class Transaction:
 
     @property
     def is_final(self) -> bool:
-        return not _TRANSITIONS[self._status]
+        return not self.TRANSITIONS[self._status]
 
     def is_due(self, now: datetime) -> bool:
         return self._scheduled_at is None or self._scheduled_at <= now
@@ -202,12 +190,13 @@ class Transaction:
     # status transitions
 
     def _move_to(self, target: TransactionStatus, at: datetime) -> None:
-        if target not in _TRANSITIONS[self._status]:
+        moment = self._validate_moment(at, "at")
+        if target not in self.TRANSITIONS[self._status]:
             raise InvalidTransactionStateError(self._transaction_id, self._status.value, target.value)
         self._status = target
-        self._updated_at = self._validate_moment(at, "at")
+        self._updated_at = moment
         if self.is_final:
-            self._finished_at = at
+            self._finished_at = moment
 
     def start(self, at: datetime) -> None:
         """Begin an attempt: PENDING -> PROCESSING."""
@@ -229,9 +218,10 @@ class Transaction:
 
     def retry(self, reason: str, at: datetime, next_attempt_at: datetime) -> None:
         """Put the transaction back to PENDING and delay the next attempt."""
+        next_attempt = self._validate_moment(next_attempt_at, "next_attempt_at")
         self._move_to(TransactionStatus.PENDING, at)
         self._failure_reason = reason
-        self._scheduled_at = self._validate_moment(next_attempt_at, "next_attempt_at")
+        self._scheduled_at = next_attempt
 
     def cancel(self, at: datetime) -> None:
         self._move_to(TransactionStatus.CANCELLED, at)

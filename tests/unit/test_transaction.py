@@ -28,10 +28,6 @@ def test_new_transaction_is_pending_with_normalised_fields():
     assert len(transaction.transaction_id) == 36
 
 
-def test_priority_accepts_member_name_in_any_case():
-    assert make_transfer(priority="Urgent").priority is TransactionPriority.URGENT
-
-
 @pytest.mark.parametrize(
     ("transaction_type", "sender_id", "recipient_id"),
     [
@@ -132,12 +128,24 @@ def test_illegal_transitions_are_rejected(illegal_move):
         illegal_move(transaction)
 
 
-def test_is_due_without_schedule():
-    assert make_transfer().is_due(CREATED)
+def test_invalid_moment_leaves_the_state_untouched():
+    transaction = make_transfer()
+    with pytest.raises(InvalidOperationError):
+        transaction.start("soon")
+    assert (transaction.status, transaction.attempts, transaction.updated_at) == (
+        TransactionStatus.PENDING,
+        0,
+        CREATED,
+    )
+    transaction.start(LATER)
+    with pytest.raises(InvalidOperationError):
+        transaction.retry("x", LATER, "tomorrow")
+    assert (transaction.status, transaction.scheduled_at) == (TransactionStatus.PROCESSING, None)
 
 
 def test_to_dict_and_str():
-    transaction = make_transfer(scheduled_at=LATER, priority=TransactionPriority.HIGH)
+    transaction = make_transfer(scheduled_at=LATER, priority="High")
+    assert transaction.priority is TransactionPriority.HIGH
     info = transaction.to_dict()
     assert info["type"] == "transfer"
     assert info["amount"] == "100.01"

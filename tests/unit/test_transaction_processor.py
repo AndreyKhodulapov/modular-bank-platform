@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, InvalidTransactionStateError
+from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError
 from models import Transaction, TransactionStatus
 from services import FeePolicy, SuspicionReason, TransactionProcessor
 from tests.helpers import reasons
@@ -105,7 +105,7 @@ def test_regular_account_cannot_go_negative(processor, rub, usd, make):
     transaction = make(rub, usd)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.PENDING  # insufficient funds is retried
-    assert "Only premium accounts may go below zero" in transaction.failure_reason
+    assert "This account type may not go below zero" in transaction.failure_reason
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
 
 
@@ -178,11 +178,13 @@ def test_retry_succeeds_once_money_arrives(bank, processor, rub, usd, clock):
     assert rub.balance == Decimal("3000.00")
 
 
-def test_invalid_amount_after_conversion_fails_at_once(processor, rub, usd):
-    transaction = transfer(rub, usd, "0.01")  # 0.01 RUB is 0.00 USD
+@pytest.mark.parametrize("make", [lambda s, r: transfer(r, s, "0.01"), lambda s, r: external(s, "0.01")])
+def test_amount_that_rounds_to_zero_fails_without_a_fee(processor, usd, rub, make):
+    transaction = make(usd, rub)  # 0.01 RUB is 0.00 USD
     processor.process(transaction)
     assert transaction.status is TransactionStatus.FAILED
-    assert transaction.failure_reason.startswith("InvalidOperationError")
+    assert transaction.failure_reason == "InvalidOperationError: 0.01 RUB is 0.00 in USD."
+    assert (transaction.fee, usd.balance, processor.collected_fees) == (Decimal("0.00"), Decimal("100.00"), 0)
 
 
 def test_process_queue_reports_and_requeues(processor, queue, rub, usd, clock):
@@ -196,11 +198,20 @@ def test_process_queue_reports_and_requeues(processor, queue, rub, usd, clock):
     assert processor.process_queue(queue).rescheduled == [short]
 
 
-def test_cannot_process_a_finished_transaction(processor, rub, usd):
-    transaction = transfer(rub, usd, 900)
-    processor.process(transaction)
-    with pytest.raises(InvalidTransactionStateError):
-        processor.process(transaction)
+def test_process_queue_requeues_retries_even_if_an_attempt_raises(processor, queue, rub, usd, monkeypatch):
+    short = queue.add(transfer(rub, usd, 50_000, priority="high"))
+    queue.add(transfer(rub, usd, 900))
+    original = processor.process
+
+    def process(transaction):
+        if transaction is not short:
+            raise RuntimeError("boom")
+        return original(transaction)
+
+    monkeypatch.setattr(processor, "process", process)
+    with pytest.raises(RuntimeError):
+        processor.process_queue(queue)
+    assert queue.pending() == [short]
 
 
 def test_custom_fee_policy_and_single_attempt(bank, rub):

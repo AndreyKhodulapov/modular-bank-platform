@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from models import Transaction, TransactionStatus
 from services import SuspicionReason
+from tests.helpers import reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
 
@@ -87,4 +88,4 @@ def test_ten_transactions_through_the_queue(bank, clock, queue, processor, make_
         (too_big.transaction_id, True),
         (too_big.transaction_id, False),
     ]
-    assert [activity.reason for activity in bank.suspicious_activities] == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]
+    assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]

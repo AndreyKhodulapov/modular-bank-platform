@@ -27,6 +27,10 @@ class TransactionQueue:
     Cancellation is lazy. ``cancel()`` marks the transaction cancelled and
     forgets it; its heap entry stays and is skipped when it surfaces, which
     keeps cancel at O(1) instead of rebuilding the heap.
+
+    A waiting transaction is expected to stay ``PENDING``. One whose status
+    was changed elsewhere (cancelled or processed outside the queue) is
+    dropped when it surfaces instead of being handed out.
     """
 
     def __init__(self, clock: Callable[[], datetime] = datetime.now) -> None:
@@ -79,9 +83,12 @@ class TransactionQueue:
         self._promote_due(self._clock())
         while self._ready:
             _, sequence, transaction_id = heapq.heappop(self._ready)
-            if self._is_live(transaction_id, sequence):
-                del self._queued[transaction_id]
-                return self._transactions[transaction_id]
+            if not self._is_live(transaction_id, sequence):
+                continue
+            del self._queued[transaction_id]
+            transaction = self._transactions[transaction_id]
+            if transaction.status is TransactionStatus.PENDING:
+                return transaction
         return None
 
     def cancel(self, transaction_id: str) -> Transaction:
@@ -92,8 +99,9 @@ class TransactionQueue:
             raise InvalidOperationError(
                 f"Transaction {transaction_id} is no longer waiting in the queue ({transaction.status.value})."
             )
-        transaction.cancel(self._clock())
+        # forget the entry first: whatever cancel() says, this transaction must not be handed out
         del self._queued[transaction_id]
+        transaction.cancel(self._clock())
         return transaction
 
     def get(self, transaction_id: str) -> Transaction:

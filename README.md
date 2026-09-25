@@ -114,7 +114,7 @@ Processing rules:
 | Negative balance | refused for every account type except premium (`ALLOWS_NEGATIVE_BALANCE`), which may use its overdraft |
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
-| Atomic transfer | all checks run before any money moves; if crediting fails after the debit, the debit is returned |
+| Atomic transfer | the processor's checks run before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is returned |
 | Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other errors fail at once |
 
 ## Project structure

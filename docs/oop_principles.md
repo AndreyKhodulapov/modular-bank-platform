@@ -206,8 +206,9 @@ amounts and enum members are values: two equal amounts are interchangeable.
   instead, `cancel()` only marks the transaction and forgets its entry, and
   stale entries are skipped when they reach the top.
 - **Atomicity and compensation.** A transfer has two steps (debit, credit)
-  and must not stop halfway. All checks run before money moves; if the
-  credit still fails, a compensating operation returns the debit. This is
+  and must not stop halfway. The processor's own checks run before money
+  moves; if the bank still refuses the credit, a compensating operation
+  returns the debit. This is
   the idea behind the Saga pattern for operations that span several
   services, where one database transaction is not available.
 - **Retries with exponential backoff.** Only temporary errors are retried

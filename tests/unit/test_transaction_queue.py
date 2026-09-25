@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from exceptions import InvalidOperationError, TransactionNotFoundError
+from exceptions import InvalidOperationError, InvalidTransactionStateError, TransactionNotFoundError
 from models import Transaction, TransactionPriority, TransactionStatus
 from services import TransactionQueue
 
@@ -103,6 +103,17 @@ def test_a_retried_transaction_can_be_queued_again(queue, clock):
     assert queue.next_ready() is transaction
 
 
-def test_empty_queue_returns_none(queue):
-    assert queue.next_ready() is None
-    assert queue.pending() == []
+def test_transaction_cancelled_outside_the_queue_is_dropped(queue):
+    cancelled = queue.add(deposit("a"))
+    queue.add(deposit("b"))
+    cancelled.cancel(NOW)
+    assert drain(queue) == ["b"]
+    assert len(queue) == 0
+
+
+def test_cancel_forgets_a_transaction_that_changed_status_elsewhere(queue):
+    transaction = queue.add(deposit("a"))
+    transaction.cancel(NOW)
+    with pytest.raises(InvalidTransactionStateError):
+        queue.cancel(transaction.transaction_id)
+    assert len(queue) == 0

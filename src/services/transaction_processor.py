@@ -50,8 +50,10 @@ class TransactionProcessor:
     - keeps a transfer atomic: if crediting the recipient fails after the
       sender was debited, the debit is returned (a compensating operation).
 
-    Checks run before any money moves, so a refused transaction changes no
-    balance. Errors in ``RETRYABLE_ERRORS`` are temporary - the night window
+    These checks run before any money moves. The bank's own checks on the
+    recipient (a blocked owner, the deposit limit) can still refuse the credit
+    after the debit; the compensation then leaves both balances as they were.
+    Errors in ``RETRYABLE_ERRORS`` are temporary - the night window
     ends, money may arrive - so the transaction goes back to the queue with an
     exponential delay (``retry_delay``, then twice as long, ...) until
     ``max_attempts`` is used up. Any other ``BankError`` fails it at once.
@@ -98,12 +100,15 @@ class TransactionProcessor:
             TransactionStatus.FAILED: report.failed,
             TransactionStatus.PENDING: report.rescheduled,
         }
-        while (transaction := queue.next_ready()) is not None:
-            self.process(transaction)
-            outcome[transaction.status].append(transaction)
-        # re-queued after the loop so a short delay cannot make one run retry the same transaction forever
-        for transaction in report.rescheduled:
-            queue.add(transaction)
+        # one run makes one attempt per transaction, so retries return to the queue after the loop;
+        # `finally` gets them back even if an attempt raises halfway through the run
+        try:
+            while (transaction := queue.next_ready()) is not None:
+                self.process(transaction)
+                outcome[transaction.status].append(transaction)
+        finally:
+            for transaction in report.rescheduled:
+                queue.add(transaction)
         return report
 
     def process(self, transaction: Transaction) -> Transaction:
@@ -135,7 +140,7 @@ class TransactionProcessor:
         fee = Decimal("0.00")
         debited = credited = None
         if sender is not None:
-            debit = converter.convert(transaction.amount, transaction.currency, sender.currency)
+            debit = self._convert_for(transaction, sender)
             fee = self._fee_policy.calculate(transaction.transaction_type, debit, sender.currency, converter)
             self._ensure_no_negative_balance(sender, debit, fee)
             before = sender.balance
@@ -144,12 +149,12 @@ class TransactionProcessor:
             debited = before - sender.balance
 
         if recipient is not None:
-            credit = converter.convert(transaction.amount, transaction.currency, recipient.currency)
+            credit = self._convert_for(transaction, recipient)
             try:
                 self._bank.deposit(recipient.account_id, credit)
             except BankError:
                 if sender is not None:
-                    self._bank.deposit(sender.account_id, debited)  # compensation: undo the debit
+                    self._bank.deposit(sender.account_id, debited)
                 raise
             credited = credit
 
@@ -157,11 +162,20 @@ class TransactionProcessor:
             self._collected_fees += converter.to_base(fee, sender.currency)
         return fee, debited, credited
 
+    def _convert_for(self, transaction: Transaction, account: BankAccount) -> Decimal:
+        """The transaction amount in the account's currency; refuse one that rounds away to nothing."""
+        value = self._bank.converter.convert(transaction.amount, transaction.currency, account.currency)
+        if value <= 0:
+            raise InvalidOperationError(
+                f"{transaction.amount} {transaction.currency.value} is {value} in {account.currency.value}."
+            )
+        return value
+
     @staticmethod
     def _ensure_no_negative_balance(account: BankAccount, debit: Decimal, fee: Decimal) -> None:
         if account.ALLOWS_NEGATIVE_BALANCE or debit + fee <= account.balance:
             return
-        hint = "Only premium accounts may go below zero."
+        hint = "This account type may not go below zero."
         if fee:
             hint = f"{hint} The fee {fee} is charged on top."
         raise InsufficientFundsError(requested=debit, available=max(account.balance - fee, Decimal("0.00")), hint=hint)
