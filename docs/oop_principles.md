@@ -41,7 +41,7 @@ types.
 `get_account_info()` and `__str__()`. The same `withdraw(100)` call empties a
 regular account, is refused by a savings account that must keep its minimum,
 charges a fee and dips into overdraft on a premium account, and only spends
-free cash on an investment account. The demo's summary and the integration
+free cash on an investment account. The feature tour's summary and the integration
 test iterate over a `list[AbstractAccount]` without checking concrete types.
 Subclasses extend rather than replace behaviour: `get_account_info()` and
 `__str__()` call `super()` and append their own fields. The same
@@ -365,6 +365,29 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   catches patterns nobody wrote a rule for. Here the ML part would simply be
   another `RiskRule` that returns a model's score.
 
+## Reporting
+
+- **Reports are read-only views.** `BankReport` and `AuditReport` keep no
+  state of their own: every call reads the bank, the history and the audit
+  log as they are now, so a report can never drift from the data. This is
+  the read side of command/query separation: operations change the state,
+  reports only query it.
+- **Data first, format second.** A report returns an immutable dataclass
+  (`TransactionStatistics`, `ClientRanking`, `BalanceSummary`) and `str()`
+  is just one way to show it. The same object can be exported to JSON or
+  CSV or drawn as a chart without computing anything again (Single
+  Responsibility: computing and presenting are separate jobs). `frozen=True`
+  alone would still let the dicts inside change, so they are wrapped in
+  read-only `MappingProxyType` views.
+- **One currency for totals.** Amounts in different currencies cannot be
+  added, so every total is converted into the base currency at the bank's
+  rates; a tariff fee is converted from the sender's currency, in which it
+  was charged.
+- **Each fact from its source.** Finished transactions come from the
+  history, cancellations from the audit log (a cancelled transaction never
+  ran, so the history does not have it), blocked ones from the risk
+  analyzer. Nothing is counted twice.
+
 ## Preparing modules for unit testing
 
 Designing code so that each unit can be verified in isolation: small pure
@@ -381,6 +404,6 @@ dependencies: tests build `SecurityGuard(clock=ManualClock(...))` and move the
 clock to 00:00, 04:59:59 or 05:00 to check the night window exactly, and pass
 their own rates to `CurrencyConverter`. Tests are split into `tests/unit/`
 (one module per model, service or helper) and `tests/integration/` (cross-type,
-bank, transaction and risk scenarios and a smoke test of the demo). The audit
+bank, transaction and risk scenarios and smoke tests of both programs). The audit
 file is tested in pytest's `tmp_path`, and the analyzer is tested apart from
 the real rules with a stub rule that always returns a fixed score.

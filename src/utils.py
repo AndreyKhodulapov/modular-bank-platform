@@ -109,6 +109,13 @@ def to_enum[E: Enum](enum_type: type[E], value: E | str, *, field: str) -> E:
     raise InvalidOperationError(f"Unsupported {field} {value!r}; allowed: {allowed}.")
 
 
+def to_positive_int(value: object, *, field: str) -> int:
+    """Return ``value`` if it is an integer greater than zero (``True`` is not one)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise InvalidOperationError(f"{field} must be a positive integer; got {value!r}.")
+    return value
+
+
 def to_positive_decimal(value: object, *, field: str) -> Decimal:
     """Convert a numeric input into a ``Decimal`` greater than zero, keeping its precision."""
     number = _to_decimal(value, field)

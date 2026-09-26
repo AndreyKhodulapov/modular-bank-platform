@@ -73,8 +73,8 @@ Known limitations:
 - `invest()`, `divest()` and `apply_monthly_interest()` are not part of
   `Bank` and are called on the account itself, so the night window,
   blocking and the suspicious activity log do not cover them, and the
-  transaction history has no movement for them. The bank demo invests on
-  Oleg's account this way.
+  transaction history has no movement for them. The feature tour invests
+  on Oleg's account this way.
 
 ### Transactions
 
@@ -111,7 +111,7 @@ Known limitations:
   and retries are then measured by the same time, and the queue's events
   go to the bank's journal. Without them the queue uses the wall clock (as
   does `Transaction` for a `created_at` that is not passed in) and records
-  nothing. The demo passes both; the tests pass the clock and add the
+  nothing. The programs pass both; the tests pass the clock and add the
   journal where they check it.
 - `FeePolicy` - the tariff: external transfers pay 1% of the amount, at
   least 50 and at most 5 000 RUB (converted into the sender's currency);
@@ -223,6 +223,39 @@ for movement in bank.history.movements(account.account_id):
     transactions risk control blocked.
 - Domain exception: `RiskBlockedError` (carries the score and the factors).
 
+### Bank reports
+
+`BankReport(bank)` builds reports from the bank's current state; it keeps
+nothing of its own. Every amount is in roubles, converted at the bank's
+rates. Each report is an immutable dataclass (its mappings are read-only)
+whose `str()` is the printed form:
+
+- `transaction_statistics()` - transactions by status and by type; the
+  volume, average and largest completed transaction; the tariff fees
+  collected (charged in the sender's currency, converted); how many
+  transactions risk control blocked and the failure rate (the share of
+  the finished transactions, cancelled ones never ran). Completed and
+  failed transactions come from the history, cancelled ones from the
+  bank's audit log, so they are counted only when the queue is given that
+  log (`TransactionQueue(clock=bank.now, audit_log=bank.audit_log)`). The
+  tariff fees are those of `FeePolicy`; a premium account's own withdrawal
+  fee is a term of the account and stays inside the debited amount.
+- `top_clients(limit=3)` - the richest clients by the total value of their
+  accounts.
+- `total_balance()` - everything the bank holds, in roubles and by
+  currency, and how many open (active or frozen) accounts hold it; closed
+  accounts are left out.
+
+```python
+report = BankReport(bank)
+print(report.transaction_statistics())
+# Transactions: 40 (completed 31, failed 8, cancelled 1)
+#   by type: deposit 5, withdrawal 7, transfer 25, external_transfer 2
+#   failure rate 20.5% of 39 finished, blocked by risk control 2
+#   volume 1839899.00 RUB, average 59351.58 RUB, largest 7000.00 USD (transfer)
+#   tariff fees collected 450.00 RUB
+```
+
 ## Project structure
 
 ```
@@ -232,7 +265,8 @@ modular-bank-platform/
 ├── requirements.txt        # runtime dependencies (none, stdlib only)
 ├── requirements-dev.txt    # pytest, ruff
 ├── src/
-│   ├── main.py             # demonstration script, one function per stage
+│   ├── main.py             # the program: one day of the bank, from salaries to reports
+│   ├── legacy_demo.py      # feature tour, one function per stage
 │   ├── settings.py         # Settings read from environment variables
 │   ├── logging_setup.py    # application logging: console and JSON Lines formatters
 │   ├── exceptions.py       # custom exception hierarchy
@@ -247,7 +281,8 @@ modular-bank-platform/
 │   │   ├── transaction_history.py    # TransactionHistory, BalanceMovement, MovementKind
 │   │   ├── audit_log.py    # AuditLog, AuditEvent, AuditLevel, AuditCategory
 │   │   ├── risk.py         # RiskAnalyzer, risk rules, RiskAssessment, RiskLevel
-│   │   └── audit_report.py # AuditReport and its three reports
+│   │   ├── audit_report.py # AuditReport and its three reports
+│   │   └── bank_report.py  # BankReport: transaction statistics, top clients, total balance
 │   └── models/
 │       ├── account.py             # AbstractAccount, BankAccount
 │       ├── savings_account.py     # SavingsAccount
@@ -260,10 +295,10 @@ modular-bank-platform/
 ├── tests/
 │   ├── conftest.py         # shared fixtures
 │   ├── unit/               # one module per model, service or helper
-│   └── integration/        # account, bank, transaction and risk scenarios, demo smoke test
+│   └── integration/        # account, bank, transaction and risk scenarios, smoke tests of the programs
 ├── docs/
 │   └── oop_principles.md   # interview-style notes on OOP, patterns, security
-└── logs/                   # created by the demo, ignored by git
+└── logs/                   # created by the programs, ignored by git
     ├── audit.jsonl         # the audit log, one JSON event per line
     └── app.jsonl           # the application log, one JSON record per line
 ```
@@ -276,13 +311,52 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 ```
 
-## Run the demo
+## Run the program
 
 ```bash
 python src/main.py
 ```
 
-The script runs one stage per feature set and prints a banner before each:
+The program plays one day of a small bank on a clock it moves by hand, so
+every run prints the same story:
+
+1. **Initialization** - the bank, 7 clients and 12 accounts of every type
+   in five currencies. Six clients opened their accounts three weeks ago,
+   Sofia opens hers on the day.
+2. **Simulation** - 40 transactions go through the priority queue in
+   rounds from 09:00 to 08:00 the next morning. Most of them are ordinary
+   (salaries, rent, cash, conversions, a payment abroad with a fee, a
+   premium overdraft). Some fail: a frozen account, a closed account, a
+   client blocked after three wrong passwords, the withdrawal limit, an
+   unknown account, missing money after three attempts; one transfer is
+   cancelled. Some are suspicious: a large transfer is let through with a
+   warning, quick transfers in a row raise the risk, a huge payment abroad
+   and a large transfer late in the evening are blocked, a night transfer
+   waits for the morning. After every round a feed shows what the audit
+   log recorded: `queued`, `completed`, `retry`, `failed`, `warning`,
+   `blocked`, `cancelled`.
+3. **Logging** - the events of the audit log by name, and the life cycle
+   of six transactions as the journal holds it.
+4. **Client view** - Oleg logs in and sees his accounts, a statement of
+   each (the balance movements), his transactions, his suspicious
+   operations and his risk profile.
+5. **Reports** - the top three clients, transaction statistics and the
+   total balance of the bank (see [Bank reports](#bank-reports)).
+
+Warnings and errors of the application log appear in the terminal between
+the program's lines; the full log goes to `logs/app.jsonl` (see
+[Logs](#logs)). An invalid setting stops the program with one line on
+stderr, for example
+`Invalid settings: BANK_LOG_LEVEL must be one of debug, info, warning, error, critical; got 'loud'.`
+
+## Run the feature tour
+
+```bash
+python src/legacy_demo.py
+```
+
+The tour shows the platform feature by feature, in the order it was
+built; it runs one stage per feature set and prints a banner before each:
 
 1. **Accounts Basic** - an active and a frozen regular account, rejected
    operations on the frozen one, valid deposit and withdrawal, validation and
@@ -309,22 +383,22 @@ The script runs one stage per feature set and prints a banner before each:
 
 A final summary treats all created accounts through the common interface.
 Warnings and errors of the application log appear in the terminal between
-the demo's lines; the full log goes to `logs/app.jsonl` (see below).
+the tour's lines; the full log goes to `logs/app.jsonl` (see below).
 
 ## Logs
 
-The demo writes two logs into `logs/` in the project root; the folder is
+Both programs write two logs into `logs/` in the project root; the folder is
 created on the first run and is ignored by git. Both files are JSON Lines
 (one JSON object per line) and are only appended to, so each run adds to
 them (delete a file to start over).
 
 | File | What it holds | Who reads it |
 | --- | --- | --- |
-| `logs/audit.jsonl` | the audit log: security, transaction and risk events of stage 5, complete and never rewritten | auditors, `AuditLog.load_events()`, the audit reports |
+| `logs/audit.jsonl` | the audit log: every event of the program's bank (the feature tour: of stage 5), complete and never rewritten | auditors, `AuditLog.load_events()`, the audit reports |
 | `logs/app.jsonl` | the application log: every audit event of every stage plus technical `DEBUG` traces (a transaction attempt started, a delayed transaction became due) and infrastructure errors such as a failed audit write | developers, log tools |
 
 The terminal shows the same application log as readable lines, from
-`WARNING` up by default, mixed in order with the demo's own output:
+`WARNING` up by default, mixed in order with the program's own output:
 
 ```
 09-24 13:00:00 CRITICAL bank.audit        operation_blocked: external_transfer of 25000.00 USD: high risk, score 90 (large_amount, new_recipient) category=risk client_id=7db525f8 ...
@@ -332,7 +406,7 @@ The terminal shows the same application log as readable lines, from
 
 Every application log record carries two moments: `logged_at` - when it
 was written, by the wall clock - and `event_time` - when it happened by the
-bank's clock, which the demo moves by hand (into the night, a day later).
+bank's clock, which the programs move by hand (into the night, a day later).
 
 Environment variables (read once at start by `Settings.from_env()`):
 
@@ -344,6 +418,7 @@ Environment variables (read once at start by `Settings.from_env()`):
 
 ```bash
 BANK_LOG_LEVEL=info python src/main.py                        # show every business event in the terminal
+BANK_LOG_LEVEL=error python src/main.py                       # a quieter terminal: errors and blocked operations only
 BANK_AUDIT_LOG=/tmp/bank/audit.jsonl python src/main.py       # write the audit log somewhere else
 ```
 
@@ -357,8 +432,8 @@ jq -c 'select(.logger == "bank.transactions") | [.event_time, .transaction_id, .
 ```
 
 In code, `AuditLog.load_events("logs/audit.jsonl")` reads the audit log
-back into `AuditEvent` objects. The tests never write to `logs/`: the demo
-smoke test points both variables to a temporary folder.
+back into `AuditEvent` objects. The tests never write to `logs/`: the
+smoke tests of the programs point both variables to a temporary folder.
 
 ## Run the tests and linter
 

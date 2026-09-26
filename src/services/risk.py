@@ -11,7 +11,7 @@ from exceptions import InvalidOperationError
 from models.enums import TransactionType
 from models.transaction import Transaction
 from services.security import SecurityGuard
-from utils import to_money
+from utils import to_money, to_positive_int
 
 
 class RiskLevel(IntEnum):
@@ -114,9 +114,7 @@ class RiskRule(ABC):
     name: str
 
     def __init__(self, score: int) -> None:
-        if not isinstance(score, int) or isinstance(score, bool) or score <= 0:
-            raise InvalidOperationError("score must be a positive integer.")
-        self.score = score
+        self.score = to_positive_int(score, field="score")
 
     @abstractmethod
     def evaluate(self, context: RiskContext, history: RiskHistory) -> RiskFactor | None:
