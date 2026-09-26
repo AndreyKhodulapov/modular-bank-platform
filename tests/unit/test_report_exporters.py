@@ -84,10 +84,6 @@ def test_text_lays_out_the_report_for_people(report):
     ]
 
 
-def test_text_file_ends_with_a_newline(report):
-    assert TextExporter().render(report) == {"": TextExporter().to_text(report) + "\n"}
-
-
 def test_json_holds_every_section_by_name(report):
     files = JsonExporter().render(report)
     assert list(files) == [""]

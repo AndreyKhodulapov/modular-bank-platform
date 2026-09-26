@@ -91,13 +91,14 @@ class TextExporter(ReportExporter):
         return text[:8] if self.UUID.fullmatch(text) else text
 
     def _table(self, section: Section) -> list[str]:
-        if not section.rows:
+        columns, rows = section.to_table()
+        if not rows:
             return ["  (none)"]
-        body = [[self._cell(value) for value in row] for row in section.rows]
+        body = [[self._cell(value) for value in row] for row in rows]
         # a column of numbers only (a missing value aside) is aligned to the right
-        numeric = [all(_is_number(value) for value in column) for column in zip(*section.rows, strict=True)]
-        lines = [list(section.columns), *body] if section.show_header else body
-        widths = [max(len(line[index]) for line in lines) for index in range(len(section.columns))]
+        numeric = [all(_is_number(value) for value in column) for column in zip(*rows, strict=True)]
+        lines = [list(columns), *body] if section.show_header else body
+        widths = [max(len(line[index]) for line in lines) for index in range(len(columns))]
         return [
             "  "
             + "  ".join(
@@ -147,10 +148,11 @@ class CsvExporter(ReportExporter):
     def render(self, report: Report) -> dict[str, str]:
         files = {}
         for section in report.sections:
+            columns, rows = section.to_table()
             buffer = io.StringIO()
             writer = csv.writer(buffer)
-            writer.writerow(section.columns)
-            writer.writerows([self._field(value) for value in row] for row in section.rows)
+            writer.writerow(columns)
+            writer.writerows([self._field(value) for value in row] for row in rows)
             files[f"_{section.name}"] = buffer.getvalue()
         return files
 

@@ -112,6 +112,14 @@ class TransactionNotFoundError(BankError):
         super().__init__(f"Transaction {transaction_id} not found.")
 
 
+class SectionNotFoundError(BankError):
+    """Raised when a report has no section with the given name."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"Section {name} not found.")
+
+
 class InvalidTransactionStateError(InvalidOperationError):
     """Raised when a transaction cannot move from its current status to the requested one."""
 

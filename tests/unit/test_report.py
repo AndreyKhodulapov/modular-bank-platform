@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from exceptions import InvalidOperationError
+from exceptions import InvalidOperationError, SectionNotFoundError
 from models import Currency
 from reporting import KeyValueSection, Report, ReportKind, TableSection
 
@@ -14,8 +14,7 @@ def make_report(*sections) -> Report:
 
 def test_key_value_section_reads_as_a_table_without_a_header():
     section = KeyValueSection("summary", "Summary", {"clients": 3, "total": Decimal("10.00")})
-    assert section.columns == ("key", "value")
-    assert section.rows == (("clients", 3), ("total", Decimal("10.00")))
+    assert section.to_table() == (("key", "value"), (("clients", 3), ("total", Decimal("10.00"))))
     assert section.show_header is False
     assert section.to_data() == {"clients": 3, "total": Decimal("10.00")}
 
@@ -24,6 +23,7 @@ def test_table_section_keeps_rows_under_its_columns():
     section = TableSection("top_clients", "Top clients", ["place", "name"], [[1, "Anna"], (2, "Boris")])
     assert section.columns == ("place", "name")
     assert section.rows == ((1, "Anna"), (2, "Boris"))
+    assert section.to_table() == (section.columns, section.rows)
     assert section.show_header is True
     assert section.to_data() == [{"place": 1, "name": "Anna"}, {"place": 2, "name": "Boris"}]
 
@@ -65,7 +65,7 @@ def test_report_finds_a_section_by_name():
     summary = KeyValueSection("summary", "Summary", {})
     report = make_report(summary, TableSection("rows", "Rows", ("a",), []))
     assert report.section("summary") is summary
-    with pytest.raises(KeyError):
+    with pytest.raises(SectionNotFoundError, match="Section missing not found"):
         report.section("missing")
 
 

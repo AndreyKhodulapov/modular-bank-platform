@@ -68,8 +68,6 @@ class ChartRenderer:
         self.render(chart).savefig(buffer, format="png", facecolor=self.SURFACE, metadata={"Software": None})
         return buffer.getvalue()
 
-    # --- common parts
-
     def _axes(self, chart: Chart, height: float) -> tuple[Figure, Axes]:
         figure = Figure(figsize=(self._width, height), dpi=self._dpi, facecolor=self.SURFACE, layout="constrained")
         axes = figure.add_subplot()
@@ -91,8 +89,6 @@ class ChartRenderer:
         figure.legend(
             handles, labels, loc="outside right upper", frameon=False, fontsize=9, labelcolor=self.INK_SECONDARY
         )
-
-    # --- chart forms
 
     def _draw_pie(self, chart: PieChart) -> Figure:
         figure, axes = self._axes(chart, height=4.5)

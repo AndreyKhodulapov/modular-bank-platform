@@ -2,8 +2,8 @@
 
 A ``Report`` is a titled list of sections. A section is either a set of
 named values (``KeyValueSection``) or a table (``TableSection``); both can
-be seen as a table - ``columns`` and ``rows`` - which is all a tabular
-format needs. Values keep their domain types (``Decimal``, ``datetime``,
+be read as a table - ``to_table()`` gives the columns and the rows - which
+is all a tabular format needs. Values keep their domain types (``Decimal``, ``datetime``,
 enums) until an exporter turns them into text.
 
 A report also describes its charts as data (``PieChart``, ``BarChart``,
@@ -21,7 +21,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import ClassVar
 
-from exceptions import InvalidOperationError
+from exceptions import InvalidOperationError, SectionNotFoundError
 from models import Currency
 
 
@@ -43,9 +43,9 @@ def _check_name(name: object, field: str) -> None:
 class Section(ABC):
     """A named part of a report; ``name`` is its key in JSON and in file names, ``title`` is for readers.
 
-    Every section can be read as a table: ``columns`` and ``rows``, one
-    value per column in each row. ``show_header`` tells a reader whether the
-    column names are worth printing.
+    Every section can be read as a table: ``to_table()`` gives the column
+    names and the rows, one value per column in each row. ``show_header``
+    tells a reader whether the column names are worth printing.
     """
 
     name: str
@@ -59,6 +59,10 @@ class Section(ABC):
     @abstractmethod
     def to_data(self) -> object:
         """The section as plain containers: a dict of values or a list of rows as dicts."""
+
+    @abstractmethod
+    def to_table(self) -> tuple[tuple[str, ...], tuple[tuple[object, ...], ...]]:
+        """The section as a table: the column names and the rows."""
 
 
 @dataclass(frozen=True)
@@ -75,16 +79,11 @@ class KeyValueSection(Section):
             _check_name(key, "item name")
         object.__setattr__(self, "items", MappingProxyType(dict(self.items)))
 
-    @property
-    def columns(self) -> tuple[str, ...]:
-        return ("key", "value")
-
-    @property
-    def rows(self) -> tuple[tuple[object, ...], ...]:
-        return tuple(self.items.items())
-
     def to_data(self) -> dict[str, object]:
         return dict(self.items)
+
+    def to_table(self) -> tuple[tuple[str, ...], tuple[tuple[object, ...], ...]]:
+        return ("key", "value"), tuple(self.items.items())
 
 
 @dataclass(frozen=True)
@@ -110,6 +109,9 @@ class TableSection(Section):
 
     def to_data(self) -> list[dict[str, object]]:
         return [dict(zip(self.columns, row, strict=True)) for row in self.rows]
+
+    def to_table(self) -> tuple[tuple[str, ...], tuple[tuple[object, ...], ...]]:
+        return self.columns, self.rows
 
 
 @dataclass(frozen=True)
@@ -246,4 +248,4 @@ class Report:
         for section in self.sections:
             if section.name == name:
                 return section
-        raise KeyError(name)
+        raise SectionNotFoundError(name)

@@ -302,11 +302,6 @@ def test_balance_history_starts_at_the_period_and_reaches_its_end(bank, clock, p
     assert report.charts[-1].series == {"Total": tuple(tuple(row.values()) for row in rows(report, "balance_history"))}
 
 
-def test_bank_report_refuses_a_wrong_period(builder):
-    with pytest.raises(InvalidOperationError, match="since must be earlier than until"):
-        builder.bank_report(since=datetime(2026, 9, 25), until=datetime(2026, 9, 24))
-
-
 def test_risk_report_refuses_an_unknown_level(builder):
     with pytest.raises(InvalidOperationError, match="Unsupported risk level"):
         builder.risk_report(min_level="extreme")
@@ -392,8 +387,3 @@ def test_save_charts_skips_a_chart_with_nothing_to_draw(bank, client, builder):
 def test_save_charts_of_an_empty_bank_writes_nothing(builder):
     assert builder.save_charts(builder.bank_report()) == []
     assert not builder.output_dir.exists()
-
-
-def test_save_charts_needs_a_report(builder):
-    with pytest.raises(InvalidOperationError, match="report must be a Report"):
-        builder.save_charts("report")

@@ -9,7 +9,6 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from decimal import Decimal
-from itertools import count
 from pathlib import Path
 
 from exceptions import InvalidOperationError
@@ -146,7 +145,7 @@ class ReportBuilder:
             lines[f"Other {len(rest)} accounts"] = self._balance_steps(movements, since, until)
         return lines
 
-    # --- reports
+    # reports
 
     @staticmethod
     def _counterparty(transaction: Transaction, account_ids: set[str]) -> tuple[str, str | None]:
@@ -564,7 +563,7 @@ class ReportBuilder:
             charts,
         )
 
-    # --- output
+    # output
 
     def to_text(self, report: Report) -> str:
         return self._text.to_text(report)
@@ -606,12 +605,13 @@ class ReportBuilder:
             return []
         self._output_dir.mkdir(parents=True, exist_ok=True)
         stem = f"{self._clock():{self.STAMP}}_{report.kind.value}"
-        for attempt in count(1):
-            name = stem if attempt == 1 else f"{stem}-{attempt}"
+        name, attempt = stem, 1
+        while True:
             paths = [self._output_dir / f"{name}{part}{extension}" for part in files]
             if not any(path.exists() for path in paths) and self._write_all(paths, files.values()):
                 return paths
-        raise AssertionError("unreachable: count() never ends")
+            attempt += 1
+            name = f"{stem}-{attempt}"
 
     @staticmethod
     def _write_all(paths: list[Path], contents: Iterable[str | bytes]) -> bool:
