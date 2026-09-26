@@ -20,16 +20,25 @@ Sections:
    transactions as the journal holds it.
 4. Client view - a client logs in and sees their accounts, a statement,
    their transactions and the suspicious operations.
-5. Reports - the top three clients, transaction statistics and the total
-   balance of the bank.
+5. Reports - the bank report (totals, balances, transactions, top clients,
+   the total balance over the day) and the risk report (assessments,
+   suspicious operations, clients by risk, failures), as text.
+6. Export - the client report of the client from section 4, the bank
+   report and the risk report saved as text, JSON, CSV (one file per
+   section) and PNG charts; the program lists the files it wrote.
 
 The audit log is appended to ``logs/audit.jsonl`` and the application log
 to ``logs/app.jsonl``; warnings and errors of the application log also
-appear in the terminal between the program's lines. Paths and the terminal
-level come from environment variables, see ``settings.py``.
+appear in the terminal between the program's lines. The reports are saved
+to ``reports/``, named by the time of the run
+(``2026-09-26_14-30-05_bank.json``), so a new run adds files and never
+overwrites old ones. Paths and the terminal level come from environment
+variables (``BANK_AUDIT_LOG``, ``BANK_LOG_FILE``, ``BANK_LOG_LEVEL``,
+``BANK_REPORTS_DIR``), see ``settings.py``.
 """
 
 from collections import Counter
+from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -37,13 +46,13 @@ from datetime import date, datetime, timedelta
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError
 from logging_setup import configure_logging
 from models import BankAccount, Client, Transaction
+from reporting import Report, ReportBuilder
 from services import (
     AuditCategory,
     AuditLevel,
     AuditLog,
     AuditReport,
     Bank,
-    BankReport,
     RiskEvent,
     SecurityGuard,
     TransactionEvent,
@@ -375,12 +384,29 @@ def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
     print_block(AuditReport(bank.audit_log, bank.risk_analyzer).client_risk_profile(client.client_id))
 
 
-def show_reports(demo: DemoBank) -> None:
+def show_reports(builder: ReportBuilder, since: datetime) -> list[Report]:
+    """Print the bank report (its balance history from ``since``) and the risk report; return them for the export."""
     print_section(5, "Reports")
-    report = BankReport(demo.bank)
-    for section in (report.top_clients(), report.transaction_statistics(), report.total_balance()):
-        print_block(section)
+    reports = [builder.bank_report(since=since), builder.risk_report()]
+    for report in reports:
+        print_block(builder.to_text(report))
         print()
+    return reports
+
+
+def export_reports(builder: ReportBuilder, reports: Iterable[Report]) -> None:
+    print_section(6, "Export")
+    print(f"  Folder: {builder.output_dir}")
+    for report in reports:
+        paths = [
+            builder.export_to_text(report),
+            builder.export_to_json(report),
+            *builder.export_to_csv(report),
+            *builder.save_charts(report),
+        ]
+        print(f"\n  {report.title} ({len(paths)} files)")
+        for path in paths:
+            print(f"    {path.name}")
 
 
 def main() -> None:
@@ -394,7 +420,14 @@ def main() -> None:
     simulation = simulate(demo)
     show_logging(demo, simulation)
     show_client(demo, simulation, "oleg")
-    show_reports(demo)
+
+    # one moment names every file of the run, so the files of a report never span two seconds
+    started = datetime.now()
+    builder = ReportBuilder(demo.bank, settings.reports_dir, clock=lambda: started)
+    day = datetime(2026, 9, 24)  # the day the simulation plays: the reports show it from its start
+    reports = show_reports(builder, since=day)
+    client_report = builder.client_report(demo.clients["oleg"].client_id, since=day)
+    export_reports(builder, [client_report, *reports])
 
 
 if __name__ == "__main__":

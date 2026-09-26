@@ -66,6 +66,13 @@ def test_add_client_registers_and_returns_it(bank, owner, password):
     assert bank.get_client(owner.client_id) is owner
 
 
+def test_clients_are_listed_in_registration_order(bank, make_client):
+    first, second = (bank.add_client(make_client(name), "password-1") for name in ("Boris", "Anna"))
+    assert bank.clients == [first, second]
+    bank.clients.clear()  # a copy: the registry stays as it was
+    assert bank.clients == [first, second]
+
+
 def test_add_client_rejects_duplicate_id(bank, client, password):
     with pytest.raises(InvalidOperationError, match="already registered"):
         bank.add_client(client, password)

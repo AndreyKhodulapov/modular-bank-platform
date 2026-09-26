@@ -1,5 +1,6 @@
 """Smoke tests of the programs in ``src/``: each one runs as a script and prints what it should."""
 
+import csv
 import json
 import os
 import subprocess
@@ -10,7 +11,7 @@ import pytest
 
 
 def run_program(script: str, tmp_path: Path, log_level: str = "warning") -> subprocess.CompletedProcess[str]:
-    """Run ``src/<script>`` with both logs in ``tmp_path``, so the test run stays out of the project's logs/."""
+    """Run ``src/<script>`` with both logs and the reports in ``tmp_path``, out of the project's logs/ and reports/."""
     root = Path(__file__).resolve().parents[2]
     return subprocess.run(
         [sys.executable, str(root / "src" / script)],
@@ -22,6 +23,7 @@ def run_program(script: str, tmp_path: Path, log_level: str = "warning") -> subp
             "BANK_AUDIT_LOG": str(tmp_path / "audit.jsonl"),
             "BANK_LOG_FILE": str(tmp_path / "app.jsonl"),
             "BANK_LOG_LEVEL": log_level,
+            "BANK_REPORTS_DIR": str(tmp_path / "reports"),
         },
     )
 
@@ -70,7 +72,7 @@ def test_legacy_demo_runs_without_errors(tmp_path):
 
 @pytest.fixture(scope="module")
 def main_run(tmp_path_factory) -> tuple[subprocess.CompletedProcess[str], Path]:
-    """One run of the program shared by the tests that read its output and its logs."""
+    """One run of the program shared by the tests that read its output, its logs and its reports."""
     logs = tmp_path_factory.mktemp("main")
     completed = run_program("main.py", logs)
     assert completed.returncode == 0, completed.stderr
@@ -79,7 +81,14 @@ def main_run(tmp_path_factory) -> tuple[subprocess.CompletedProcess[str], Path]:
 
 def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     output = main_run[0].stdout
-    for section in ("1. Initialization", "2. Simulation", "3. Logging", "4. Client view: Sokolov Oleg", "5. Reports"):
+    for section in (
+        "1. Initialization",
+        "2. Simulation",
+        "3. Logging",
+        "4. Client view: Sokolov Oleg",
+        "5. Reports",
+        "6. Export",
+    ):
         assert section in output
     # the sizes the program's docstring promises
     assert "7 clients, 12 accounts" in output
@@ -98,12 +107,21 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     # the client view and the reports
     assert "PremiumAccount | Sokolov Oleg | ****" in output
     assert "| active | -1511.00 USD" in output
-    assert "Top 3 clients\n    1. Sokolov Oleg" in output
-    assert "Transactions: 40 (completed 31, failed 8, cancelled 1)" in output
-    assert "failure rate 20.5% of 39 finished, blocked by risk control 2" in output
-    assert "tariff fees collected 450.00 RUB" in output
-    assert "Total balance: 4322411.00 RUB on 11 accounts" in output  # the closed CNY account is not counted
-    assert "CNY" not in output.split("Total balance:")[1]
+    bank_report = output.split("= 5. Reports =")[1].split("  Risk report")[0]
+    assert "open_accounts           11" in bank_report  # the closed CNY account is not counted
+    assert "total_balance           4322411.00" in bank_report
+    assert "transactions            40" in bank_report
+    assert "failure_rate_percent    20.5" in bank_report
+    assert "tariff_fees             450.00" in bank_report
+    first_place = bank_report.split("Top 3 clients\n")[1].splitlines()[1]  # the line after the column names
+    assert first_place.split()[0] == "1"
+    assert "Sokolov Oleg" in first_place
+    assert "CNY" not in bank_report
+    # the balance history starts at the beginning of the day, before the salaries
+    assert "2026-09-24 00:00     3940000.00\n    2026-09-24 09:00     4352971.00" in bank_report
+    risk_report = output.split("  Risk report")[1].split("= 6. Export =")[0]
+    assert "suspicious            7" in risk_report
+    assert "blocked_by_risk       2" in risk_report
     # the terminal shows warnings and above only
     assert "CRITICAL bank.audit        operation_blocked" in output
     assert "INFO     bank." not in output
@@ -120,6 +138,41 @@ def test_main_program_writes_both_logs(main_run):
     assert {"client_registered", "account_opened", "account_frozen", "account_closed", "client_blocked"} <= set(names)
     records = read_json_lines(logs / "app.jsonl")
     assert sum(record.get("event") == "transaction_completed" for record in records) == 31
+
+
+def test_main_program_exports_the_reports_and_charts(main_run):
+    completed, logs = main_run
+    folder = logs / "reports"
+    names = sorted(path.name for path in folder.iterdir())
+    assert f"Folder: {folder}" in completed.stdout
+    for name in names:
+        assert f"    {name}\n" in completed.stdout
+    # every file of the run shares one time stamp: <date>_<time>_<kind>[_<part>].<ext>
+    stamps = {name[:19] for name in names}
+    assert len(stamps) == 1
+    parts = [name[20:] for name in names]
+    for kind, count in (("client", 10), ("bank", 13), ("risk", 12)):
+        assert f"({count} files)" in completed.stdout
+        assert sum(part.startswith(f"{kind}.") or part.startswith(f"{kind}_") for part in parts) == count
+        assert {f"{kind}.txt", f"{kind}.json", f"{kind}_summary.csv"} <= set(parts)
+    assert {"client_balance.png", "bank_total_balance.png", "bank_top_clients.png", "risk_risk_factors.png"} <= set(
+        parts
+    )
+    for name in names:
+        if name.endswith(".png"):
+            assert (folder / name).read_bytes().startswith(b"\x89PNG")
+
+    stamp = stamps.pop()
+    bank = json.loads((folder / f"{stamp}_bank.json").read_text(encoding="utf-8"))
+    assert bank["sections"]["summary"]["total_balance"] == "4322411.00"
+    assert [row["currency"] for row in bank["sections"]["balance_by_currency"]] == ["EUR", "KZT", "RUB", "USD"]
+    client = json.loads((folder / f"{stamp}_client.json").read_text(encoding="utf-8"))
+    assert client["title"] == "Client report: Sokolov Oleg"
+    assert client["sections"]["summary"]["period_start"] == "2026-09-24T00:00:00"
+    with (folder / f"{stamp}_risk_suspicious_operations.csv").open(encoding="utf-8", newline="") as file:
+        rows = list(csv.DictReader(file))
+    assert len(rows) == 7
+    assert sum(row["action"] == "blocked" for row in rows) == 2
 
 
 def test_main_program_reports_invalid_settings_in_one_line(tmp_path):

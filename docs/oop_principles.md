@@ -139,6 +139,8 @@ amounts and enum members are values: two equal amounts are interchangeable.
   accounts, `SecurityGuard` and `CurrencyConverter`; its methods combine
   several steps (night check, client status, amount review, the account
   operation, audit) into one call such as `bank.withdraw(account_id, amount)`.
+  `ReportBuilder` is a facade over the reports, the exporters and the chart
+  renderer.
 - **Registry** - a well-known object that stores objects by key so they can be
   found later. `Bank._clients` and `Bank._accounts` store clients and accounts
   by id and back `get_client()`, `get_account()` and `search_accounts()`;
@@ -166,7 +168,8 @@ amounts and enum members are values: two equal amounts are interchangeable.
   `FeePolicy.calculate()` prices a transaction; `TransactionProcessor(bank,
   fee_policy=...)` accepts any tariff without changing its own code. Each
   `RiskRule` is a strategy too: `RiskAnalyzer` runs a list of them and only
-  adds up their scores.
+  adds up their scores. `ReportExporter` (text, JSON, CSV) is a strategy for
+  the format of a report.
 - **State machine** - an object whose allowed actions depend on its state.
   `Transaction` keeps a table of allowed status transitions and refuses any
   other move with `InvalidTransactionStateError`.
@@ -387,6 +390,50 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   history, cancellations from the audit log (a cancelled transaction never
   ran, so the history does not have it), blocked ones from the risk
   analyzer. Nothing is counted twice.
+- **Compute in services, lay out in `reporting`.** `ReportBuilder` only
+  picks numbers from `BankReport`, `AuditReport` and the history and puts
+  them into a `Report`: named values (`KeyValueSection`) and tables
+  (`TableSection`). Dependencies go one way: reporting -> services -> models.
+- **Facade, not a GoF Builder.** `ReportBuilder` gives one entry point with
+  a factory method per report (`client_report()`, `bank_report()`,
+  `risk_report()`) and one method per output (`export_to_json()`,
+  `export_to_csv()`, `save_charts()`). A GoF Builder assembles one complex
+  object step by step (`.add_section().add_chart().build()`); here the
+  caller should not know the steps at all.
+- **Strategy for formats.** `ReportExporter` has one method, `render(report)`;
+  `TextExporter`, `JsonExporter` and `CsvExporter` implement it. An exporter
+  knows the report model, never a particular report, so a new report needs
+  no new export code and a new format touches no report (Open/Closed).
+- **Charts are data, drawing is separate.** A report holds `PieChart`,
+  `BarChart` and `LineChart` objects (labels and values); `ChartRenderer`
+  turns them into PNG. Tests check what a chart shows without drawing it,
+  and a different renderer could replace matplotlib.
+- **Money stays exact in files.** JSON has no decimal type, and a float
+  would turn `0.1 + 0.2` into `0.30000000000000004`, so a `Decimal` is
+  written as a string (`"4322411.00"`); dates are ISO 8601, enums their
+  value. Money becomes `float` only to place a mark on a chart.
+- **CSV is one table per file.** Sections have different columns, and a
+  CSV file has one header, so each section gets its own file
+  (`..._bank_top_clients.csv`); any spreadsheet or `pandas.read_csv` opens it
+  as is. Text from users that starts with `=`, `+`, `-` or `@` gets a
+  leading `'`: otherwise a spreadsheet runs a client named `=HYPERLINK(...)`
+  as a formula (CSV injection). Numbers are not escaped, `-1511.00` stays a
+  number.
+- **matplotlib without pyplot.** `pyplot` keeps global state (the current
+  figure) and may open a window; `matplotlib.figure.Figure` is a plain
+  object, so a chart is built and saved by ordinary code: no hidden current
+  figure, no window, no `plt.close()` to forget.
+- **Only direct dependencies are declared.** `requirements.txt` lists
+  matplotlib, not numpy: the project never imports numpy, it comes with
+  matplotlib, and declaring it would pin a version the project does not
+  need.
+- **Files never overwrite each other.** A file name holds the time of the
+  call and the report kind (`2026-09-26_14-30-05_bank.json`); a taken name
+  gets `-2`, and files are opened in mode `"x"`, which fails instead of
+  overwriting. Checking a name and then creating the file is a race
+  (another process can come in between), so the check alone is not
+  trusted: when `"x"` fails midway, the files already written are removed
+  and the whole set moves to the next name.
 
 ## Preparing modules for unit testing
 

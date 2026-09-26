@@ -7,7 +7,9 @@ retries - are the bank's policy and stay constructor arguments.
 - ``BANK_AUDIT_LOG`` - the audit log file, ``logs/audit.jsonl`` by default;
 - ``BANK_LOG_FILE`` - the application log file, ``logs/app.jsonl`` by default;
 - ``BANK_LOG_LEVEL`` - the lowest level shown in the terminal, ``WARNING``
-  by default; the file always gets everything from ``DEBUG`` up.
+  by default; the file always gets everything from ``DEBUG`` up;
+- ``BANK_REPORTS_DIR`` - the folder the reports and charts are saved to,
+  ``reports/`` by default.
 
 The default paths are in the project root, whatever the current directory.
 A variable that is set but blank counts as not set.
@@ -27,6 +29,7 @@ class Settings:
     audit_log_path: Path
     log_file_path: Path
     console_log_level: int
+    reports_dir: Path
 
     LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -34,11 +37,12 @@ class Settings:
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
         """Read the settings from ``environ`` (the process environment by default) and check them."""
         env = os.environ if environ is None else environ
-        logs = Path(__file__).resolve().parent.parent / "logs"
+        root = Path(__file__).resolve().parent.parent
         return cls(
-            audit_log_path=cls._path(env, "BANK_AUDIT_LOG", logs / "audit.jsonl"),
-            log_file_path=cls._path(env, "BANK_LOG_FILE", logs / "app.jsonl"),
+            audit_log_path=cls._path(env, "BANK_AUDIT_LOG", root / "logs" / "audit.jsonl"),
+            log_file_path=cls._path(env, "BANK_LOG_FILE", root / "logs" / "app.jsonl"),
             console_log_level=cls._level(env, "BANK_LOG_LEVEL", "WARNING"),
+            reports_dir=cls._path(env, "BANK_REPORTS_DIR", root / "reports"),
         )
 
     @staticmethod

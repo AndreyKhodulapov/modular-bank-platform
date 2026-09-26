@@ -110,6 +110,11 @@ class Bank:
         """Finished transactions and every balance movement made through the bank."""
         return self._history
 
+    @property
+    def clients(self) -> list[Client]:
+        """The registered clients, in the order they were added."""
+        return list(self._clients.values())
+
     def now(self) -> datetime:
         """The bank's current time, from the security guard's clock."""
         return self._security.now()

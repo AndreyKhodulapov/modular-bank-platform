@@ -13,6 +13,7 @@ from models import (
     InvestmentAccount,
     PremiumAccount,
     SavingsAccount,
+    Transaction,
 )
 from services import Bank, SecurityGuard, TransactionProcessor, TransactionQueue
 from utils import ManualClock
@@ -131,3 +132,33 @@ def queue(bank: Bank) -> TransactionQueue:
 @pytest.fixture
 def processor(bank: Bank) -> TransactionProcessor:
     return TransactionProcessor(bank)
+
+
+@pytest.fixture
+def parties(bank: Bank, make_client: Callable[..., Client]) -> tuple[BankAccount, BankAccount, BankAccount]:
+    """Anna with 10 000 RUB, Boris with 100 USD and Vera with a frozen RUB account."""
+    anna, boris, vera = (bank.add_client(make_client(name), "password-1") for name in ("Anna", "Boris", "Vera"))
+    anna_rub = bank.open_account(anna.client_id, currency="RUB", initial_balance=10_000)
+    boris_usd = bank.open_account(boris.client_id, currency="USD", initial_balance=100)
+    vera_rub = bank.open_account(vera.client_id, currency="RUB")
+    bank.freeze_account(vera_rub.account_id)
+    return anna_rub, boris_usd, vera_rub
+
+
+@pytest.fixture
+def processed(bank: Bank, clock: ManualClock, parties: tuple[BankAccount, BankAccount, BankAccount]) -> None:
+    """Six transactions: three completed, one failed, one blocked by risk control, one cancelled."""
+    anna_rub, boris_usd, vera_rub = parties
+    queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
+    anna, boris = anna_rub.account_id, boris_usd.account_id
+    for kind, amount, currency, params in (
+        ("deposit", 1_000, "RUB", {"recipient_id": anna}),
+        ("transfer", 50, "USD", {"sender_id": boris, "recipient_id": anna}),  # 4 500 RUB
+        ("external_transfer", 1_000, "RUB", {"sender_id": anna, "recipient_id": "DE-1"}),  # the minimal fee, 50 RUB
+        ("transfer", 100, "RUB", {"sender_id": anna, "recipient_id": vera_rub.account_id}),  # frozen recipient
+        ("transfer", 2_000_000, "RUB", {"sender_id": anna, "recipient_id": boris}),  # high risk
+    ):
+        queue.add(Transaction(kind, amount, currency, created_at=clock(), **params))
+    typo = queue.add(Transaction("withdrawal", 10, "RUB", sender_id=anna, created_at=clock()))
+    queue.cancel(typo.transaction_id)
+    TransactionProcessor(bank).process_queue(queue)
