@@ -399,8 +399,20 @@ every run prints the same story:
 4. **Client view** - Oleg logs in and sees his accounts, a statement of
    each (the balance movements), his transactions, his suspicious
    operations and his risk profile.
-5. **Reports** - the top three clients, transaction statistics and the
-   total balance of the bank (see [Bank reports](#bank-reports)).
+5. **Reports** - the bank report (totals, balances by currency and account
+   type, transactions by status and type, the top three clients, the total
+   balance from the start of the day) and the risk report (assessments by
+   level, risk factors, suspicious operations, clients by risk, failures by
+   error type, security events), printed as text (see
+   [Report builder](#report-builder)).
+6. **Export** - Oleg's client report for the day, the bank report and the
+   risk report are saved to `reports/`: each as a `.txt` and a `.json`
+   file, one `.csv` file per section and one `.png` image per chart, 35
+   files in all. The program lists the folder and the files. They share
+   the time the reports were built, e.g. `2026-09-26_14-30-05_client.json`,
+   `2026-09-26_14-30-05_bank_top_clients.csv`,
+   `2026-09-26_14-30-05_bank_total_balance.png`, so the files of one run
+   stay together and a new run never overwrites an old one.
 
 Warnings and errors of the application log appear in the terminal between
 the program's lines; the full log goes to `logs/app.jsonl` (see
