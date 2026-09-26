@@ -5,6 +5,10 @@ named values (``KeyValueSection``) or a table (``TableSection``); both can
 be seen as a table - ``columns`` and ``rows`` - which is all a tabular
 format needs. Values keep their domain types (``Decimal``, ``datetime``,
 enums) until an exporter turns them into text.
+
+A report also describes its charts as data (``PieChart``, ``BarChart``,
+``LineChart``): what to draw, not how. Drawing is the job of
+``ChartRenderer``, so the charts can be checked without drawing them.
 """
 
 import re
@@ -12,6 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from types import MappingProxyType
 from typing import ClassVar
@@ -108,12 +113,113 @@ class TableSection(Section):
 
 
 @dataclass(frozen=True)
+class Chart(ABC):
+    """A chart as data; ``name`` is its part of the file name, ``unit`` what its values are in."""
+
+    name: str
+    title: str
+    unit: str
+
+    def __post_init__(self) -> None:
+        _check_name(self.name, "chart name")
+
+    @property
+    @abstractmethod
+    def is_empty(self) -> bool:
+        """Nothing to draw: an empty chart is not saved."""
+
+
+@dataclass(frozen=True)
+class CategoryChart(Chart):
+    """One value per labelled category."""
+
+    labels: tuple[str, ...]
+    values: tuple[Decimal | int, ...]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        object.__setattr__(self, "labels", tuple(self.labels))
+        object.__setattr__(self, "values", tuple(self.values))
+        if len(self.labels) != len(self.values):
+            raise InvalidOperationError(
+                f"Chart {self.name!r} has {len(self.labels)} labels and {len(self.values)} values."
+            )
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.labels
+
+
+@dataclass(frozen=True)
+class BarChart(CategoryChart):
+    """Values side by side, in the given order."""
+
+
+@dataclass(frozen=True)
+class PieChart(CategoryChart):
+    """Parts of a whole, largest first.
+
+    Only a positive value is a part of a whole: a zero has no slice and a
+    negative value (an overdraft) cannot be one, so both are left out; the
+    negative ones are listed in ``left_out`` for the reader. Past
+    ``MAX_SLICES`` the smallest parts fold into one ``Other`` slice, so
+    every slice keeps a colour of its own.
+    """
+
+    MAX_SLICES: ClassVar[int] = 8
+
+    @property
+    def slices(self) -> tuple[tuple[str, Decimal | int], ...]:
+        parts = sorted(
+            ((label, value) for label, value in zip(self.labels, self.values, strict=True) if value > 0),
+            key=lambda part: -part[1],
+        )
+        if len(parts) <= self.MAX_SLICES:
+            return tuple(parts)
+        kept = parts[: self.MAX_SLICES - 1]
+        return (*kept, ("Other", sum(value for _, value in parts[self.MAX_SLICES - 1 :])))
+
+    @property
+    def left_out(self) -> tuple[tuple[str, Decimal | int], ...]:
+        return tuple((label, value) for label, value in zip(self.labels, self.values, strict=True) if value < 0)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.slices
+
+
+@dataclass(frozen=True)
+class LineChart(Chart):
+    """Values over time, one line per series.
+
+    Each point is ``(moment, value)`` in time order; a value holds until the
+    next point (a balance does not change between operations), so the line
+    is drawn in steps.
+    """
+
+    series: Mapping[str, tuple[tuple[datetime, Decimal], ...]]
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        series = {label: tuple(points) for label, points in self.series.items()}
+        for label, points in series.items():
+            moments = [moment for moment, _ in points]
+            if moments != sorted(moments):
+                raise InvalidOperationError(f"Points of {label!r} in chart {self.name!r} must be in time order.")
+        object.__setattr__(self, "series", MappingProxyType(series))
+
+    @property
+    def is_empty(self) -> bool:
+        return not any(self.series.values())
+
+
+@dataclass(frozen=True)
 class Report:
     """A finished report: what it is about, when the data was taken and its sections, in order.
 
     ``generated_at`` is the bank's time the data was read at; ``currency``
     is the currency of every converted amount (``*_in_base`` values and
-    totals).
+    totals). ``charts`` draw the report's data; their names are unique too.
     """
 
     kind: ReportKind
@@ -121,12 +227,15 @@ class Report:
     generated_at: datetime
     currency: Currency
     sections: tuple[Section, ...]
+    charts: tuple[Chart, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sections", tuple(self.sections))
-        names = [section.name for section in self.sections]
-        if len(names) != len(set(names)):
-            raise InvalidOperationError(f"Section names of a report must be unique; got {names}.")
+        object.__setattr__(self, "charts", tuple(self.charts))
+        for kind, items in (("Section", self.sections), ("Chart", self.charts)):
+            names = [item.name for item in items]
+            if len(names) != len(set(names)):
+                raise InvalidOperationError(f"{kind} names of a report must be unique; got {names}.")
 
     def section(self, name: str) -> Section:
         for section in self.sections:

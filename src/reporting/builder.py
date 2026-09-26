@@ -6,7 +6,7 @@ transaction history); the builder only picks them, lays them out as a
 """
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from decimal import Decimal
 from itertools import count
@@ -14,9 +14,20 @@ from pathlib import Path
 
 from exceptions import InvalidOperationError
 from models import AccountStatus, Currency, Transaction
+from reporting.charts import ChartRenderer
 from reporting.exporters import CsvExporter, JsonExporter, ReportExporter, TextExporter
-from reporting.report import KeyValueSection, Report, ReportKind, Section, TableSection
-from services import AuditReport, Bank, BankReport, RiskLevel
+from reporting.report import (
+    BarChart,
+    Chart,
+    KeyValueSection,
+    LineChart,
+    PieChart,
+    Report,
+    ReportKind,
+    Section,
+    TableSection,
+)
+from services import AuditReport, BalanceMovement, Bank, BankReport, RiskLevel
 from utils import to_enum
 
 
@@ -39,6 +50,8 @@ class ReportBuilder:
       ``2026-09-26_14-30-05_bank.json``. CSV gives one file per section
       (``..._bank_top_clients.csv``). All files of one call share the name;
       a name already taken gets ``-2``, ``-3``, so nothing is overwritten.
+    - ``save_charts()`` draws the report's charts, one PNG each
+      (``..._bank_top_clients.png``); a chart with nothing to draw is skipped.
 
     ``clock`` names the files, so it is the wall clock by default, while a
     report's ``generated_at`` is the bank's own time.
@@ -57,6 +70,7 @@ class ReportBuilder:
         self._text = TextExporter()
         self._json = JsonExporter()
         self._csv = CsvExporter()
+        self._charts = ChartRenderer()
 
     @property
     def output_dir(self) -> Path:
@@ -65,14 +79,39 @@ class ReportBuilder:
     def _in_base(self, amount: Decimal, currency: Currency) -> Decimal:
         return self._bank.converter.to_base(amount, currency)
 
-    def _report(self, kind: ReportKind, title: str, *sections: Section) -> Report:
+    def _report(
+        self, kind: ReportKind, title: str, sections: Iterable[Section], charts: Iterable[Chart] = ()
+    ) -> Report:
         return Report(
             kind=kind,
             title=title,
             generated_at=self._bank.now(),
             currency=self._bank.base_currency,
-            sections=sections,
+            sections=tuple(sections),
+            charts=tuple(charts),
         )
+
+    def _balance_steps(
+        self, movements: Iterable[BalanceMovement], since: datetime | None, until: datetime | None
+    ) -> list[tuple[datetime, Decimal]]:
+        """The total balance of the accounts in ``movements``, in the base currency, after each moment of a period.
+
+        The first point is the total at ``since`` when money was there before
+        it; the last value is repeated at the end of the period (``until``,
+        or now), so the last step reaches it.
+        """
+        latest: dict[str, Decimal] = {}  # the balance of each account after its latest movement
+        points: dict[datetime, Decimal] = {}  # one point per moment: the total after all its movements
+        for movement in movements:
+            if until is not None and movement.moment >= until:
+                break
+            latest[movement.account_id] = self._in_base(movement.balance_after, movement.currency)
+            moment = movement.moment if since is None or movement.moment >= since else since
+            points[moment] = sum(latest.values(), Decimal("0.00"))
+        end = self._bank.now() if until is None else min(until, self._bank.now())
+        if points and end > max(points):
+            points[end] = points[max(points)]
+        return list(points.items())
 
     # --- reports
 
@@ -213,18 +252,51 @@ class ReportBuilder:
                 "failed_attempts": profile.failed_attempts,
             },
         )
+        base = self._bank.base_currency.value
+        names = {
+            account.account_id: f"{account.account_type} {account.currency.value} {account.account_id[:8]}"
+            for account in accounts
+        }
+        charts = (
+            PieChart(
+                "assets",
+                "Assets by account",
+                base,
+                labels=[names[account.account_id] for account in accounts],
+                values=[self._in_base(account.total_value, account.currency) for account in accounts],
+            ),
+            BarChart(
+                "transactions_by_status",
+                "Transactions by status",
+                "transactions",
+                labels=list(statuses),
+                values=list(statuses.values()),
+            ),
+            LineChart(
+                "balance",
+                "Balance by account",
+                base,
+                {
+                    names[account.account_id]: self._balance_steps(history.movements(account.account_id), since, until)
+                    for account in accounts
+                },
+            ),
+        )
         return self._report(
             ReportKind.CLIENT,
             f"Client report: {client.full_name}",
-            summary,
-            accounts_table,
-            transactions_table,
-            statement,
-            risk,
+            (summary, accounts_table, transactions_table, statement, risk),
+            charts,
         )
 
-    def bank_report(self, *, top: int = 3) -> Report:
-        """The whole bank: totals, balances by currency and account type, transactions and the top clients."""
+    def bank_report(self, *, top: int = 3, since: datetime | None = None, until: datetime | None = None) -> Report:
+        """The whole bank: totals, balances by currency and account type, transactions, top clients, balance history.
+
+        The period (``since`` inclusive, ``until`` exclusive, both open by
+        default) applies to the history of the total balance; everything
+        else is the bank as it is now and all its transactions.
+        """
+        _check_period(since, until)
         statistics = self._bank_report.transaction_statistics()
         balance = self._bank_report.total_balance()
         ranking = self._bank_report.top_clients(top)
@@ -295,15 +367,38 @@ class ReportBuilder:
                 for place, (client, total) in enumerate(ranking.clients, start=1)
             ],
         )
+        steps = self._balance_steps(self._bank.history.movements(), since, until)
+        history = TableSection("balance_history", "Total balance over time", ("moment", "total_in_base"), steps)
+        base = self._bank.base_currency.value
+        charts = (
+            PieChart(
+                "balance_by_currency",
+                "Balance by currency",
+                base,
+                labels=[currency.value for currency in balance.by_currency],
+                values=[amount_in_base for _, _, amount_in_base in by_currency.rows],
+            ),
+            BarChart(
+                "transactions_by_type",
+                "Transactions by type",
+                "transactions",
+                labels=[kind.value for kind in statistics.by_type],
+                values=list(statistics.by_type.values()),
+            ),
+            BarChart(
+                "top_clients",
+                top_clients.title,
+                base,
+                labels=[client.full_name for client, _ in ranking.clients],
+                values=[total for _, total in ranking.clients],
+            ),
+            LineChart("total_balance", "Total balance of the bank", base, {"Total": steps}),
+        )
         return self._report(
             ReportKind.BANK,
             "Bank report",
-            summary,
-            by_currency,
-            by_type,
-            by_status,
-            by_transaction_type,
-            top_clients,
+            (summary, by_currency, by_type, by_status, by_transaction_type, top_clients, history),
+            charts,
         )
 
     def risk_report(self, *, min_level: RiskLevel | str = RiskLevel.MEDIUM) -> Report:
@@ -318,6 +413,7 @@ class ReportBuilder:
         suspicious = [assessment for assessment in assessed.operations if assessment.level >= lowest]
         errors = self._audit_report.error_statistics()
         levels = Counter(assessment.level for assessment in assessed.operations)
+        factors = Counter(rule for assessment in assessed.operations for rule in assessment.rules).most_common()
         profiles = sorted(
             ((client, self._audit_report.client_risk_profile(client.client_id)) for client in self._bank.clients),
             key=lambda item: (-item[1].level, -item[1].max_score, item[0].full_name),
@@ -345,6 +441,7 @@ class ReportBuilder:
             ("level", "count"),
             [(level, levels[level]) for level in RiskLevel],
         )
+        factor_table = TableSection("risk_factors", "Risk factors", ("factor", "count"), factors)
         operations = TableSection(
             "suspicious_operations",
             f"Suspicious operations ({lowest.name.lower()} risk and above)",
@@ -407,8 +504,34 @@ class ReportBuilder:
                 for event in assessed.security_events
             ],
         )
+        charts = (
+            PieChart(
+                "assessments_by_level",
+                by_level.title,
+                "transactions",
+                labels=[level.name.lower() for level in RiskLevel],
+                values=[levels[level] for level in RiskLevel],
+            ),
+            BarChart(
+                "risk_factors",
+                factor_table.title,
+                "transactions",
+                labels=[factor for factor, _ in factors],
+                values=[times for _, times in factors],
+            ),
+            BarChart(
+                "errors_by_type",
+                error_types.title,
+                "attempts",
+                labels=list(errors.errors_by_type),
+                values=list(errors.errors_by_type.values()),
+            ),
+        )
         return self._report(
-            ReportKind.RISK, "Risk report", summary, by_level, operations, clients, error_types, security
+            ReportKind.RISK,
+            "Risk report",
+            (summary, by_level, factor_table, operations, clients, error_types, security),
+            charts,
         )
 
     # --- output
@@ -426,19 +549,34 @@ class ReportBuilder:
         """One CSV file per section of the report, in the order of the sections."""
         return self._save(report, self._csv)
 
-    def _save(self, report: Report, exporter: ReportExporter) -> list[Path]:
+    def save_charts(self, report: Report) -> list[Path]:
+        """One PNG image per chart of the report that has something to draw, in the order of the charts."""
+        self._check_report(report)
+        images = {f"_{chart.name}": self._charts.to_png(chart) for chart in report.charts if not chart.is_empty}
+        return self._write(report, images, ".png")
+
+    @staticmethod
+    def _check_report(report: object) -> None:
         if not isinstance(report, Report):
             raise InvalidOperationError("report must be a Report instance.")
-        files = exporter.render(report)
+
+    def _save(self, report: Report, exporter: ReportExporter) -> list[Path]:
+        self._check_report(report)
+        return self._write(report, exporter.render(report), exporter.extension)
+
+    def _write(self, report: Report, files: Mapping[str, str | bytes], extension: str) -> list[Path]:
+        """Write ``files`` (name part -> content) under one free name; text is written as UTF-8, as it is."""
+        if not files:
+            return []
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        paths = self._free_paths(f"{self._clock():{self.STAMP}}_{report.kind.value}", files, exporter.extension)
+        paths = self._free_paths(f"{self._clock():{self.STAMP}}_{report.kind.value}", files, extension)
         for path, content in zip(paths, files.values(), strict=True):
             # "x" refuses to overwrite a file that appeared in the meantime
-            with path.open("x", encoding="utf-8", newline="") as file:
-                file.write(content)
+            with path.open("xb") as file:
+                file.write(content.encode("utf-8") if isinstance(content, str) else content)
         return paths
 
-    def _free_paths(self, stem: str, parts: dict[str, str], extension: str) -> list[Path]:
+    def _free_paths(self, stem: str, parts: Mapping[str, object], extension: str) -> list[Path]:
         """Paths for ``parts`` under ``stem``, or under ``stem-2``, ``stem-3``... when one of them is taken."""
         for attempt in count(1):
             name = stem if attempt == 1 else f"{stem}-{attempt}"

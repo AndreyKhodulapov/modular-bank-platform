@@ -1,2 +1,4 @@
 # Runtime dependencies.
-# The project intentionally relies on the Python standard library only.
+# Everything else is the Python standard library; matplotlib draws the report charts
+# (it brings numpy along, which the project does not use directly).
+matplotlib>=3.9

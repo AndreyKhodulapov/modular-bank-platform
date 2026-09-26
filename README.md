@@ -1,7 +1,8 @@
 # Modular Bank Platform
 
 An object-oriented prototype of a modular banking platform. All data lives in memory; there is
-no database, no external API and no third-party runtime dependency.
+no database and no external API; the only third-party runtime dependency is
+matplotlib, which draws the report charts.
 
 ## Current scope
 
@@ -260,13 +261,13 @@ print(report.transaction_statistics())
 
 `ReportBuilder(bank, output_dir)` (package `reporting`) turns the numbers
 of `BankReport`, `AuditReport` and the transaction history into three
-reports and writes them in three formats:
+reports, writes them in three formats and draws their charts:
 
-| Report | Sections |
-| --- | --- |
-| `client_report(client_id, since=None, until=None)` | summary, accounts (as they are now), transactions and statement for the period, risk profile |
-| `bank_report(top=3)` | summary, balance by currency, accounts by type, transactions by status and by type, top clients |
-| `risk_report(min_level="medium")` | summary, assessments by risk level, suspicious operations, clients by risk, failed attempts by error type, security events |
+| Report | Sections | Charts |
+| --- | --- | --- |
+| `client_report(client_id, since=None, until=None)` | summary, accounts (as they are now), transactions and statement for the period, risk profile | pie: assets by account; bar: transactions by status; line: balance of each account |
+| `bank_report(top=3, since=None, until=None)` | summary, balance by currency, accounts by type, transactions by status and by type, top clients, total balance over the period | pie: balance by currency; bar: transactions by type, top clients; line: total balance |
+| `risk_report(min_level="medium")` | summary, assessments by risk level, risk factors, suspicious operations, clients by risk, failed attempts by error type, security events | pie: assessments by risk level; bar: risk factors, failed attempts by error type |
 
 A `Report` is a list of sections, each either named values or a table,
 so every format works with any report:
@@ -277,10 +278,23 @@ so every format works with any report:
 - `export_to_json(report)` - one JSON document, sections by name; an amount
   is a string (`"150000.00"`), never a float, dates are ISO 8601;
 - `export_to_csv(report)` - one CSV file per section, since a CSV file holds
-  a single table; a section of named values has the columns `key,value`.
+  a single table; a section of named values has the columns `key,value`;
+- `save_charts(report)` - one PNG image per chart; a chart with nothing to
+  draw (a client without transactions) is skipped.
+
+Every amount on a chart is in the base currency, so accounts in different
+currencies share one axis. A balance line is drawn in steps (a balance
+does not change between operations), starts with the balance at `since`
+and reaches the end of the period. A pie shows only positive parts: an
+overdraft is named under the chart instead of being a slice. Charts are
+described as data in the report (`PieChart`, `BarChart`, `LineChart`) and
+drawn by `ChartRenderer`, so the tests check what a chart shows without
+drawing it. Money stays `Decimal`; it becomes `float` only to place a mark
+on the picture, and every label shows the exact value.
 
 Files are named by the moment of the call and the kind of report:
-`2026-09-26_14-30-05_bank.json`, `2026-09-26_14-30-05_bank_top_clients.csv`.
+`2026-09-26_14-30-05_bank.json`, `2026-09-26_14-30-05_bank_top_clients.csv`,
+`2026-09-26_14-30-05_bank_top_clients.png`.
 All files of one call share the name, and a name already taken gets `-2`,
 `-3`, so nothing is overwritten. The folder is created on the first save;
 the programs use `reports/` in the project root (ignored by git, see
@@ -292,6 +306,7 @@ report = builder.client_report(client.client_id, since=datetime(2026, 9, 24))
 print(builder.to_text(report))
 builder.export_to_json(report)  # reports/2026-09-26_14-30-05_client.json
 builder.export_to_csv(report)  # reports/2026-09-26_14-30-05_client_summary.csv, ..._client_accounts.csv, ...
+builder.save_charts(report)  # reports/2026-09-26_14-30-05_client_assets.png, ..._client_balance.png, ...
 ```
 
 ## Project structure
@@ -300,7 +315,7 @@ builder.export_to_csv(report)  # reports/2026-09-26_14-30-05_client_summary.csv,
 modular-bank-platform/
 ├── README.md
 ├── pyproject.toml          # pytest and ruff configuration
-├── requirements.txt        # runtime dependencies (none, stdlib only)
+├── requirements.txt        # runtime dependencies (matplotlib)
 ├── requirements-dev.txt    # pytest, ruff
 ├── src/
 │   ├── main.py             # the program: one day of the bank, from salaries to reports
@@ -322,8 +337,9 @@ modular-bank-platform/
 │   │   ├── audit_report.py # AuditReport and its three reports
 │   │   └── bank_report.py  # BankReport: transaction statistics, top clients, total balance
 │   ├── reporting/
-│   │   ├── report.py       # Report, ReportKind, KeyValueSection, TableSection
+│   │   ├── report.py       # Report, ReportKind, sections, charts as data (PieChart, BarChart, LineChart)
 │   │   ├── exporters.py    # ReportExporter and its formats: text, JSON, CSV
+│   │   ├── charts.py       # ChartRenderer: pie, bar and line charts as PNG (matplotlib)
 │   │   └── builder.py      # ReportBuilder: client, bank and risk reports, export to files
 │   └── models/
 │       ├── account.py             # AbstractAccount, BankAccount
@@ -458,7 +474,7 @@ Environment variables (read once at start by `Settings.from_env()`):
 | `BANK_AUDIT_LOG` | the audit log file | `logs/audit.jsonl` |
 | `BANK_LOG_FILE` | the application log file | `logs/app.jsonl` |
 | `BANK_LOG_LEVEL` | the lowest level shown in the terminal: `debug`, `info`, `warning`, `error`, `critical`; the file always gets everything from `DEBUG` | `warning` |
-| `BANK_REPORTS_DIR` | the folder the reports are saved to | `reports/` |
+| `BANK_REPORTS_DIR` | the folder the reports and charts are saved to | `reports/` |
 
 ```bash
 BANK_LOG_LEVEL=info python src/main.py                        # show every business event in the terminal

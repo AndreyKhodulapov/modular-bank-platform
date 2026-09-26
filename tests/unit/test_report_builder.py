@@ -207,6 +207,77 @@ def test_risk_report_minimum_level_chooses_the_suspicious_operations(builder):
     assert report.section("suspicious_operations").title == "Suspicious operations (low risk and above)"
 
 
+@pytest.mark.usefixtures("processed")
+def test_report_charts_draw_the_report_data(parties, builder):
+    anna_rub, boris_usd, vera_rub = parties
+    client = builder.client_report(anna_rub.owner.client_id)
+    assets, statuses, balance = client.charts
+    anna = f"BankAccount RUB {anna_rub.account_id[:8]}"
+    assert (assets.name, assets.labels, assets.values) == ("assets", (anna,), (Decimal("14450.00"),))
+    assert (statuses.name, statuses.labels, statuses.values) == (
+        "transactions_by_status",
+        ("completed", "failed"),
+        (3, 2),
+    )
+    assert (balance.name, dict(balance.series)) == (
+        "balance",
+        {anna: ((datetime(2026, 9, 24, 14), Decimal("14450.00")),)},
+    )
+
+    bank = builder.bank_report()
+    assert [chart.name for chart in bank.charts] == [
+        "balance_by_currency",
+        "transactions_by_type",
+        "top_clients",
+        "total_balance",
+    ]
+    by_currency, _, top_clients, _ = bank.charts
+    assert (by_currency.labels, by_currency.values) == (("RUB", "USD"), (Decimal("14450.00"), Decimal("4500.00")))
+    assert top_clients.labels == tuple(client.full_name for client in (anna_rub.owner, boris_usd.owner, vera_rub.owner))
+
+    risk = builder.risk_report()
+    assert [chart.name for chart in risk.charts] == ["assessments_by_level", "risk_factors", "errors_by_type"]
+    assert rows(risk, "risk_factors") == [
+        {"factor": "new_recipient", "count": 3},
+        {"factor": "large_amount", "count": 1},
+    ]
+
+
+@pytest.mark.usefixtures("processed")
+def test_balance_history_starts_at_the_period_and_reaches_its_end(bank, clock, parties, builder):
+    anna_rub, _, _ = parties
+    clock.moment = datetime(2026, 9, 24, 15)
+    bank.withdraw(anna_rub.account_id, 450)
+    clock.moment = datetime(2026, 9, 24, 16)
+    since = datetime(2026, 9, 24, 14, 30)
+
+    (balance,) = builder.client_report(anna_rub.owner.client_id, since=since).charts[2].series.values()
+    # the balance at the start of the period, every change in it, and the last balance held until now
+    assert balance == (
+        (since, Decimal("14450.00")),
+        (datetime(2026, 9, 24, 15), Decimal("14000.00")),
+        (datetime(2026, 9, 24, 16), Decimal("14000.00")),
+    )
+    history = [tuple(row.values()) for row in rows(builder.bank_report(since=since), "balance_history")]
+    assert history == [
+        (since, Decimal("18950.00")),  # Anna's 14 450 RUB and Boris's 50 USD
+        (datetime(2026, 9, 24, 15), Decimal("18500.00")),
+        (datetime(2026, 9, 24, 16), Decimal("18500.00")),
+    ]
+    # the movements of one moment make one point; the period ends at until, not now
+    report = builder.bank_report(until=datetime(2026, 9, 24, 15))
+    assert [tuple(row.values()) for row in rows(report, "balance_history")] == [
+        (datetime(2026, 9, 24, 14), Decimal("18950.00")),
+        (datetime(2026, 9, 24, 15), Decimal("18950.00")),
+    ]
+    assert report.charts[-1].series == {"Total": tuple(tuple(row.values()) for row in rows(report, "balance_history"))}
+
+
+def test_bank_report_refuses_a_wrong_period(builder):
+    with pytest.raises(InvalidOperationError, match="since must be earlier than until"):
+        builder.bank_report(since=datetime(2026, 9, 25), until=datetime(2026, 9, 24))
+
+
 def test_risk_report_refuses_an_unknown_level(builder):
     with pytest.raises(InvalidOperationError, match="Unsupported risk level"):
         builder.risk_report(min_level="extreme")
@@ -234,7 +305,8 @@ def test_exports_are_named_by_the_call_time_and_the_report_kind(builder):
         f"2026-09-26_10-00-05_bank_{section.name}.csv" for section in report.sections
     ]
     assert json.loads(json_path.read_text(encoding="utf-8"))["sections"]["summary"]["total_balance"] == "18950.00"
-    with csv_paths[-1].open(encoding="utf-8", newline="") as file:
+    top_clients = builder.output_dir / "2026-09-26_10-00-05_bank_top_clients.csv"
+    with top_clients.open(encoding="utf-8", newline="") as file:
         assert [row["place"] for row in csv.DictReader(file)] == ["1", "2", "3"]
     assert text_path.read_text(encoding="utf-8") == builder.to_text(report) + "\n"
 
@@ -251,3 +323,31 @@ def test_a_second_export_within_the_same_second_does_not_overwrite(builder):
 def test_export_needs_a_report(builder):
     with pytest.raises(InvalidOperationError, match="report must be a Report"):
         builder.export_to_json({"kind": "bank"})
+
+
+@pytest.mark.usefixtures("processed")
+def test_save_charts_writes_a_png_per_chart(builder):
+    report = builder.bank_report()
+    paths = builder.save_charts(report)
+    assert [path.name for path in paths] == [f"2026-09-26_10-00-05_bank_{chart.name}.png" for chart in report.charts]
+    assert all(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for path in paths)
+
+
+def test_save_charts_skips_a_chart_with_nothing_to_draw(bank, client, builder):
+    bank.open_account(client.client_id, currency="RUB", initial_balance=500)
+    paths = builder.save_charts(builder.client_report(client.client_id))
+    # no transactions yet: the chart of their statuses is not saved
+    assert [path.name for path in paths] == [
+        "2026-09-26_10-00-05_client_assets.png",
+        "2026-09-26_10-00-05_client_balance.png",
+    ]
+
+
+def test_save_charts_of_an_empty_bank_writes_nothing(builder):
+    assert builder.save_charts(builder.bank_report()) == []
+    assert not builder.output_dir.exists()
+
+
+def test_save_charts_needs_a_report(builder):
+    with pytest.raises(InvalidOperationError, match="report must be a Report"):
+        builder.save_charts("report")
