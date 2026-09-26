@@ -13,7 +13,7 @@ from itertools import count
 from pathlib import Path
 
 from exceptions import InvalidOperationError
-from models import AccountStatus, Currency, Transaction
+from models import AccountStatus, BankAccount, Currency, Transaction, TransactionStatus
 from reporting.charts import ChartRenderer
 from reporting.exporters import CsvExporter, JsonExporter, ReportExporter, TextExporter
 from reporting.report import (
@@ -99,6 +99,12 @@ class ReportBuilder:
         The first point is the total at ``since`` when money was there before
         it; the last value is repeated at the end of the period (``until``,
         or now), so the last step reaches it.
+
+        This is the cash on the accounts (``balance_after``): an investment
+        portfolio is not a movement, so it is not in the history, while
+        ``total_value`` elsewhere in the reports includes it. Past balances
+        are converted at the bank's current rates, not at the rates of
+        their day.
         """
         latest: dict[str, Decimal] = {}  # the balance of each account after its latest movement
         points: dict[datetime, Decimal] = {}  # one point per moment: the total after all its movements
@@ -112,6 +118,33 @@ class ReportBuilder:
         if points and end > max(points):
             points[end] = points[max(points)]
         return list(points.items())
+
+    def _balance_lines(
+        self,
+        accounts: list[BankAccount],
+        names: Mapping[str, str],
+        values: Mapping[str, Decimal],
+        since: datetime | None,
+        until: datetime | None,
+    ) -> dict[str, list[tuple[datetime, Decimal]]]:
+        """One balance line per account; past ``LineChart.MAX_SERIES`` the smallest by value share one summed line."""
+        limit = LineChart.MAX_SERIES
+        if len(accounts) > limit:
+            accounts_by_value = sorted(accounts, key=lambda account: -values[account.account_id])
+            kept = {account.account_id for account in accounts_by_value[: limit - 1]}
+        else:
+            kept = {account.account_id for account in accounts}
+        history = self._bank.history
+        lines = {
+            names[account.account_id]: self._balance_steps(history.movements(account.account_id), since, until)
+            for account in accounts
+            if account.account_id in kept
+        }
+        rest = {account.account_id for account in accounts} - kept
+        if rest:
+            movements = [movement for movement in history.movements() if movement.account_id in rest]
+            lines[f"Other {len(rest)} accounts"] = self._balance_steps(movements, since, until)
+        return lines
 
     # --- reports
 
@@ -140,7 +173,8 @@ class ReportBuilder:
             movement for movement in history.movements(since=since, until=until) if movement.account_id in account_ids
         ]
         profile = self._audit_report.client_risk_profile(client.client_id)
-        statuses = Counter(transaction.status.value for transaction in transactions)
+        statuses = Counter(transaction.status for transaction in transactions)
+        values = {account.account_id: self._in_base(account.total_value, account.currency) for account in accounts}
 
         summary = KeyValueSection(
             "summary",
@@ -150,14 +184,12 @@ class ReportBuilder:
                 "full_name": client.full_name,
                 "status": client.status,
                 "accounts": len(accounts),
-                "total_value": sum(
-                    (self._in_base(account.total_value, account.currency) for account in accounts), Decimal("0.00")
-                ),
+                "total_value": sum(values.values(), Decimal("0.00")),
                 "period_start": since,
                 "period_end": until,
                 "transactions": len(transactions),
-                "completed": statuses["completed"],
-                "failed": statuses["failed"],
+                "completed": statuses[TransactionStatus.COMPLETED],
+                "failed": statuses[TransactionStatus.FAILED],
             },
         )
         accounts_table = TableSection(
@@ -182,7 +214,7 @@ class ReportBuilder:
                     self._bank.account_opened_at(account.account_id),
                     account.balance,
                     account.total_value,
-                    self._in_base(account.total_value, account.currency),
+                    values[account.account_id],
                 )
                 for account in accounts
             ],
@@ -263,23 +295,21 @@ class ReportBuilder:
                 "Assets by account",
                 base,
                 labels=[names[account.account_id] for account in accounts],
-                values=[self._in_base(account.total_value, account.currency) for account in accounts],
+                values=[values[account.account_id] for account in accounts],
             ),
             BarChart(
                 "transactions_by_status",
                 "Transactions by status",
                 "transactions",
-                labels=list(statuses),
-                values=list(statuses.values()),
+                # the order of the statuses, not of the transactions, so the charts of two clients compare
+                labels=[status.value for status in TransactionStatus if statuses[status]],
+                values=[statuses[status] for status in TransactionStatus if statuses[status]],
             ),
             LineChart(
                 "balance",
                 "Balance by account",
                 base,
-                {
-                    names[account.account_id]: self._balance_steps(history.movements(account.account_id), since, until)
-                    for account in accounts
-                },
+                self._balance_lines(accounts, names, values, since, until),
             ),
         )
         return self._report(
@@ -565,22 +595,36 @@ class ReportBuilder:
         return self._write(report, exporter.render(report), exporter.extension)
 
     def _write(self, report: Report, files: Mapping[str, str | bytes], extension: str) -> list[Path]:
-        """Write ``files`` (name part -> content) under one free name; text is written as UTF-8, as it is."""
+        """Write ``files`` (name part -> content) under ``stem``, or ``stem-2``, ``stem-3``... when a name is taken.
+
+        Text is written as UTF-8, as it is. The files of one call always
+        share a name: when another process takes one of them while they are
+        being written, the ones already written are removed and the next
+        name is tried.
+        """
         if not files:
             return []
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        paths = self._free_paths(f"{self._clock():{self.STAMP}}_{report.kind.value}", files, extension)
-        for path, content in zip(paths, files.values(), strict=True):
-            # "x" refuses to overwrite a file that appeared in the meantime
-            with path.open("xb") as file:
-                file.write(content.encode("utf-8") if isinstance(content, str) else content)
-        return paths
-
-    def _free_paths(self, stem: str, parts: Mapping[str, object], extension: str) -> list[Path]:
-        """Paths for ``parts`` under ``stem``, or under ``stem-2``, ``stem-3``... when one of them is taken."""
+        stem = f"{self._clock():{self.STAMP}}_{report.kind.value}"
         for attempt in count(1):
             name = stem if attempt == 1 else f"{stem}-{attempt}"
-            paths = [self._output_dir / f"{name}{part}{extension}" for part in parts]
-            if not any(path.exists() for path in paths):
+            paths = [self._output_dir / f"{name}{part}{extension}" for part in files]
+            if not any(path.exists() for path in paths) and self._write_all(paths, files.values()):
                 return paths
         raise AssertionError("unreachable: count() never ends")
+
+    @staticmethod
+    def _write_all(paths: list[Path], contents: Iterable[str | bytes]) -> bool:
+        """Write every file, or none: False when one of the names turned out to be taken."""
+        written: list[Path] = []
+        try:
+            for path, content in zip(paths, contents, strict=True):
+                # "x" refuses to overwrite a file that appeared after the check
+                with path.open("xb") as file:
+                    written.append(path)
+                    file.write(content.encode("utf-8") if isinstance(content, str) else content)
+        except FileExistsError:
+            for path in written:
+                path.unlink(missing_ok=True)
+            return False
+        return True

@@ -194,14 +194,19 @@ class LineChart(Chart):
 
     Each point is ``(moment, value)`` in time order; a value holds until the
     next point (a balance does not change between operations), so the line
-    is drawn in steps.
+    is drawn in steps. At most ``MAX_SERIES`` lines, so every line keeps a
+    colour of its own; a report with more folds the rest into one line.
     """
+
+    MAX_SERIES: ClassVar[int] = 8
 
     series: Mapping[str, tuple[tuple[datetime, Decimal], ...]]
 
     def __post_init__(self) -> None:
         super().__post_init__()
         series = {label: tuple(points) for label, points in self.series.items()}
+        if len(series) > self.MAX_SERIES:
+            raise InvalidOperationError(f"Chart {self.name!r} has {len(series)} series, at most {self.MAX_SERIES}.")
         for label, points in series.items():
             moments = [moment for moment, _ in points]
             if moments != sorted(moments):

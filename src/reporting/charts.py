@@ -139,8 +139,6 @@ class ChartRenderer:
     def _draw_line(self, chart: LineChart) -> Figure:
         figure, axes = self._axes(chart, height=4.5)
         drawn = {label: points for label, points in chart.series.items() if points}
-        if len(drawn) > len(self.COLORS):
-            raise InvalidOperationError(f"Chart {chart.name!r} has {len(drawn)} series, at most {len(self.COLORS)}.")
         lowest = min(value for points in drawn.values() for _, value in points)
         if lowest < 0:
             axes.axhline(0, color=self.AXIS, linewidth=1)  # an overdraft goes below this line

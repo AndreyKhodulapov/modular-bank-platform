@@ -134,9 +134,15 @@ class CsvExporter(ReportExporter):
     The first line holds the column names (``key,value`` for a section of
     named values); values are written as ``plain()`` gives them, an empty
     field for a missing one.
+
+    A spreadsheet runs a field that starts with ``=``, ``+``, ``-`` or ``@``
+    as a formula, so text from outside (a client's name, an error message)
+    that starts like one gets a leading ``'`` and stays text. Numbers are
+    left as they are: ``-1511.00`` is an overdraft, not a formula.
     """
 
     extension = ".csv"
+    FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
 
     def render(self, report: Report) -> dict[str, str]:
         files = {}
@@ -144,6 +150,13 @@ class CsvExporter(ReportExporter):
             buffer = io.StringIO()
             writer = csv.writer(buffer)
             writer.writerow(section.columns)
-            writer.writerows([plain(value) for value in row] for row in section.rows)
+            writer.writerows([self._field(value) for value in row] for row in section.rows)
             files[f"_{section.name}"] = buffer.getvalue()
         return files
+
+    @classmethod
+    def _field(cls, value: object) -> object:
+        # only a str as the report holds it: a Decimal, a date or an enum turned into text by plain() is safe
+        if isinstance(value, str) and value.startswith(cls.FORMULA_START):
+            return f"'{value}"
+        return plain(value)

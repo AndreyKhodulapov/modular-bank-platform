@@ -2,6 +2,7 @@ import csv
 import json
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -81,6 +82,34 @@ def test_transfer_between_own_accounts_is_internal(bank, client, builder, proces
     processor.process_queue(queue)
     (row,) = rows(builder.client_report(client.client_id), "transactions")
     assert (row["direction"], row["counterparty"]) == ("internal", second.account_id)
+
+
+def test_client_chart_orders_the_statuses_as_the_bank_does(bank, client, builder, processor, queue):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=500)
+    frozen = bank.open_account(client.client_id, currency="RUB")
+    bank.freeze_account(frozen.account_id)
+    queue.add(Transaction("transfer", 100, "RUB", sender_id=account.account_id, recipient_id=frozen.account_id))
+    processor.process_queue(queue)  # the first transaction fails
+    queue.add(Transaction("withdrawal", 100, "RUB", sender_id=account.account_id))
+    processor.process_queue(queue)
+    statuses = builder.client_report(client.client_id).charts[1]
+    assert (statuses.labels, statuses.values) == (("completed", "failed"), (1, 1))
+
+
+def test_balance_chart_sums_the_smallest_accounts_past_the_line_limit(bank, client, builder):
+    accounts = [
+        bank.open_account(client.client_id, currency="RUB", initial_balance=100 * number) for number in range(1, 10)
+    ]
+    report = builder.client_report(client.client_id)
+    balance = report.charts[2]
+    # the seven largest keep their lines in the order they were opened; the two smallest are summed
+    assert list(balance.series) == [
+        *(f"BankAccount RUB {account.account_id[:8]}" for account in accounts[2:]),
+        "Other 2 accounts",
+    ]
+    assert balance.series["Other 2 accounts"][-1][1] == Decimal("300.00")
+    paths = builder.save_charts(report)
+    assert "2026-09-26_10-00-05_client_balance.png" in [path.name for path in paths]
 
 
 @pytest.mark.usefixtures("processed")
@@ -318,6 +347,23 @@ def test_a_second_export_within_the_same_second_does_not_overwrite(builder):
     csv_second = builder.export_to_csv(report)[0]
     assert csv_second.name == "2026-09-26_10-00-05_bank_summary.csv"  # the CSV files are not taken yet
     assert builder.export_to_csv(report)[0].name == "2026-09-26_10-00-05_bank-2_summary.csv"
+
+
+def test_a_name_taken_while_writing_moves_the_whole_call_to_the_next_name(builder, monkeypatch):
+    report = builder.bank_report()
+    builder.output_dir.mkdir(parents=True)
+    # another process takes the second file after the names were checked
+    taken = builder.output_dir / "2026-09-26_10-00-05_bank_balance_by_currency.csv"
+    taken.write_text("theirs", encoding="utf-8")
+    monkeypatch.setattr(Path, "exists", lambda path: False)
+    paths = builder.export_to_csv(report)
+    monkeypatch.undo()
+    assert [path.name for path in paths] == [
+        f"2026-09-26_10-00-05_bank-2_{section.name}.csv" for section in report.sections
+    ]
+    # the first file of the failed attempt is removed, the other process's file is untouched
+    assert sorted(path.name for path in builder.output_dir.iterdir()) == sorted([taken.name, *(p.name for p in paths)])
+    assert taken.read_text(encoding="utf-8") == "theirs"
 
 
 def test_export_needs_a_report(builder):

@@ -415,7 +415,10 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
 - **CSV is one table per file.** Sections have different columns, and a
   CSV file has one header, so each section gets its own file
   (`..._bank_top_clients.csv`); any spreadsheet or `pandas.read_csv` opens it
-  as is.
+  as is. Text from users that starts with `=`, `+`, `-` or `@` gets a
+  leading `'`: otherwise a spreadsheet runs a client named `=HYPERLINK(...)`
+  as a formula (CSV injection). Numbers are not escaped, `-1511.00` stays a
+  number.
 - **matplotlib without pyplot.** `pyplot` keeps global state (the current
   figure) and may open a window; `matplotlib.figure.Figure` is a plain
   object, so a chart is built and saved by ordinary code: no hidden current
@@ -427,7 +430,10 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
 - **Files never overwrite each other.** A file name holds the time of the
   call and the report kind (`2026-09-26_14-30-05_bank.json`); a taken name
   gets `-2`, and files are opened in mode `"x"`, which fails instead of
-  overwriting.
+  overwriting. Checking a name and then creating the file is a race
+  (another process can come in between), so the check alone is not
+  trusted: when `"x"` fails midway, the files already written are removed
+  and the whole set moves to the next name.
 
 ## Preparing modules for unit testing
 

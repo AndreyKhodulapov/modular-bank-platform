@@ -279,13 +279,19 @@ so every format works with any report:
   is a string (`"150000.00"`), never a float, dates are ISO 8601;
 - `export_to_csv(report)` - one CSV file per section, since a CSV file holds
   a single table; a section of named values has the columns `key,value`;
+  text that starts like a spreadsheet formula (`=`, `+`, `-`, `@`) gets a
+  leading `'`, so a spreadsheet shows it instead of running it;
 - `save_charts(report)` - one PNG image per chart; a chart with nothing to
   draw (a client without transactions) is skipped.
 
 Every amount on a chart is in the base currency, so accounts in different
 currencies share one axis. A balance line is drawn in steps (a balance
 does not change between operations), starts with the balance at `since`
-and reaches the end of the period. A pie shows only positive parts: an
+and reaches the end of the period. It shows the cash on the accounts
+(an investment portfolio is not a balance movement) converted at today's
+rates. A chart has at most eight lines, one colour each: a client with
+more accounts gets the seven largest and one line for the sum of the rest
+(`Other 2 accounts`). A pie shows only positive parts: an
 overdraft is named under the chart instead of being a slice. Charts are
 described as data in the report (`PieChart`, `BarChart`, `LineChart`) and
 drawn by `ChartRenderer`, so the tests check what a chart shows without

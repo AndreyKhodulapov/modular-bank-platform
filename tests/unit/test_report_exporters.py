@@ -134,3 +134,23 @@ def test_csv_gives_one_table_per_section(report):
         "opened_at": "2026-09-01T10:00:00",
     }
     assert files["_errors"] == "error_type,count\r\n"  # an empty table keeps its header
+
+
+def test_csv_keeps_text_that_looks_like_a_formula_as_text():
+    table = TableSection(
+        "clients",
+        "Clients",
+        ("full_name", "reason", "balance"),
+        [
+            ('=HYPERLINK("http://example.com","x")', "@SUM(A1)", Decimal("-1511.00")),
+            ("+7 999", "-", Decimal("10.00")),
+            ("Volkova Maria", "\tcmd", None),
+        ],
+    )
+    report = Report(ReportKind.BANK, "Bank report", datetime(2026, 9, 25, 8, 0), Currency.RUB, (table,))
+    rows = list(csv.reader(io.StringIO(CsvExporter().render(report)["_clients"])))
+    assert rows[1:] == [
+        ['\'=HYPERLINK("http://example.com","x")', "'@SUM(A1)", "-1511.00"],  # an overdraft stays a number
+        ["'+7 999", "'-", "10.00"],
+        ["Volkova Maria", "'\tcmd", ""],
+    ]

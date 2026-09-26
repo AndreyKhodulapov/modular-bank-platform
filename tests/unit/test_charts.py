@@ -113,10 +113,11 @@ def test_empty_chart_is_not_drawn(renderer):
         renderer.render(BarChart("errors", "Errors", "attempts", labels=[], values=[]))
 
 
-def test_line_chart_has_at_most_one_colour_per_series(renderer):
-    series = {f"account {number}": [(MORNING, Decimal(number))] for number in range(len(ChartRenderer.COLORS) + 1)}
+def test_line_chart_has_at_most_one_colour_per_series():
+    assert LineChart.MAX_SERIES == len(ChartRenderer.COLORS)
+    series = {f"account {number}": [(MORNING, Decimal(number))] for number in range(LineChart.MAX_SERIES + 1)}
     with pytest.raises(InvalidOperationError, match="9 series, at most 8"):
-        renderer.render(LineChart("balance", "Balance", "RUB", series))
+        LineChart("balance", "Balance", "RUB", series)
 
 
 def test_unknown_chart_form_is_refused(renderer):
