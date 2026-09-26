@@ -315,8 +315,9 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   fast queries in the running process; the file is the durable record.
 - **One journal, many writers.** Security, the bank (client and account
   life cycle), the queue, the processor and risk control share one injected
-  `AuditLog`, so a client's whole story is in one place, in time order. The old `suspicious_activities` API is kept as a
-  filtered view of it, so existing callers did not change.
+  `AuditLog`, so a client's whole story is in one place, in time order.
+  `suspicious_activities` is a filtered view of the same journal, so the
+  security side needs no store of its own.
 - **What is worth auditing.** Changes of state that someone may have to
   answer for: an account opened, frozen or closed, a client unblocked, a
   transaction accepted, executed, refused or cancelled. A change is recorded
