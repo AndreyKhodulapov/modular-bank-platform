@@ -320,6 +320,8 @@ builder.save_charts(report)  # reports/2026-09-26_14-30-05_client_assets.png, ..
 ```
 modular-bank-platform/
 ├── README.md
+├── Dockerfile              # the program, the tour and the tests in one image
+├── .dockerignore
 ├── pyproject.toml          # pytest and ruff configuration
 ├── requirements.txt        # runtime dependencies (matplotlib)
 ├── requirements-dev.txt    # pytest, ruff
@@ -369,6 +371,8 @@ modular-bank-platform/
 ```
 
 ## Setup
+
+Python 3.12 or newer is required.
 
 ```bash
 python3 -m venv .venv
@@ -432,8 +436,8 @@ stderr, for example
 python src/legacy_demo.py
 ```
 
-The tour shows the platform feature by feature, in the order it was
-built; it runs one stage per feature set and prints a banner before each:
+The tour shows the platform feature by feature, from the accounts up to
+risk control; it runs one stage per feature set and prints a banner before each:
 
 1. **Accounts Basic** - an active and a frozen regular account, rejected
    operations on the frozen one, valid deposit and withdrawal, validation and
@@ -519,4 +523,29 @@ smoke tests of the programs point both variables to a temporary folder.
 pytest            # unit + integration tests
 ruff check .      # PEP 8 / import order / modern syntax checks
 ruff format .     # auto-format
+```
+
+## Run with Docker
+
+The image holds the code, the tests and every dependency, so nothing but
+Docker is needed on the machine. Build it once from the repository root:
+
+```bash
+docker build -t modular-bank-platform .
+```
+
+The default command plays the program. The logs and the reports are
+written under `/app` inside the container; mount the two folders to keep
+them on the host:
+
+```bash
+docker run --rm -v "$PWD/logs:/app/logs" -v "$PWD/reports:/app/reports" modular-bank-platform
+```
+
+Any other command runs in the same image:
+
+```bash
+docker run --rm modular-bank-platform python src/legacy_demo.py   # the feature tour
+docker run --rm modular-bank-platform pytest                       # the test suite
+docker run --rm -e BANK_LOG_LEVEL=info modular-bank-platform       # every business event in the terminal
 ```
