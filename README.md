@@ -256,6 +256,44 @@ print(report.transaction_statistics())
 #   tariff fees collected 450.00 RUB
 ```
 
+### Report builder
+
+`ReportBuilder(bank, output_dir)` (package `reporting`) turns the numbers
+of `BankReport`, `AuditReport` and the transaction history into three
+reports and writes them in three formats:
+
+| Report | Sections |
+| --- | --- |
+| `client_report(client_id, since=None, until=None)` | summary, accounts (as they are now), transactions and statement for the period, risk profile |
+| `bank_report(top=3)` | summary, balance by currency, accounts by type, transactions by status and by type, top clients |
+| `risk_report(min_level="medium")` | summary, assessments by risk level, suspicious operations, clients by risk, failed attempts by error type, security events |
+
+A `Report` is a list of sections, each either named values or a table,
+so every format works with any report:
+
+- `to_text(report)` - aligned tables for people; UUIDs are cut to 8
+  characters, numbers are aligned to the right;
+- `export_to_text(report)` - the same text in a `.txt` file;
+- `export_to_json(report)` - one JSON document, sections by name; an amount
+  is a string (`"150000.00"`), never a float, dates are ISO 8601;
+- `export_to_csv(report)` - one CSV file per section, since a CSV file holds
+  a single table; a section of named values has the columns `key,value`.
+
+Files are named by the moment of the call and the kind of report:
+`2026-09-26_14-30-05_bank.json`, `2026-09-26_14-30-05_bank_top_clients.csv`.
+All files of one call share the name, and a name already taken gets `-2`,
+`-3`, so nothing is overwritten. The folder is created on the first save;
+the programs use `reports/` in the project root (ignored by git, see
+`BANK_REPORTS_DIR` below).
+
+```python
+builder = ReportBuilder(bank, "reports")
+report = builder.client_report(client.client_id, since=datetime(2026, 9, 24))
+print(builder.to_text(report))
+builder.export_to_json(report)  # reports/2026-09-26_14-30-05_client.json
+builder.export_to_csv(report)  # reports/2026-09-26_14-30-05_client_summary.csv, ..._client_accounts.csv, ...
+```
+
 ## Project structure
 
 ```
@@ -283,6 +321,10 @@ modular-bank-platform/
 │   │   ├── risk.py         # RiskAnalyzer, risk rules, RiskAssessment, RiskLevel
 │   │   ├── audit_report.py # AuditReport and its three reports
 │   │   └── bank_report.py  # BankReport: transaction statistics, top clients, total balance
+│   ├── reporting/
+│   │   ├── report.py       # Report, ReportKind, KeyValueSection, TableSection
+│   │   ├── exporters.py    # ReportExporter and its formats: text, JSON, CSV
+│   │   └── builder.py      # ReportBuilder: client, bank and risk reports, export to files
 │   └── models/
 │       ├── account.py             # AbstractAccount, BankAccount
 │       ├── savings_account.py     # SavingsAccount
@@ -298,6 +340,7 @@ modular-bank-platform/
 │   └── integration/        # account, bank, transaction and risk scenarios, smoke tests of the programs
 ├── docs/
 │   └── oop_principles.md   # interview-style notes on OOP, patterns, security
+├── reports/                # saved reports, created on the first save, ignored by git
 └── logs/                   # created by the programs, ignored by git
     ├── audit.jsonl         # the audit log, one JSON event per line
     └── app.jsonl           # the application log, one JSON record per line
@@ -415,6 +458,7 @@ Environment variables (read once at start by `Settings.from_env()`):
 | `BANK_AUDIT_LOG` | the audit log file | `logs/audit.jsonl` |
 | `BANK_LOG_FILE` | the application log file | `logs/app.jsonl` |
 | `BANK_LOG_LEVEL` | the lowest level shown in the terminal: `debug`, `info`, `warning`, `error`, `critical`; the file always gets everything from `DEBUG` | `warning` |
+| `BANK_REPORTS_DIR` | the folder the reports are saved to | `reports/` |
 
 ```bash
 BANK_LOG_LEVEL=info python src/main.py                        # show every business event in the terminal

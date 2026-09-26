@@ -219,3 +219,6 @@ __marimo__/
 
 # Audit log written by the demo
 logs/
+
+# Reports and charts saved by ReportBuilder
+reports/
