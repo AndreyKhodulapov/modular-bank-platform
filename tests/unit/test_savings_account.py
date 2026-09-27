@@ -62,14 +62,15 @@ def test_zero_rate_yields_no_interest(owner):
 
 
 @pytest.mark.parametrize(
-    ("status", "error_type"),
-    [("frozen", AccountFrozenError), ("closed", AccountClosedError)],
+    ("transition", "error_type", "balance"),
+    [("freeze", AccountFrozenError, Decimal("1000.00")), ("close", AccountClosedError, Decimal("0.00"))],
 )
-def test_inactive_account_earns_no_interest(owner, status, error_type):
-    account = SavingsAccount(owner=owner, currency="RUB", status=status, initial_balance=1000, monthly_rate="0.1")
+def test_inactive_account_earns_no_interest(owner, transition, error_type, balance):
+    account = SavingsAccount(owner=owner, currency="RUB", initial_balance=1000, monthly_rate="0.1")
+    getattr(account, transition)()
     with pytest.raises(error_type):
         account.apply_monthly_interest()
-    assert account.balance == Decimal("1000.00")
+    assert account.balance == balance
 
 
 def test_get_account_info_extends_base_snapshot(savings_account):

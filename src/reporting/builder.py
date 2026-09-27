@@ -93,24 +93,24 @@ class ReportBuilder:
     def _balance_steps(
         self, movements: Iterable[BalanceMovement], since: datetime | None, until: datetime | None
     ) -> list[tuple[datetime, Decimal]]:
-        """The total balance of the accounts in ``movements``, in the base currency, after each moment of a period.
+        """The total value of the accounts in ``movements``, in the base currency, after each moment of a period.
 
         The first point is the total at ``since`` when money was there before
         it; the last value is repeated at the end of the period (``until``,
         or now), so the last step reaches it.
 
-        This is the cash on the accounts (``balance_after``): an investment
-        portfolio is not a movement, so it is not in the history, while
-        ``total_value`` elsewhere in the reports includes it. Past balances
-        are converted at the bank's current rates, not at the rates of
-        their day.
+        This is the total value of the accounts (``total_value_after``), as
+        ``total_value`` elsewhere in the reports: money moved into an
+        investment portfolio does not look like money lost. Past values are
+        converted at the bank's current rates, not at the rates of their
+        day.
         """
-        latest: dict[str, Decimal] = {}  # the balance of each account after its latest movement
+        latest: dict[str, Decimal] = {}  # the value of each account after its latest movement
         points: dict[datetime, Decimal] = {}  # one point per moment: the total after all its movements
         for movement in movements:
             if until is not None and movement.moment >= until:
                 break
-            latest[movement.account_id] = self._in_base(movement.balance_after, movement.currency)
+            latest[movement.account_id] = self._in_base(movement.total_value_after, movement.currency)
             moment = movement.moment if since is None or movement.moment >= since else since
             points[moment] = sum(latest.values(), Decimal("0.00"))
         end = self._bank.now() if until is None else min(until, self._bank.now())
@@ -255,7 +255,16 @@ class ReportBuilder:
         statement = TableSection(
             "statement",
             "Statement",
-            ("moment", "account_id", "kind", "amount", "currency", "balance_after", "transaction_id"),
+            (
+                "moment",
+                "account_id",
+                "kind",
+                "amount",
+                "currency",
+                "balance_after",
+                "total_value_after",
+                "transaction_id",
+            ),
             [
                 (
                     movement.moment,
@@ -264,6 +273,7 @@ class ReportBuilder:
                     movement.amount,
                     movement.currency,
                     movement.balance_after,
+                    movement.total_value_after,
                     movement.transaction_id,
                 )
                 for movement in movements

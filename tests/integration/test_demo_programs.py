@@ -104,12 +104,23 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "warning    #21 large                transfer of 7000.00 USD: medium risk, score 60" in output
     assert "blocked    #22 huge abroad          external_transfer of 25000.00 USD: high risk, score 90" in output
     assert "#19 short of money: failed" in output
+    # the last round: the back office records its operations, a reused id and a closed account are refused
+    assert "monthly interest on maria_savings: +1200.00, balance 121200.00 RUB" in output
+    assert "Oleg put 5_000 into ETF and took 1_000 back: cash 12000.00, total 16000.00 EUR" in output
+    assert "the queue refused it: Transaction id" in output
+    assert "another processor took it: failed, InvalidOperationError: Transaction id" in output
+    assert "Maria's balance stayed 1107001.00 RUB (was 1107001.00)" in output
+    assert "through the bank: The bank sets status of a new account itself." in output
+    assert "by the model itself: An account cannot be created closed" in output
     # the client view and the reports
     assert "PremiumAccount | Sokolov Oleg | ****" in output
     assert "| active | -1511.00 USD" in output
+    # the statement shows the balance and the total value: a portfolio move changes the first only
+    assert "investment     -5000.00     11000.00 EUR  total     16000.00" in output
+    assert "divestment     +1000.00     12000.00 EUR  total     16000.00" in output
     bank_report = output.split("= 5. Reports =")[1].split("  Risk report")[0]
     assert "open_accounts           11" in bank_report  # the closed CNY account is not counted
-    assert "total_balance           4322411.00" in bank_report
+    assert "total_balance           4331411.00" in bank_report  # the interest of the last round included
     assert "transactions            40" in bank_report
     assert "failure_rate_percent    20.5" in bank_report
     assert "tariff_fees             450.00" in bank_report
@@ -119,6 +130,7 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "CNY" not in bank_report
     # the balance history starts at the beginning of the day, before the salaries
     assert "2026-09-24 00:00     3940000.00\n    2026-09-24 09:00     4352971.00" in bank_report
+    assert "2026-09-25 10:00     4331411.00" in bank_report  # the interest; the portfolio move changes no value
     risk_report = output.split("  Risk report")[1].split("= 6. Export =")[0]
     assert "suspicious            7" in risk_report
     assert "blocked_by_risk       2" in risk_report
@@ -164,7 +176,7 @@ def test_main_program_exports_the_reports_and_charts(main_run):
 
     stamp = stamps.pop()
     bank = json.loads((folder / f"{stamp}_bank.json").read_text(encoding="utf-8"))
-    assert bank["sections"]["summary"]["total_balance"] == "4322411.00"
+    assert bank["sections"]["summary"]["total_balance"] == "4331411.00"
     assert [row["currency"] for row in bank["sections"]["balance_by_currency"]] == ["EUR", "KZT", "RUB", "USD"]
     client = json.loads((folder / f"{stamp}_client.json").read_text(encoding="utf-8"))
     assert client["title"] == "Client report: Sokolov Oleg"

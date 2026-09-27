@@ -16,8 +16,10 @@ def history() -> TransactionHistory:
     return TransactionHistory()
 
 
-def finished(kind, *, sender=None, recipient=None, at=NOW, completed=True) -> Transaction:
-    transaction = Transaction(kind, 100, "RUB", sender_id=sender, recipient_id=recipient, created_at=NOW)
+def finished(kind, *, sender=None, recipient=None, at=NOW, completed=True, transaction_id=None) -> Transaction:
+    transaction = Transaction(
+        kind, 100, "RUB", sender_id=sender, recipient_id=recipient, created_at=NOW, transaction_id=transaction_id
+    )
     transaction.start(at)
     if completed:
         transaction.complete(at, fee=Decimal("0.00"), debited_amount=None, credited_amount=None)
@@ -26,7 +28,10 @@ def finished(kind, *, sender=None, recipient=None, at=NOW, completed=True) -> Tr
     return transaction
 
 
-def movement(history, account_id="A", amount="100", *, at=NOW, kind="deposit", transaction_id=None):
+def movement(
+    history, account_id="A", amount="100", *, at=NOW, kind="deposit", transaction_id=None, total_value_after=None
+):
+    # no portfolio unless given: the value is the balance
     return history.record_movement(
         moment=at,
         account_id=account_id,
@@ -34,6 +39,7 @@ def movement(history, account_id="A", amount="100", *, at=NOW, kind="deposit", t
         amount=amount,
         currency="RUB",
         balance_after=amount,
+        total_value_after=amount if total_value_after is None else total_value_after,
         transaction_id=transaction_id,
     )
 
@@ -65,6 +71,19 @@ def test_a_transaction_enters_the_history_once(history):
         history.record_transaction(done)
     with pytest.raises(InvalidOperationError):
         history.record_transaction("not a transaction")
+
+
+def test_a_claimed_id_belongs_to_one_transaction(history):
+    waiting = Transaction("deposit", 100, "RUB", recipient_id="A", created_at=NOW, transaction_id="T-1")
+    assert history.claim(waiting) is waiting
+    history.claim(waiting)  # the same transaction, coming back for a retry
+    with pytest.raises(InvalidOperationError, match="already used"):
+        history.claim(finished("deposit", recipient="A", transaction_id="T-1"))
+    with pytest.raises(InvalidOperationError, match="already used"):
+        history.record_transaction(finished("deposit", recipient="A", transaction_id="T-1"))
+    with pytest.raises(InvalidOperationError):
+        history.claim("T-1")
+    assert history.transactions() == []
 
 
 def test_filters_by_account_on_either_side(history):
@@ -99,6 +118,7 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
         amount=Decimal("-30.50"),
         currency=Currency.RUB,
         balance_after=Decimal("-30.50"),
+        total_value_after=Decimal("-30.50"),
         transaction_id="T-1",
     )
     assert history.movements() == [first, other, second]
@@ -113,13 +133,31 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
         {"amount": "0"},
         {"amount": "0.004"},  # rounds to zero
         {"at": "2026-09-24"},
-        {"kind": "interest"},
+        {"kind": "bonus"},
+        {"total_value_after": "abc"},
     ],
 )
 def test_refuses_an_invalid_movement(history, params):
     with pytest.raises(InvalidOperationError):
         movement(history, **params)
     assert history.movements() == []
+
+
+def test_movement_keeps_the_total_value_apart_from_the_balance(history):
+    invested = history.record_movement(
+        moment=NOW,
+        account_id="A",
+        kind=MovementKind.INVESTMENT,
+        amount="-400",
+        currency="RUB",
+        balance_after="600",
+        total_value_after="1000",  # the 400 are in the portfolio now
+    )
+    assert (invested.amount, invested.balance_after, invested.total_value_after) == (
+        Decimal("-400.00"),
+        Decimal("600.00"),
+        Decimal("1000.00"),
+    )
 
 
 def test_recorded_history_cannot_be_changed_from_outside(history):

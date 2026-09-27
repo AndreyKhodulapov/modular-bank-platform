@@ -20,6 +20,9 @@ class MovementKind(Enum):
     WITHDRAWAL = "withdrawal"
     REFUND = "refund"
     PAYOUT = "payout"
+    INTEREST = "interest"
+    INVESTMENT = "investment"  # free cash moved into the portfolio
+    DIVESTMENT = "divestment"  # money moved from the portfolio back to free cash
 
 
 @dataclass(frozen=True)
@@ -30,8 +33,12 @@ class BalanceMovement:
     positive, a debit negative, with every fee the account charged.
     ``balance_after`` is the balance right after the change, so the
     movements of an account draw its balance over time without replaying
-    them. ``transaction_id`` links the movement to the transaction that
-    caused it; ``None`` for a back-office operation of the bank.
+    them. ``total_value_after`` is everything the account was worth at that
+    moment (``total_value``): the same as ``balance_after``, except for an
+    investment account, whose portfolio is added, so moving money between
+    its cash and its portfolio changes the balance but not the value.
+    ``transaction_id`` links the movement to the transaction that caused
+    it; ``None`` for a back-office operation of the bank.
     """
 
     moment: datetime
@@ -40,6 +47,7 @@ class BalanceMovement:
     amount: Decimal
     currency: Currency
     balance_after: Decimal
+    total_value_after: Decimal
     transaction_id: str | None = None
 
     def __str__(self) -> str:
@@ -59,9 +67,13 @@ class TransactionHistory:
     - A transaction enters the history once, when it reaches a final
       status after its last attempt: completed or failed. A cancelled one
       never ran, so it stays in the queue and the audit log only.
+    - A transaction id is used once across the bank: the processor claims
+      it here before the first attempt, so another transaction under a known
+      id is refused before its money moves, whichever processor runs it.
     - A movement is recorded by the bank whenever a balance changes through
       it: an account opened with money, a deposit, a withdrawal, a refund of
-      a rolled-back debit, the payout on closing.
+      a rolled-back debit, the payout on closing, monthly interest, and
+      money moved into an investment portfolio or back.
 
     The history is the bank's record of state, not a log: it is kept in
     memory and read by the reports, while the logs describe what the
@@ -72,11 +84,27 @@ class TransactionHistory:
 
     def __init__(self) -> None:
         self._transactions: dict[str, Transaction] = {}  # in the order they finished
+        self._claimed: dict[str, Transaction] = {}  # transaction_id -> the transaction that holds the id
         self._movements: list[BalanceMovement] = []
 
-    def record_transaction(self, transaction: Transaction) -> Transaction:
+    def claim(self, transaction: Transaction) -> Transaction:
+        """Take the transaction's id for it, before any attempt moves money.
+
+        The same transaction may claim its id again, for a retry; another
+        transaction under a known id is refused, whether the holder is still
+        waiting for a retry or already finished.
+        """
         if not isinstance(transaction, Transaction):
             raise InvalidOperationError("transaction must be a Transaction instance.")
+        holder = self._claimed.setdefault(transaction.transaction_id, transaction)
+        if holder is not transaction:
+            raise InvalidOperationError(
+                f"Transaction id {transaction.transaction_id} is already used by another transaction."
+            )
+        return transaction
+
+    def record_transaction(self, transaction: Transaction) -> Transaction:
+        self.claim(transaction)
         if transaction.status not in self.FINAL_STATUSES:
             raise InvalidOperationError(
                 f"Only completed or failed transactions enter the history; "
@@ -96,6 +124,7 @@ class TransactionHistory:
         amount: object,
         currency: Currency | str,
         balance_after: object,
+        total_value_after: object,
         transaction_id: str | None = None,
     ) -> BalanceMovement:
         if not isinstance(moment, datetime):
@@ -110,6 +139,7 @@ class TransactionHistory:
             amount=change,
             currency=to_enum(Currency, currency, field="currency"),
             balance_after=to_money(balance_after, field="balance_after"),
+            total_value_after=to_money(total_value_after, field="total_value_after"),
             transaction_id=transaction_id,
         )
         self._movements.append(movement)

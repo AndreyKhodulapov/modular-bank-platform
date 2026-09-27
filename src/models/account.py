@@ -148,6 +148,9 @@ class BankAccount(AbstractAccount):
             account_id=resolve_identifier(account_id, field="account_id"),
             status=to_enum(AccountStatus, status, field="account status"),
         )
+        # a closed account refuses every operation, so it is only ever the end of an open one: close() pays it out
+        if self._status is AccountStatus.CLOSED:
+            raise InvalidOperationError("An account cannot be created closed; close() closes an open account.")
         self._currency = to_enum(Currency, currency, field="currency")
 
         self._balance = to_money(initial_balance, field="initial_balance", require="non_negative")

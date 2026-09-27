@@ -64,11 +64,9 @@ def frozen_account(owner: Client) -> BankAccount:
 
 @pytest.fixture
 def closed_account(owner: Client) -> BankAccount:
-    return BankAccount(
-        owner=owner,
-        currency=Currency.EUR,
-        status=AccountStatus.CLOSED,
-    )
+    account = BankAccount(owner=owner, currency=Currency.EUR)
+    account.close()
+    return account
 
 
 @pytest.fixture

@@ -42,6 +42,7 @@ def test_accepts_status_as_string_in_any_case(owner, status):
         {"currency": "RUB", "account_id": ""},
         {"currency": "RUB", "account_id": 123},
         {"currency": "RUB", "status": "suspended"},
+        {"currency": "RUB", "status": "closed"},  # only close() closes an account
         {"currency": "RUB", "initial_balance": -1},
     ],
 )

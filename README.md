@@ -37,12 +37,16 @@ every run prints the same story:
    and a large transfer late in the evening are blocked, a night transfer
    waits for the morning. After every round a feed shows what the audit
    log recorded: `queued`, `completed`, `retry`, `failed`, `warning`,
-   `blocked`, `cancelled`.
+   `blocked`, `cancelled`. The last round is the back office of the bank:
+   monthly interest, money moved into a portfolio and back (both recorded
+   in the history), a salary sent twice under one id (refused by the queue
+   and by a processor before any money moves) and an attempt to open an
+   account that is already closed (refused by the bank and by the model).
 3. **Logging** - the events of the audit log by name, and the life cycle
    of six transactions as the journal holds it.
 4. **Client view** - Oleg logs in and sees his accounts, a statement of
-   each (the balance movements), his transactions, his suspicious
-   operations and his risk profile.
+   each (the balance movements, with the balance and the total value after
+   each), his transactions, his suspicious operations and his risk profile.
 5. **Reports** - the bank report (totals, balances by currency and account
    type, transactions by status and type, the top three clients, the total
    balance from the start of the day) and the risk report (assessments by
@@ -275,17 +279,21 @@ Three subclasses of `BankAccount`; each overrides `withdraw()`,
 Every account can be frozen, unfrozen and closed (`freeze()`, `unfreeze()`,
 `close()`). Closing is a settlement: the cash is paid out and returned, even
 below a savings `min_balance`. It is refused while the account is in
-overdraft, holds money in a portfolio or is frozen with money on it.
+overdraft, holds money in a portfolio or is frozen with money on it. An
+account is created active or frozen, never closed: only `close()` closes it,
+so money never ends up on an account that refuses every operation.
 
 ### Bank System
 
 - `Bank` - the entry point to the platform. It registers clients with a
   password, opens accounts of a registered type (`basic`, `savings`,
   `premium`, `investment`), closes, freezes and unfreezes them, runs deposits
-  and withdrawals, searches accounts by client, status, currency, type and
-  balance range, and reports `get_total_balance()` and
-  `get_clients_ranking()` in roubles. Every balance change it makes goes to
-  the [transaction history](#transaction-history).
+  and withdrawals and the operations of the account types
+  (`apply_monthly_interest()`, `invest()`, `divest()`), searches accounts by
+  client, status, currency, type and balance range, and reports
+  `get_total_balance()` and `get_clients_ranking()` in roubles. Every
+  balance change it makes goes to the
+  [transaction history](#transaction-history).
 - `SecurityGuard` - stores salted password hashes, blocks a client after three
   failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
   a log of suspicious activities.
@@ -301,16 +309,15 @@ Security rules applied by the bank:
 | --- | --- |
 | Login lockout | 3 wrong passwords in a row block the client; `unblock_client()` restores access |
 | Blocked client | cannot open, close or unfreeze accounts or move money |
-| Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw and unblock are refused; login, freeze and queries are allowed |
+| Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw, invest, divest and unblock are refused; login, freeze, monthly interest and queries are allowed |
 | Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more; kept in the audit log as `security` events |
 
-Known limitations:
-
-- `invest()`, `divest()` and `apply_monthly_interest()` are not part of
-  `Bank` and are called on the account itself, so the night window,
-  blocking and the suspicious activity log do not cover them, and the
-  transaction history has no movement for them. The feature tour invests
-  on Oleg's account this way.
+`Bank.invest()` and `Bank.divest()` are client operations with the same
+checks as a deposit or a withdrawal. `Bank.apply_monthly_interest()` is the
+bank's own operation: neither the night window nor a blocked client stops it,
+while a frozen or closed account earns no interest. The same methods of the
+account itself still work, but they bypass the bank: no checks and no
+movement in the history.
 
 ### Transactions
 
@@ -382,19 +389,23 @@ kept in memory next to the accounts (`bank.history`, or injected with
   `finished_at`.
 - **Balance movements** - one `BalanceMovement` per change of a balance made
   through the bank: the moment, the account, the kind (`opening`, `deposit`,
-  `withdrawal`, `refund`, `payout`), the signed change in the account's
-  currency, the balance right after it and the transaction id (`None` for a
-  back-office operation). `movements(account_id, since=..., until=...)`
-  returns them in order.
+  `withdrawal`, `refund`, `payout`, `interest`, `investment`, `divestment`),
+  the signed change in the account's currency, the balance and the total
+  value (`total_value_after`: cash plus portfolio) right after it and the
+  transaction id (`None` for a back-office operation).
+  `movements(account_id, since=..., until=...)` returns them in order.
 
 `Bank` is the only writer of movements: an account opened with money,
 `deposit()`, `withdraw()` (both take an optional `transaction_id`), the
-payout on `close_account()` and `refund()`, which puts back the debit of a
-rolled-back transfer. The change is measured as the balance after minus the
-balance before, so a premium account's own withdrawal fee is part of the
-withdrawal. A refused operation leaves no movement. As a result the
-movements of every account add up to its balance, except for the
-operations past the bank listed in the known limitations above.
+payout on `close_account()`, `refund()`, which puts back the debit of a
+rolled-back transfer, `apply_monthly_interest()`, `invest()` and `divest()`.
+Moving money into a portfolio lowers the balance but keeps the total value,
+so the balance charts of the reports, drawn from `total_value_after`, show
+no loss, and the statement of a client report prints both columns. The
+change is measured as the balance after minus the balance before, so a
+premium account's own withdrawal fee is part of the withdrawal. A refused
+operation leaves no movement. As a result the movements of every account add
+up to its balance, unless an account's own methods were called past the bank.
 
 ```python
 for movement in bank.history.movements(account.account_id):

@@ -146,7 +146,15 @@ class TransactionProcessor:
         return report
 
     def process(self, transaction: Transaction) -> Transaction:
-        """Make one attempt; the transaction ends completed, failed or pending for a retry."""
+        """Make one attempt; the transaction ends completed, failed or pending for a retry.
+
+        An id is used once. The history holds the ids claimed by every
+        processor of the bank: a transaction whose id belongs to another one
+        (it may still wait for a retry) fails before any money moves, without
+        a retry. It stays out of the history, which keeps the first
+        transaction under that id; otherwise it is a failure like any other -
+        logged, audited, and a queue run goes on past it.
+        """
         transaction.start(self._bank.now())
         _logger.debug(
             "attempt started",
@@ -159,11 +167,16 @@ class TransactionProcessor:
             },
         )
         try:
+            self._bank.history.claim(transaction)
+        except InvalidOperationError as error:
+            self._handle_failure(transaction, error, record_in_history=False)
+            return transaction
+        try:
             fee, debited, credited = self._execute(transaction)
         except BankError as error:
-            self._handle_failure(transaction, error)
+            self._handle_failure(transaction, error, record_in_history=True)
         except Exception as error:
-            self._handle_failure(transaction, error)
+            self._handle_failure(transaction, error, record_in_history=True)
             raise
         else:
             transaction.complete(self._bank.now(), fee=fee, debited_amount=debited, credited_amount=credited)
@@ -250,7 +263,7 @@ class TransactionProcessor:
             )
         return value
 
-    def _handle_failure(self, transaction: Transaction, error: Exception) -> None:
+    def _handle_failure(self, transaction: Transaction, error: Exception, *, record_in_history: bool) -> None:
         now = self._bank.now()
         will_retry = isinstance(error, self.RETRYABLE_ERRORS) and transaction.attempts < self._max_attempts
         self._errors.append(
@@ -270,7 +283,8 @@ class TransactionProcessor:
         else:
             transaction.fail(reason, now)
             # before the audit write: a failing write must not keep a finished transaction out of the history
-            self._bank.history.record_transaction(transaction)
+            if record_in_history:
+                self._bank.history.record_transaction(transaction)
         # logged after the status change: a failing audit write must not leave the transaction in PROCESSING
         client_id, account_id = self._initiator(transaction)
         self._bank.audit_log.record(
