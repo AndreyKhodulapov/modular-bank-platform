@@ -20,6 +20,7 @@ from tests.helpers import reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
 NIGHT = datetime(2026, 9, 25, 2, 30)
+DAWN = datetime(2026, 9, 25, 5, 0)  # the night window ends
 
 
 @pytest.fixture
@@ -210,23 +211,50 @@ def test_a_completed_transfer_cannot_be_refunded(bank, processor, rub, premium):
     assert bank.get_total_balance() == total
 
 
-def test_night_window_is_retried_with_exponential_delay(bank, processor, rub, usd, clock):
+def test_night_window_is_retried_when_it_ends(bank, processor, rub, usd, clock):
     clock.moment = NIGHT
     transaction = transfer(rub, usd, 900)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.PENDING
-    assert transaction.scheduled_at == NIGHT + timedelta(minutes=5)
+    assert transaction.scheduled_at == DAWN  # not after retry_delay: the bank tells when the night ends
 
     clock.moment = transaction.scheduled_at
     processor.process(transaction)
-    assert transaction.scheduled_at == NIGHT + timedelta(minutes=15)  # 5 more, then 10
+    assert (transaction.status, transaction.attempts) == (TransactionStatus.COMPLETED, 2)
+    assert [(record.attempt, record.error_type, record.will_retry) for record in processor.errors] == [
+        (1, "OperationTimeRestrictedError", True)
+    ]
+    assert bank.history.transactions() == [transaction]
+
+
+def test_night_transfer_completes_at_the_first_run_after_the_window(bank, processor, queue, rub, usd, clock):
+    clock.moment = NIGHT.replace(hour=0, minute=30)
+    transaction = queue.add(transfer(rub, usd, 900))
+    assert processor.process_queue(queue).rescheduled == [transaction]
+    for moment in (NIGHT.replace(hour=1, minute=0), DAWN - timedelta(seconds=1)):
+        clock.moment = moment
+        assert processor.process_queue(queue).rescheduled == []  # nothing is due, no attempt is wasted
+    clock.moment = DAWN
+    assert processor.process_queue(queue).completed == [transaction]
+    assert transaction.attempts == 2
+
+
+def test_missing_money_is_retried_with_exponential_delay(bank, processor, rub, usd, clock):
+    transaction = transfer(rub, usd, 12_000)
+    processor.process(transaction)
+    assert transaction.status is TransactionStatus.PENDING
+    assert transaction.scheduled_at == NOW + timedelta(minutes=5)
+
+    clock.moment = transaction.scheduled_at
+    processor.process(transaction)
+    assert transaction.scheduled_at == NOW + timedelta(minutes=15)  # 5 more, then 10
 
     clock.moment = transaction.scheduled_at
     processor.process(transaction)
     assert (transaction.status, transaction.attempts) == (TransactionStatus.FAILED, 3)
-    assert transaction.failure_reason.startswith("OperationTimeRestrictedError")
+    assert transaction.failure_reason.startswith("InsufficientFundsError")
     assert [(record.attempt, record.will_retry) for record in processor.errors] == [(1, True), (2, True), (3, False)]
-    assert {record.error_type for record in processor.errors} == {"OperationTimeRestrictedError"}
+    assert {record.error_type for record in processor.errors} == {"InsufficientFundsError"}
     assert bank.history.transactions() == [transaction]  # once, after the last attempt
 
 
@@ -240,7 +268,7 @@ def test_each_attempt_is_traced(processor, rub, usd, clock, caplog):
     traces = [record for record in caplog.records if record.name == "bank.transactions"]
     assert [(record.getMessage(), record.fields["attempt"], record.fields["event_time"]) for record in traces] == [
         ("attempt started", 1, NIGHT),
-        ("attempt started", 2, NIGHT + timedelta(minutes=5)),
+        ("attempt started", 2, DAWN),
     ]
     assert {record.fields["transaction_id"] for record in traces} == {transaction.transaction_id}
 

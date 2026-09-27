@@ -26,8 +26,8 @@ every run prints the same story:
 1. **Initialization** - the bank, 7 clients and 12 accounts of every type
    in five currencies. Six clients opened their accounts three weeks ago,
    Sofia opens hers on the day.
-2. **Simulation** - 40 transactions go through the priority queue in
-   rounds from 09:00 to 08:00 the next morning. Most of them are ordinary
+2. **Simulation** - 40 transactions go through the priority queue in rounds
+   from 09:00 to 08:00 the next morning. Most of them are ordinary
    (salaries, rent, cash, conversions, a payment abroad with a fee, a
    premium overdraft). Some fail: a frozen account, a closed account, a
    client blocked after three wrong passwords, the withdrawal limit, an
@@ -35,13 +35,14 @@ every run prints the same story:
    cancelled. Some are suspicious: a large transfer is let through with a
    warning, quick transfers in a row raise the risk, a huge payment abroad
    and a large transfer late in the evening are blocked, a night transfer
-   waits for the morning. After every round a feed shows what the audit
-   log recorded: `queued`, `completed`, `retry`, `failed`, `warning`,
-   `blocked`, `cancelled`. The last round is the back office of the bank:
-   monthly interest, money moved into a portfolio and back (both recorded
-   in the history), a salary sent twice under one id (refused by the queue
-   and by a processor before any money moves) and an attempt to open an
-   account that is already closed (refused by the bank and by the model).
+   waits in the queue until the night window ends. After every round a feed
+   shows what the audit log recorded: `queued`, `completed`, `retry`,
+   `failed`, `warning`, `blocked`, `cancelled`. The last round is the back
+   office of the bank: monthly interest, money moved into a portfolio and
+   back (both recorded in the history), a salary sent twice under one id
+   (refused by the queue and by a processor before any money moves) and an
+   attempt to open an account that is already closed (refused by the bank
+   and by the model).
 3. **Logging** - the events of the audit log by name, and the life cycle
    of six transactions as the journal holds it.
 4. **Client view** - Oleg logs in and sees his accounts, a statement of
@@ -372,7 +373,7 @@ Processing rules:
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
 | Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (the deposit limit), the debit is put back with `bank.refund()`, which no client rule or limit can refuse. It puts back only a debit recorded on that account under a transaction still in progress, once and no more than was debited, so it cannot make money for a completed or made-up transaction. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
-| Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
+| Retries | up to 3 attempts: a transaction refused in the night window comes back when the window ends (05:00), one short of money after an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
 
 ### Transaction history
 

@@ -109,6 +109,11 @@ def test_login_for_unknown_client_is_flagged(bank, password):
     assert (activity.reason, activity.client_id) == (SuspicionReason.UNKNOWN_CLIENT_LOGIN, "ghost")
 
 
+def test_bank_tells_when_the_night_ends(bank):
+    assert bank.night_ends_at(NIGHT) == NIGHT.replace(hour=5, minute=0)
+    assert bank.night_ends_at(NIGHT.replace(hour=12)) is None
+
+
 def test_login_is_allowed_at_night(bank, client, clock, password):
     clock.moment = NIGHT
     assert bank.authenticate_client(client.client_id, password) is client

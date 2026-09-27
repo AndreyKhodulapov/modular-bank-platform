@@ -52,7 +52,7 @@ def test_legacy_demo_runs_without_errors(tmp_path):
     assert "STAGE 4: Transactions" in completed.stdout
     assert "[ok]       cancel 'typo': status cancelled" in completed.stdout
     assert "[failed] to frozen: AccountFrozenError" in completed.stdout
-    assert "night      completed attempts 3" in completed.stdout
+    assert "night      completed attempts 2" in completed.stdout  # the retry waits for the end of the night
     assert "fees collected: 180.00 RUB" in completed.stdout
     assert "STAGE 5: Audit and Risk" in completed.stdout
     assert f"file: {audit_path}" in completed.stdout
@@ -100,6 +100,8 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "failed     #14 to frozen            attempt 1: AccountFrozenError" in output
     assert "failed     #16 blocked client       attempt 1: ClientBlockedError" in output
     assert "retry      #31 night                attempt 1: OperationTimeRestrictedError" in output
+    assert "queued     #31 night                transfer of 1000.00 RUB queued for 09-25 05:00" in output
+    assert "#31 night waits in the queue until 09-25 05:00" in output
     assert "completed  #31 night" in output
     assert "warning    #21 large                transfer of 7000.00 USD: medium risk, score 60" in output
     assert "blocked    #22 huge abroad          external_transfer of 25000.00 USD: high risk, score 90" in output

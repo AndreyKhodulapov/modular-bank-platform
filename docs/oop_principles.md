@@ -237,7 +237,11 @@ amounts and enum members are values: two equal amounts are interchangeable.
   (the night window ends, money may arrive); permanent ones (a frozen
   account, bad input) fail at once, because retrying them only adds load.
   Each retry waits twice as long as the previous one, and `max_attempts`
-  bounds the total.
+  bounds the total. When the error says when it passes, the retry is
+  scheduled for that moment instead of a guess: a transaction refused at
+  night comes back when the window ends (like an HTTP `Retry-After`), so no
+  attempt is spent on a refusal known in advance. Backoff is for errors
+  with no known end, such as missing money.
 - **Money and currencies.** Amounts stay `Decimal`; conversion between two
   foreign currencies goes through the base currency (a cross rate) and is
   rounded once, at the end, so rounding errors do not accumulate.

@@ -123,6 +123,10 @@ class Bank:
         """The bank's current time, from the security guard's clock."""
         return self._security.now()
 
+    def night_ends_at(self, moment: datetime) -> datetime | None:
+        """When the night window that ``moment`` falls in ends; ``None`` in the daytime."""
+        return self._security.night_ends_at(moment)
+
     def get_client(self, client_id: str) -> Client:
         client = self._clients.get(client_id)
         if client is None:

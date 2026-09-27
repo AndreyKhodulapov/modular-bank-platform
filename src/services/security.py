@@ -81,10 +81,16 @@ class SecurityGuard:
     def audit_log(self) -> AuditLog:
         return self._audit_log
 
+    def night_ends_at(self, moment: datetime) -> datetime | None:
+        """The end of the night window ``moment`` falls in; ``None`` in the daytime."""
+        if not self.NIGHT_START <= moment.time() < self.NIGHT_END:
+            return None
+        return datetime.combine(moment.date(), self.NIGHT_END, tzinfo=moment.tzinfo)
+
     def ensure_daytime(self, action: str, *, client_id: str | None = None, account_id: str | None = None) -> None:
         """Reject ``action`` and record the attempt when it happens in the night window."""
         moment = self.now()
-        if not self.NIGHT_START <= moment.time() < self.NIGHT_END:
+        if self.night_ends_at(moment) is None:
             return
         window = f"{self.NIGHT_START:%H:%M} and {self.NIGHT_END:%H:%M}"
         self.flag(

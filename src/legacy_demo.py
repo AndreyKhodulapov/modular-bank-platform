@@ -25,7 +25,7 @@ variables, see ``settings.py``.
 """
 
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -305,8 +305,7 @@ def run_transactions() -> list[AbstractAccount]:
     clock = ManualClock(datetime(2026, 9, 24, 14, 0))
     bank = Bank(security=SecurityGuard(clock=clock))
     queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
-    # a long retry delay lets a transaction refused at night succeed in the morning
-    processor = TransactionProcessor(bank, retry_delay=timedelta(hours=2))
+    processor = TransactionProcessor(bank)
 
     print_step(1, "Clients and accounts")
     maria = Client(

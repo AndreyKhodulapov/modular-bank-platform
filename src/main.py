@@ -44,7 +44,7 @@ from collections import Counter
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError
 from logging_setup import configure_logging
@@ -108,8 +108,7 @@ class Simulation:
         self._demo = demo
         bank = demo.bank
         self._queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
-        # a long retry delay lets a transaction refused at night succeed in the morning
-        self._processor = TransactionProcessor(bank, retry_delay=timedelta(hours=2))
+        self._processor = TransactionProcessor(bank)
         self._labels: dict[str, str] = {}
         self._seen = len(bank.audit_log)
 
@@ -333,8 +332,10 @@ def simulate(demo: DemoBank) -> Simulation:
     start_round(datetime(2026, 9, 25, 2, 0), "Night: the bank does not move money until 05:00")
     simulation.enqueue(("night", "transfer", 1_000, "RUB", "dmitry_rub", "maria_rub"))
     simulation.process()
-    start_round(datetime(2026, 9, 25, 4, 0), "Night: a retry is still too early")
+    start_round(datetime(2026, 9, 25, 4, 0), "Night: the retry waits for 05:00")
     simulation.process()
+    night = simulation.transaction("night")
+    note(f"{simulation.label(night.transaction_id)} waits in the queue until {night.scheduled_at:%m-%d %H:%M}")
 
     start_round(datetime(2026, 9, 25, 8, 0), "Next morning")
     bank.unblock_client(clients["timur"].client_id)

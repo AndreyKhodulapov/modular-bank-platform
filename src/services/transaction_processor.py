@@ -67,10 +67,12 @@ class TransactionProcessor:
       bank's history links each balance change to its transaction, and
       puts the transaction itself into the history once it is final.
 
-    Errors in ``RETRYABLE_ERRORS`` are temporary - the night window ends,
-    money may arrive - so the transaction goes back to the queue with an
-    exponential delay (``retry_delay``, then twice as long, ...) until
-    ``max_attempts`` is used up. Any other ``BankError`` fails it at once.
+    Errors in ``RETRYABLE_ERRORS`` are temporary, so the transaction goes
+    back to the queue until ``max_attempts`` is used up. A transaction
+    refused in the night window comes back when the window ends, as the bank
+    tells (``bank.night_ends_at()``); one short of money may get it any time,
+    so it comes back after an exponential delay (``retry_delay``, then twice
+    as long, ...). Any other ``BankError`` fails it at once.
     An error that is not a ``BankError`` is a defect, not a business
     outcome: the transaction is failed and logged all the same, and the
     error is raised to the caller.
@@ -263,6 +265,14 @@ class TransactionProcessor:
             )
         return value
 
+    def _next_attempt_at(self, transaction: Transaction, error: Exception, now: datetime) -> datetime:
+        """When to try again: at the end of the night window, or after an exponential delay."""
+        if isinstance(error, OperationTimeRestrictedError):
+            night_end = self._bank.night_ends_at(now)
+            if night_end is not None:
+                return night_end
+        return now + self._retry_delay * 2 ** (transaction.attempts - 1)
+
     def _handle_failure(self, transaction: Transaction, error: Exception, *, record_in_history: bool) -> None:
         now = self._bank.now()
         will_retry = isinstance(error, self.RETRYABLE_ERRORS) and transaction.attempts < self._max_attempts
@@ -278,8 +288,7 @@ class TransactionProcessor:
         )
         reason = f"{type(error).__name__}: {error}"
         if will_retry:
-            delay = self._retry_delay * 2 ** (transaction.attempts - 1)
-            transaction.retry(reason, now, now + delay)
+            transaction.retry(reason, now, self._next_attempt_at(transaction, error, now))
         else:
             transaction.fail(reason, now)
             # before the audit write: a failing write must not keep a finished transaction out of the history
