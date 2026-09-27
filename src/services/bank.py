@@ -162,10 +162,11 @@ class Bank:
         An ``incoming`` credit checks the night window only. Anyone can block
         a client by guessing their password, so blocking stops what the
         client does, not the money sent to them, and someone else's credit
-        is not recorded as the client's attempt.
+        is not recorded as the client's attempt: a night one is recorded on
+        the account alone.
         """
         account_id = account.account_id if account is not None else None
-        self._security.ensure_daytime(action, client_id=client.client_id, account_id=account_id)
+        self._security.ensure_daytime(action, client_id=None if incoming else client.client_id, account_id=account_id)
         if not incoming and client.is_blocked:
             self._security.flag(
                 SuspicionReason.BLOCKED_CLIENT_ACTIVITY,

@@ -592,8 +592,10 @@ def test_screen_does_not_check_the_recipient_owner(bank, pair, make_client, cloc
     clock.moment = NIGHT
     with pytest.raises(OperationTimeRestrictedError):
         bank.screen(deposit)
-    # the pair opened with a large amount; nothing was recorded against the blocked owner
+    # the pair opened with a large amount; the night credit is recorded on the account, not on its blocked owner
     assert reasons(bank) == [SuspicionReason.LARGE_OPERATION, SuspicionReason.NIGHT_OPERATION]
+    night = bank.suspicious_activities[-1]
+    assert (night.client_id, night.account_id) == (None, blocked.account_id)
 
 
 def test_screen_deposit_is_assessed_for_the_recipient_owner(bank, client, pair):
