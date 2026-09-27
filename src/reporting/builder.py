@@ -255,7 +255,16 @@ class ReportBuilder:
         statement = TableSection(
             "statement",
             "Statement",
-            ("moment", "account_id", "kind", "amount", "currency", "balance_after", "transaction_id"),
+            (
+                "moment",
+                "account_id",
+                "kind",
+                "amount",
+                "currency",
+                "balance_after",
+                "total_value_after",
+                "transaction_id",
+            ),
             [
                 (
                     movement.moment,
@@ -264,6 +273,7 @@ class ReportBuilder:
                     movement.amount,
                     movement.currency,
                     movement.balance_after,
+                    movement.total_value_after,
                     movement.transaction_id,
                 )
                 for movement in movements

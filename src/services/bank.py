@@ -18,7 +18,6 @@ from models.account import BankAccount
 from models.client import Client
 from models.enums import AccountStatus, AssetType, Currency
 from models.investment_account import InvestmentAccount
-from models.portfolio import Portfolio
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
 from models.transaction import Transaction
@@ -488,7 +487,7 @@ class Bank:
         if not isinstance(account, InvestmentAccount):
             raise InvalidOperationError(f"Account {account_id} is not an investment account; it has no portfolio.")
         # the input first, as in _move_money: an invalid one is an input error, not a suspicious attempt
-        asset = Portfolio.resolve_asset_type(asset_type)
+        asset = to_enum(AssetType, asset_type, field="asset type")
         value = to_money(amount, require="positive")
         self._guard(action, account.owner, account)
         before = account.balance

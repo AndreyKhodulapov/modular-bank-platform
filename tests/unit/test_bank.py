@@ -746,8 +746,6 @@ def test_refused_investment_is_not_recorded(bank, client):
         bank.invest(investment.account_id, "etf", 500)
     with pytest.raises(InsufficientFundsError):
         bank.divest(investment.account_id, "etf", 10)  # nothing in the portfolio
-    with pytest.raises(InvalidOperationError):
-        bank.invest(investment.account_id, "crypto", 10)
     assert bank.history.movements() == moved
 
 

@@ -70,7 +70,7 @@ def test_client_report_shows_accounts_transactions_statement_and_risk(clock, par
         MovementKind.DEPOSIT,
         MovementKind.WITHDRAWAL,
     ]
-    assert statement[-1]["balance_after"] == anna_rub.balance
+    assert (statement[-1]["balance_after"], statement[-1]["total_value_after"]) == (anna_rub.balance,) * 2
     risk = report.section("risk_profile").to_data()
     assert (risk["level"], risk["blocked"], risk["max_score"]) == (RiskLevel.HIGH, 1, 90)
 
@@ -121,11 +121,11 @@ def test_balance_charts_follow_the_total_value(bank, client, clock, builder):
     bank.apply_monthly_interest(savings.account_id)
 
     report = builder.client_report(client.client_id)
-    assert [row["kind"] for row in rows(report, "statement")] == [
-        MovementKind.OPENING,
-        MovementKind.OPENING,
-        MovementKind.INVESTMENT,
-        MovementKind.INTEREST,
+    assert [(row["kind"], row["balance_after"], row["total_value_after"]) for row in rows(report, "statement")] == [
+        (MovementKind.OPENING, Decimal("1000.00"), Decimal("1000.00")),
+        (MovementKind.OPENING, Decimal("1000.00"), Decimal("1000.00")),
+        (MovementKind.INVESTMENT, Decimal("600.00"), Decimal("1000.00")),
+        (MovementKind.INTEREST, Decimal("1010.00"), Decimal("1010.00")),
     ]
     # the money moved into the portfolio is still the client's; the interest is new money
     assert list(report.charts[2].series.values()) == [

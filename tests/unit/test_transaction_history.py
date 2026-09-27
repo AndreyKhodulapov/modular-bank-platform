@@ -16,8 +16,10 @@ def history() -> TransactionHistory:
     return TransactionHistory()
 
 
-def finished(kind, *, sender=None, recipient=None, at=NOW, completed=True) -> Transaction:
-    transaction = Transaction(kind, 100, "RUB", sender_id=sender, recipient_id=recipient, created_at=NOW)
+def finished(kind, *, sender=None, recipient=None, at=NOW, completed=True, transaction_id=None) -> Transaction:
+    transaction = Transaction(
+        kind, 100, "RUB", sender_id=sender, recipient_id=recipient, created_at=NOW, transaction_id=transaction_id
+    )
     transaction.start(at)
     if completed:
         transaction.complete(at, fee=Decimal("0.00"), debited_amount=None, credited_amount=None)
@@ -64,13 +66,24 @@ def test_refuses_a_transaction_that_is_not_final(history):
 
 def test_a_transaction_enters_the_history_once(history):
     done = finished("deposit", recipient="A")
-    assert not history.has_transaction(done.transaction_id)
     history.record_transaction(done)
-    assert history.has_transaction(done.transaction_id)
     with pytest.raises(InvalidOperationError, match="already"):
         history.record_transaction(done)
     with pytest.raises(InvalidOperationError):
         history.record_transaction("not a transaction")
+
+
+def test_a_claimed_id_belongs_to_one_transaction(history):
+    waiting = Transaction("deposit", 100, "RUB", recipient_id="A", created_at=NOW, transaction_id="T-1")
+    assert history.claim(waiting) is waiting
+    history.claim(waiting)  # the same transaction, coming back for a retry
+    with pytest.raises(InvalidOperationError, match="already used"):
+        history.claim(finished("deposit", recipient="A", transaction_id="T-1"))
+    with pytest.raises(InvalidOperationError, match="already used"):
+        history.record_transaction(finished("deposit", recipient="A", transaction_id="T-1"))
+    with pytest.raises(InvalidOperationError):
+        history.claim("T-1")
+    assert history.transactions() == []
 
 
 def test_filters_by_account_on_either_side(history):

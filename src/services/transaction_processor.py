@@ -110,7 +110,6 @@ class TransactionProcessor:
         self._retry_delay = retry_delay
         self._errors: list[TransactionErrorRecord] = []
         self._collected_fees = Decimal("0.00")
-        self._attempted: dict[str, Transaction] = {}  # transaction_id -> the first transaction attempted under it
 
     @property
     def errors(self) -> list[TransactionErrorRecord]:
@@ -149,12 +148,12 @@ class TransactionProcessor:
     def process(self, transaction: Transaction) -> Transaction:
         """Make one attempt; the transaction ends completed, failed or pending for a retry.
 
-        An id is used once. A transaction whose id belongs to another one -
-        attempted here before (it may still wait for a retry) or already in
-        the history - fails before any money moves, without a retry. It stays
-        out of the history, which keeps the first transaction under that id;
-        otherwise it is a failure like any other - logged, audited, and a
-        queue run goes on past it.
+        An id is used once. The history holds the ids claimed by every
+        processor of the bank: a transaction whose id belongs to another one
+        (it may still wait for a retry) fails before any money moves, without
+        a retry. It stays out of the history, which keeps the first
+        transaction under that id; otherwise it is a failure like any other -
+        logged, audited, and a queue run goes on past it.
         """
         transaction.start(self._bank.now())
         _logger.debug(
@@ -167,18 +166,17 @@ class TransactionProcessor:
                 }
             },
         )
-        first = self._attempted.setdefault(transaction.transaction_id, transaction)
-        reused = first is not transaction or self._bank.history.has_transaction(transaction.transaction_id)
         try:
-            if reused:
-                raise InvalidOperationError(
-                    f"Transaction id {transaction.transaction_id} is already used by another transaction."
-                )
+            self._bank.history.claim(transaction)
+        except InvalidOperationError as error:
+            self._handle_failure(transaction, error, record_in_history=False)
+            return transaction
+        try:
             fee, debited, credited = self._execute(transaction)
         except BankError as error:
-            self._handle_failure(transaction, error, record_in_history=not reused)
+            self._handle_failure(transaction, error, record_in_history=True)
         except Exception as error:
-            self._handle_failure(transaction, error, record_in_history=not reused)
+            self._handle_failure(transaction, error, record_in_history=True)
             raise
         else:
             transaction.complete(self._bank.now(), fee=fee, debited_amount=debited, credited_amount=credited)

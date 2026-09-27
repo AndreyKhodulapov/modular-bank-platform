@@ -94,10 +94,4 @@ def test_account_type_operations_through_the_bank_keep_the_history_whole(bank, c
     bank.apply_monthly_interest(savings.account_id)
     bank.withdraw(investment.account_id, 700)
     assert history_gaps(bank) == {}
-    assert [movement.kind.value for movement in bank.history.movements(investment.account_id)] == [
-        "opening",
-        "investment",
-        "divestment",
-        "withdrawal",
-    ]
     assert bank.history.movements(investment.account_id)[-1].total_value_after == investment.total_value

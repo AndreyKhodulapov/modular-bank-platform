@@ -351,6 +351,18 @@ def test_id_of_a_transaction_waiting_for_a_retry_cannot_be_reused(bank, processo
     assert bank.history.transactions() == [waiting]
 
 
+def test_processors_of_one_bank_share_the_used_ids(bank, processor, rub, usd):
+    waiting = transfer(rub, usd, 10_500, transaction_id="T-1")
+    processor.process(waiting)  # waits for a retry in this processor
+    other = transfer(rub, usd, 900, transaction_id="T-1")
+    TransactionProcessor(bank).process(other)
+    assert other.status is TransactionStatus.FAILED
+    assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
+    bank.deposit(rub.account_id, 1_000)
+    processor.process(waiting)
+    assert bank.history.transactions() == [waiting]
+
+
 def test_transaction_id_from_the_history_does_not_hold_up_the_queue(bank, processor, queue, rub, usd):
     processor.process(transfer(rub, usd, 900, transaction_id="T-1"))
     again = queue.add(transfer(rub, usd, 900, transaction_id="T-1", priority="urgent"))

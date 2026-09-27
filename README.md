@@ -285,8 +285,9 @@ overdraft, holds money in a portfolio or is frozen with money on it.
   and withdrawals and the operations of the account types
   (`apply_monthly_interest()`, `invest()`, `divest()`), searches accounts by
   client, status, currency, type and balance range, and reports
-  `get_total_balance()` and `get_clients_ranking()` in roubles. Every balance change it makes goes to
-  the [transaction history](#transaction-history).
+  `get_total_balance()` and `get_clients_ranking()` in roubles. Every
+  balance change it makes goes to the
+  [transaction history](#transaction-history).
 - `SecurityGuard` - stores salted password hashes, blocks a client after three
   failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
   a log of suspicious activities.
@@ -385,8 +386,8 @@ kept in memory next to the accounts (`bank.history`, or injected with
   `withdrawal`, `refund`, `payout`, `interest`, `investment`, `divestment`),
   the signed change in the account's currency, the balance and the total
   value (`total_value_after`: cash plus portfolio) right after it and the
-  transaction id (`None` for a back-office operation). `movements(account_id, since=..., until=...)`
-  returns them in order.
+  transaction id (`None` for a back-office operation).
+  `movements(account_id, since=..., until=...)` returns them in order.
 
 `Bank` is the only writer of movements: an account opened with money,
 `deposit()`, `withdraw()` (both take an optional `transaction_id`), the
@@ -394,11 +395,11 @@ payout on `close_account()`, `refund()`, which puts back the debit of a
 rolled-back transfer, `apply_monthly_interest()`, `invest()` and `divest()`.
 Moving money into a portfolio lowers the balance but keeps the total value,
 so the balance charts of the reports, drawn from `total_value_after`, show
-no loss. The change is measured as the balance after minus the
-balance before, so a premium account's own withdrawal fee is part of the
-withdrawal. A refused operation leaves no movement. As a result the
-movements of every account add up to its balance, unless an account's
-own methods were called past the bank.
+no loss, and the statement of a client report prints both columns. The
+change is measured as the balance after minus the balance before, so a
+premium account's own withdrawal fee is part of the withdrawal. A refused
+operation leaves no movement. As a result the movements of every account add
+up to its balance, unless an account's own methods were called past the bank.
 
 ```python
 for movement in bank.history.movements(account.account_id):
