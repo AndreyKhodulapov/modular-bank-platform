@@ -220,7 +220,11 @@ amounts and enum members are values: two equal amounts are interchangeable.
   `bank.refund()`, which skips the checks of a client operation: a rollback
   must not be refused by a deposit limit or the night window, and must not
   be reviewed as a new client operation. It still goes through the bank, so
-  the history records it next to the debit it cancels. This is the idea
+  the history records it next to the debit it cancels. A compensation is
+  keyed by the id of the step it undoes: the bank refunds only a debit
+  recorded under a transaction still in progress, once and no more than
+  that debit, so a rollback can be neither invented nor applied twice
+  (an idempotent compensating step). This is the idea
   behind the Saga pattern for operations that span several services, where
   one database transaction is not available.
 - **Retries with exponential backoff.** Only temporary errors are retried

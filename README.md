@@ -371,7 +371,7 @@ Processing rules:
 | Negative balance | decided by the account type itself through `withdraw()`: a regular account never goes below zero, a premium account may use its overdraft |
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
-| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `bank.refund()`, which no bank rule or limit can refuse. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
+| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `bank.refund()`, which no client rule or limit can refuse. It puts back only a debit recorded on that account under a transaction still in progress, once and no more than was debited, so it cannot make money for a completed or made-up transaction. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
 | Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
 
 ### Transaction history
@@ -393,7 +393,8 @@ kept in memory next to the accounts (`bank.history`, or injected with
   the signed change in the account's currency, the balance and the total
   value (`total_value_after`: cash plus portfolio) right after it and the
   transaction id (`None` for a back-office operation).
-  `movements(account_id, since=..., until=...)` returns them in order.
+  `movements(account_id, kind=..., transaction_id=..., since=..., until=...)`
+  returns them in order.
 
 `Bank` is the only writer of movements: an account opened with money,
 `deposit()`, `withdraw()` (both take an optional `transaction_id`), the

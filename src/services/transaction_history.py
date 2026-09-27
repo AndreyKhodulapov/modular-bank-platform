@@ -75,6 +75,10 @@ class TransactionHistory:
       a rolled-back debit, the payout on closing, monthly interest, and
       money moved into an investment portfolio or back.
 
+    ``claimed_by()`` tells which transaction holds an id, and
+    ``movements()`` filters by account, kind, transaction and time, so the
+    bank can check that a refund puts back a debit that really happened.
+
     The history is the bank's record of state, not a log: it is kept in
     memory and read by the reports, while the logs describe what the
     system did.
@@ -102,6 +106,10 @@ class TransactionHistory:
                 f"Transaction id {transaction.transaction_id} is already used by another transaction."
             )
         return transaction
+
+    def claimed_by(self, transaction_id: str) -> Transaction | None:
+        """The transaction that holds this id, finished or not; ``None`` for an id nobody claimed."""
+        return self._claimed.get(transaction_id)
 
     def record_transaction(self, transaction: Transaction) -> Transaction:
         self.claim(transaction)
@@ -178,14 +186,25 @@ class TransactionHistory:
         ]
 
     def movements(
-        self, account_id: str | None = None, *, since: datetime | None = None, until: datetime | None = None
+        self,
+        account_id: str | None = None,
+        *,
+        kind: MovementKind | str | None = None,
+        transaction_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[BalanceMovement]:
         """Balance movements of one account (all accounts without ``account_id``), in order.
 
-        ``since`` is inclusive, ``until`` exclusive.
+        ``kind`` and ``transaction_id`` keep only the movements of that kind
+        and of that transaction. ``since`` is inclusive, ``until`` exclusive.
         """
+        kind_filter = to_enum(MovementKind, kind, field="movement kind") if kind is not None else None
         return [
             movement
             for movement in self._movements
-            if (account_id is None or movement.account_id == account_id) and _within(movement.moment, since, until)
+            if (account_id is None or movement.account_id == account_id)
+            and (kind_filter is None or movement.kind is kind_filter)
+            and (transaction_id is None or movement.transaction_id == transaction_id)
+            and _within(movement.moment, since, until)
         ]

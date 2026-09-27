@@ -610,20 +610,92 @@ def test_refused_money_movement_is_not_recorded(bank, client):
     assert bank.history.movements() == moved
 
 
+def debit_in_progress(bank, account, amount, transaction_id="T-1") -> Transaction:
+    """A withdrawal the processor has started and debited, as it is right before a rollback."""
+    transaction = Transaction(
+        "withdrawal",
+        amount,
+        account.currency,
+        sender_id=account.account_id,
+        created_at=bank.now(),
+        transaction_id=transaction_id,
+    )
+    transaction.start(bank.now())
+    bank.history.claim(transaction)
+    bank.withdraw(account.account_id, amount, transaction_id=transaction_id)
+    return transaction
+
+
 def test_refund_ignores_the_bank_rules_but_is_recorded(bank, client, clock):
-    account = bank.open_account(client.client_id, currency="RUB")
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=600_000)
+    debit_in_progress(bank, account, 600_000)
+    flagged = len(bank.suspicious_activities)
     bank.freeze_account(account.account_id)
     client.block()
     clock.moment = NIGHT
     assert bank.refund(account.account_id, 600_000, transaction_id="T-1") == Decimal("600000.00")
-    [movement] = bank.history.movements(account.account_id)
+    movement = bank.history.movements(account.account_id)[-1]
     assert (movement.kind, movement.amount, movement.transaction_id, movement.moment) == (
         MovementKind.REFUND,
         Decimal("600000.00"),
         "T-1",
         NIGHT,
     )
-    assert bank.suspicious_activities == []  # neither the night, the status nor the amount is reviewed
+    # neither the night, the status nor the amount is reviewed
+    assert len(bank.suspicious_activities) == flagged
+
+
+def test_refund_of_an_unknown_transaction_is_refused(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB")
+    bank.close_account(account.account_id)
+    total = bank.get_total_balance()
+    moved = bank.history.movements()
+    for _ in range(2):
+        with pytest.raises(InvalidOperationError, match="no transaction"):
+            bank.refund(account.account_id, 1_000_000, transaction_id="made-up")
+    assert account.balance == Decimal("0.00")
+    assert (bank.get_total_balance(), bank.history.movements()) == (total, moved)
+
+
+def test_refund_of_a_finished_transaction_is_refused(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    transaction = debit_in_progress(bank, account, 100)
+    # completed, its recipient was credited: putting the debit back would make money
+    transaction.complete(bank.now(), fee=Decimal("0.00"), debited_amount=Decimal("100.00"), credited_amount=None)
+    with pytest.raises(InvalidOperationError, match="completed"):
+        bank.refund(account.account_id, 100, transaction_id="T-1")
+    assert account.balance == Decimal("900.00")
+
+
+def test_refund_needs_a_debit_of_the_transaction_on_the_account(bank, client, make_client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    other = bank.add_client(make_client("Boris"), "boris-password")
+    elsewhere = bank.open_account(other.client_id, currency="RUB")
+    debit_in_progress(bank, account, 100)
+    with pytest.raises(InvalidOperationError, match="debited nothing"):
+        bank.refund(elsewhere.account_id, 100, transaction_id="T-1")
+    # claimed and in progress, but nothing was debited yet
+    started = Transaction("deposit", 100, "RUB", recipient_id=account.account_id, created_at=bank.now())
+    started.start(bank.now())
+    bank.history.claim(started)
+    with pytest.raises(InvalidOperationError, match="debited nothing"):
+        bank.refund(account.account_id, 100, transaction_id=started.transaction_id)
+    assert (account.balance, elsewhere.balance) == (Decimal("900.00"), Decimal("0.00"))
+
+
+def test_refund_is_made_once_and_not_above_the_debit(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    debit_in_progress(bank, account, 100, "T-1")
+    debit_in_progress(bank, account, 100, "T-2")
+    with pytest.raises(InvalidOperationError, match="debited 100.00"):
+        bank.refund(account.account_id, "100.01", transaction_id="T-1")
+    assert bank.refund(account.account_id, 100, transaction_id="T-1") == Decimal("900.00")
+    assert bank.refund(account.account_id, 40, transaction_id="T-2") == Decimal("940.00")
+    for transaction_id in ("T-1", "T-2"):  # after a full and after a partial refund
+        with pytest.raises(InvalidOperationError, match="already refunded"):
+            bank.refund(account.account_id, 1, transaction_id=transaction_id)
+    assert account.balance == Decimal("940.00")
+    assert history_gaps(bank) == {}
 
 
 # operations of the account types

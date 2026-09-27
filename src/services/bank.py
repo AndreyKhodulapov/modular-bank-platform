@@ -16,7 +16,7 @@ from exceptions import (
 )
 from models.account import BankAccount
 from models.client import Client
-from models.enums import AccountStatus, AssetType, Currency
+from models.enums import AccountStatus, AssetType, Currency, TransactionStatus
 from models.investment_account import InvestmentAccount
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
@@ -411,10 +411,36 @@ class Bank:
         do not apply, because the money was on the account a moment ago and
         must come back whatever happened in between. It is still recorded as
         a movement, so the history adds up to the balance.
+
+        Only what really left the account in a transaction being rolled back
+        can come back: the transaction must hold its id in the history and be
+        in progress (a completed one already credited its recipient), and a
+        withdrawal under that id must be recorded on this account; the refund
+        is made once and is not larger than that debit. So no refund reaches
+        a closed account: it cannot be debited by a transaction in progress.
         """
         account = self.get_account(account_id)
+        value = to_money(amount, require="positive")
+        transaction = self._history.claimed_by(transaction_id)
+        if transaction is None:
+            raise InvalidOperationError(f"There is no transaction {transaction_id} to refund.")
+        if transaction.status is not TransactionStatus.PROCESSING:
+            raise InvalidOperationError(
+                f"Transaction {transaction_id} is {transaction.status.value}; only one in progress is rolled back."
+            )
+        debits = self._history.movements(account_id, kind=MovementKind.WITHDRAWAL, transaction_id=transaction_id)
+        if not debits:
+            raise InvalidOperationError(f"Transaction {transaction_id} debited nothing from account {account_id}.")
+        if self._history.movements(account_id, kind=MovementKind.REFUND, transaction_id=transaction_id):
+            raise InvalidOperationError(f"Transaction {transaction_id} is already refunded to account {account_id}.")
+        # withdrawals are recorded as negative changes
+        debited = -sum((movement.amount for movement in debits), Decimal("0.00"))
+        if value > debited:
+            raise InvalidOperationError(
+                f"Cannot refund {value} to account {account_id}: transaction {transaction_id} debited {debited}."
+            )
         before = account.balance
-        balance = account.refund(amount)
+        balance = account.refund(value)
         self._record_movement(MovementKind.REFUND, account, before, transaction_id)
         return balance
 

@@ -84,6 +84,7 @@ def test_a_claimed_id_belongs_to_one_transaction(history):
     with pytest.raises(InvalidOperationError):
         history.claim("T-1")
     assert history.transactions() == []
+    assert (history.claimed_by("T-1"), history.claimed_by("T-2")) == (waiting, None)
 
 
 def test_filters_by_account_on_either_side(history):
@@ -125,6 +126,9 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
     assert history.movements("A") == [first, second]
     assert history.movements("A", since=NOW) == [second]
     assert history.movements(until=NOW) == [first]
+    assert history.movements(kind="withdrawal") == [second]
+    assert history.movements("A", kind=MovementKind.OPENING, transaction_id="T-1") == []
+    assert history.movements(transaction_id="T-1") == [second]
 
 
 @pytest.mark.parametrize(
