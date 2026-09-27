@@ -227,15 +227,19 @@ amounts and enum members are values: two equal amounts are interchangeable.
   stale entries are skipped when they reach the top.
 - **Atomicity and compensation.** A transfer has two steps (debit, credit)
   and must not stop halfway. Both accounts are checked and both amounts
-  converted before money moves; if the bank still refuses the credit, a
-  compensating operation returns the debit. The compensation is
+  converted before money moves; if the credit does not happen after the
+  debit, a compensating operation returns the debit. Whether it happened is
+  read from the history, not guessed from the error: the bank records a
+  movement before it writes the audit log, so an audit write that fails
+  after the credit leaves a recorded credit, and taking the debit back then
+  would make money. The compensation is
   `bank.refund()`, which skips the checks of a client operation: a rollback
   must not be refused by a deposit limit or the night window, and must not
   be reviewed as a new client operation. It still goes through the bank, so
   the history records it next to the debit it cancels. A compensation is
   keyed by the id of the step it undoes: the bank refunds only a debit
-  recorded under a transaction still in progress, once and no more than
-  that debit, so a rollback can be neither invented nor applied twice
+  recorded under a transaction still in progress, each debit once and no
+  more than it, so a rollback can be neither invented nor applied twice
   (an idempotent compensating step). This is the idea
   behind the Saga pattern for operations that span several services, where
   one database transaction is not available.

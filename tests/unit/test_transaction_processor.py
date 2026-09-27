@@ -4,7 +4,13 @@ from decimal import Decimal
 
 import pytest
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, RiskBlockedError
+from exceptions import (
+    AuthenticationError,
+    ClientBlockedError,
+    InvalidOperationError,
+    OperationTimeRestrictedError,
+    RiskBlockedError,
+)
 from models import Transaction, TransactionStatus
 from services import (
     AuditLevel,
@@ -517,12 +523,12 @@ def test_completed_transfer_makes_the_recipient_known(bank, processor, client, c
     assert (first.rules, second.rules) == (("new_recipient",), ())
 
 
-def break_audit_log(bank, monkeypatch, *events: str) -> None:
-    """Make the bank's audit log refuse to record ``events``, as if the disk were full."""
+def break_audit_log(bank, monkeypatch, *events: str, account_id: str | None = None) -> None:
+    """Make the bank's audit log refuse to record ``events`` (only on ``account_id``, if given), like a full disk."""
     record = bank.audit_log.record
 
     def broken(level, category, event, *args, **kwargs):
-        if event in events:
+        if event in events and account_id in (None, kwargs.get("account_id")):
             raise OSError("disk full")
         return record(level, category, event, *args, **kwargs)
 
@@ -560,3 +566,85 @@ def test_process_queue_keeps_a_retry_when_the_audit_write_fails(bank, processor,
         processor.process_queue(queue)
     assert short.status is TransactionStatus.PENDING
     assert queue.pending() == [short]
+
+
+@pytest.fixture
+def unscored_bank(security):
+    """A bank without risk rules: a large transfer to a new account is not refused before its money moves."""
+    return Bank(security=security, risk_analyzer=RiskAnalyzer(rules=[]))
+
+
+@pytest.fixture
+def large_parties(unscored_bank, owner, password, make_client):
+    """A sender with 1 000 000 RUB and a recipient with nothing, both opened before the audit log breaks."""
+    anna = unscored_bank.add_client(owner, password)
+    boris = unscored_bank.add_client(make_client("Boris"), "boris-password")
+    sender = unscored_bank.open_account(anna.client_id, currency="RUB", initial_balance=1_000_000)
+    recipient = unscored_bank.open_account(boris.client_id, currency="RUB")
+    return sender, recipient
+
+
+def movement_kinds(bank, account, transaction):
+    return [m.kind for m in bank.history.movements(account.account_id, transaction_id=transaction.transaction_id)]
+
+
+def test_a_credit_that_went_through_is_not_refunded(unscored_bank, large_parties, monkeypatch):
+    bank, (sender, recipient) = unscored_bank, large_parties
+    total = bank.get_total_balance()
+    # the recipient is credited and the movement recorded, then the review of the large credit cannot be written
+    break_audit_log(bank, monkeypatch, "large_operation", account_id=recipient.account_id)
+    transaction = transfer(sender, recipient, 600_000)
+    with pytest.raises(OSError):
+        TransactionProcessor(bank).process(transaction)
+    assert (sender.balance, recipient.balance) == (Decimal("400000.00"), Decimal("600000.00"))
+    assert bank.get_total_balance() == total
+    assert movement_kinds(bank, sender, transaction) == [MovementKind.WITHDRAWAL]
+    assert movement_kinds(bank, recipient, transaction) == [MovementKind.DEPOSIT]
+    # an unexpected error is a defect: the transaction fails without a retry, the movements tell what happened
+    assert transaction.status is TransactionStatus.FAILED
+    [event] = bank.audit_log.filter(event="transaction_failed")
+    assert (event.level, event.details["will_retry"]) == (AuditLevel.CRITICAL, False)
+
+
+def test_a_debit_without_a_credit_is_refunded_even_if_the_bank_raised_after_it(
+    unscored_bank, large_parties, monkeypatch
+):
+    bank, (sender, recipient) = unscored_bank, large_parties
+    total = bank.get_total_balance()
+    # the sender is debited and the movement recorded, then the review of the large debit cannot be written
+    break_audit_log(bank, monkeypatch, "large_operation", account_id=sender.account_id)
+    transaction = transfer(sender, recipient, 600_000)
+    with pytest.raises(OSError):
+        TransactionProcessor(bank).process(transaction)
+    assert (sender.balance, recipient.balance) == (Decimal("1000000.00"), Decimal("0.00"))
+    assert bank.get_total_balance() == total
+    assert movement_kinds(bank, sender, transaction) == [MovementKind.WITHDRAWAL, MovementKind.REFUND]
+    assert bank.history.movements(recipient.account_id) == []
+    assert transaction.status is TransactionStatus.FAILED
+
+
+def test_a_withdrawal_is_not_refunded_after_the_money_left(unscored_bank, large_parties, monkeypatch):
+    bank, (sender, _) = unscored_bank, large_parties
+    break_audit_log(bank, monkeypatch, "large_operation", account_id=sender.account_id)
+    transaction = Transaction("withdrawal", 600_000, "RUB", sender_id=sender.account_id, created_at=NOW)
+    with pytest.raises(OSError):
+        TransactionProcessor(bank).process(transaction)
+    # the cash is paid out, there is no recipient in the bank to take it back from
+    assert sender.balance == Decimal("400000.00")
+    assert movement_kinds(bank, sender, transaction) == [MovementKind.WITHDRAWAL]
+    assert transaction.status is TransactionStatus.FAILED
+
+
+def test_every_retry_that_debits_is_rolled_back(bank, processor, queue, rub, premium, clock, monkeypatch):
+    # e.g. the night window starts between the debit and the credit, on every attempt
+    def deposit(account_id, amount, **kwargs):
+        raise OperationTimeRestrictedError("deposit", "00:00 and 05:00")
+
+    monkeypatch.setattr(bank, "deposit", deposit)
+    transaction = queue.add(transfer(rub, premium, 100))
+    for _ in range(3):
+        processor.process_queue(queue)
+        clock.moment = transaction.scheduled_at
+    assert (transaction.status, transaction.attempts) == (TransactionStatus.FAILED, 3)
+    assert rub.balance == Decimal("10000.00")
+    assert movement_kinds(bank, rub, transaction) == [MovementKind.WITHDRAWAL, MovementKind.REFUND] * 3

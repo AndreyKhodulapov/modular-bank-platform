@@ -442,9 +442,11 @@ class Bank:
         Only what really left the account in a transaction being rolled back
         can come back: the transaction must hold its id in the history and be
         in progress (a completed one already credited its recipient), and a
-        withdrawal under that id must be recorded on this account; the refund
-        is made once and is not larger than that debit. So no refund reaches
-        a closed account: it cannot be debited by a transaction in progress.
+        withdrawal under that id must be recorded on this account. Each debit
+        comes back once, and all refunds together are not larger than the
+        debits: a retry that debits again after a rollback can be rolled
+        back again. No refund reaches a closed account: it cannot be debited
+        by a transaction in progress.
         """
         account = self.get_account(account_id)
         value = to_money(amount, require="positive")
@@ -458,13 +460,17 @@ class Bank:
         debits = self._history.movements(account_id, kind=MovementKind.WITHDRAWAL, transaction_id=transaction_id)
         if not debits:
             raise InvalidOperationError(f"Transaction {transaction_id} debited nothing from account {account_id}.")
-        if self._history.movements(account_id, kind=MovementKind.REFUND, transaction_id=transaction_id):
+        refunds = self._history.movements(account_id, kind=MovementKind.REFUND, transaction_id=transaction_id)
+        # one refund per debit: a retry of the transaction may debit again after a rollback
+        if len(refunds) >= len(debits):
             raise InvalidOperationError(f"Transaction {transaction_id} is already refunded to account {account_id}.")
-        # withdrawals are recorded as negative changes
+        # withdrawals are recorded as negative changes, refunds as positive ones
         debited = -sum((movement.amount for movement in debits), Decimal("0.00"))
-        if value > debited:
+        refundable = debited - sum((movement.amount for movement in refunds), Decimal("0.00"))
+        if value > refundable:
             raise InvalidOperationError(
-                f"Cannot refund {value} to account {account_id}: transaction {transaction_id} debited {debited}."
+                f"Cannot refund {value} to account {account_id}: transaction {transaction_id} debited {debited}, "
+                f"{refundable} of it is not refunded yet."
             )
         before = account.balance
         balance = account.refund(value)

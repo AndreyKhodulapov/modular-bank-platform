@@ -767,6 +767,19 @@ def test_refund_is_made_once_and_not_above_the_debit(bank, client):
     assert history_gaps(bank) == {}
 
 
+def test_a_retry_that_debits_again_is_rolled_back_again(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    transaction = debit_in_progress(bank, account, 100)
+    assert bank.refund(account.account_id, 100, transaction_id="T-1") == Decimal("1000.00")
+    # the next attempt of the same transaction debits again, and its rollback is not refused
+    bank.withdraw(account.account_id, 100, transaction_id=transaction.transaction_id)
+    assert bank.refund(account.account_id, 100, transaction_id="T-1") == Decimal("1000.00")
+    with pytest.raises(InvalidOperationError, match="already refunded"):
+        bank.refund(account.account_id, 1, transaction_id="T-1")
+    assert account.balance == Decimal("1000.00")
+    assert history_gaps(bank) == {}
+
+
 # operations of the account types
 
 

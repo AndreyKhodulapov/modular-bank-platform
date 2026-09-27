@@ -18,6 +18,7 @@ from models.transaction import Transaction
 from services.audit_log import AuditCategory, AuditLevel, TransactionEvent
 from services.bank import Bank
 from services.fees import FeePolicy
+from services.transaction_history import MovementKind
 from services.transaction_queue import TransactionQueue
 from utils import to_positive_int
 
@@ -60,9 +61,12 @@ class TransactionProcessor:
     - lets the bank screen the transaction (``bank.screen()``): a high risk
       fails it at once with ``RiskBlockedError``;
     - charges the fee from ``fee_policy`` together with the debit;
-    - keeps a transfer atomic: if crediting the recipient fails after the
-      sender was debited, the debit is put back with ``bank.refund()``,
-      which no bank rule or limit can refuse;
+    - keeps a transfer atomic: if anything fails after the sender was
+      debited and the recipient was not credited, the debit is put back
+      with ``bank.refund()``, which no bank rule or limit can refuse. A
+      credit that went through is never taken back, even if the bank raised
+      after it (its audit write failed): the history, written before the
+      audit log, tells whether the recipient got the money;
     - passes the transaction id with every movement of money, so the
       bank's history links each balance change to its transaction, and
       puts the transaction itself into the history once it is final.
@@ -236,25 +240,39 @@ class TransactionProcessor:
 
         fee = Decimal("0.00")
         debited = credited = None
-        if sender is not None:
-            fee = self._fee_policy.calculate(transaction.transaction_type, debit, sender.currency, converter)
-            before = sender.balance
-            self._bank.withdraw(sender.account_id, debit + fee, transaction_id=transaction.transaction_id)
-            # the account may charge its own fee on top (premium), so measure what actually left it
-            debited = before - sender.balance
-
-        if recipient is not None:
-            try:
+        before = sender.balance if sender is not None else None
+        try:
+            if sender is not None:
+                fee = self._fee_policy.calculate(transaction.transaction_type, debit, sender.currency, converter)
+                self._bank.withdraw(sender.account_id, debit + fee, transaction_id=transaction.transaction_id)
+                # the account may charge its own fee on top (premium), so measure what actually left it
+                debited = before - sender.balance
+            if recipient is not None:
                 self._bank.deposit(recipient.account_id, credit, transaction_id=transaction.transaction_id)
-            except Exception:
-                if sender is not None:
-                    self._bank.refund(sender.account_id, debited, transaction_id=transaction.transaction_id)
-                raise
-            credited = credit
+                credited = credit
+        except Exception:
+            # the debit comes back only if the credit did not happen: taking back a credit that went through
+            # makes money; with no recipient here (a withdrawal, an external transfer) the money has left the bank
+            taken = before - sender.balance if sender is not None else Decimal("0.00")
+            if taken > 0 and recipient is not None and not self._credited(transaction, recipient):
+                self._bank.refund(sender.account_id, taken, transaction_id=transaction.transaction_id)
+            raise
 
         if sender is not None:
             self._collected_fees += converter.to_base(fee, sender.currency)
         return fee, debited, credited
+
+    def _credited(self, transaction: Transaction, recipient: BankAccount) -> bool:
+        """Whether the recipient got the money, even if the bank raised after that (e.g. its audit write failed).
+
+        The history answers, not the error: the bank records a movement before
+        it writes the audit log, so a recorded credit went through.
+        """
+        return bool(
+            self._bank.history.movements(
+                recipient.account_id, kind=MovementKind.DEPOSIT, transaction_id=transaction.transaction_id
+            )
+        )
 
     def _convert_for(self, transaction: Transaction, account: BankAccount) -> Decimal:
         """The transaction amount in the account's currency; refuse one that rounds away to nothing."""
