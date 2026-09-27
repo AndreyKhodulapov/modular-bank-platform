@@ -146,7 +146,14 @@ class TransactionProcessor:
         return report
 
     def process(self, transaction: Transaction) -> Transaction:
-        """Make one attempt; the transaction ends completed, failed or pending for a retry."""
+        """Make one attempt; the transaction ends completed, failed or pending for a retry.
+
+        A transaction whose id is already in the history is refused before
+        anything happens: its money would move, but the history could not
+        record it a second time.
+        """
+        if self._bank.history.has_transaction(transaction.transaction_id):
+            raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already in the history.")
         transaction.start(self._bank.now())
         _logger.debug(
             "attempt started",

@@ -323,6 +323,19 @@ def test_failed_transaction_enters_the_history_without_movements(bank, processor
     assert bank.history.movements() == moved
 
 
+def test_transaction_id_from_the_history_is_refused_before_money_moves(bank, processor, rub, usd):
+    first = transfer(rub, usd, 900, transaction_id="T-1")
+    processor.process(first)
+    moved = bank.history.movements()
+    again = transfer(rub, usd, 900, transaction_id="T-1")
+    with pytest.raises(InvalidOperationError, match="T-1"):
+        processor.process(again)
+    assert (again.status, again.attempts) == (TransactionStatus.PENDING, 0)
+    assert (rub.balance, usd.balance) == (Decimal("9100.00"), Decimal("110.00"))
+    assert bank.history.transactions() == [first]
+    assert bank.history.movements() == moved
+
+
 def test_cancelled_transaction_stays_out_of_the_history(bank, processor, queue, rub, usd):
     cancelled = queue.add(transfer(rub, usd, 100))
     queue.cancel(cancelled.transaction_id)

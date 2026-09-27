@@ -87,6 +87,10 @@ class TransactionHistory:
         self._transactions[transaction.transaction_id] = transaction
         return transaction
 
+    def has_transaction(self, transaction_id: str) -> bool:
+        """Whether a finished transaction with this id is already in the history."""
+        return transaction_id in self._transactions
+
     def record_movement(
         self,
         *,

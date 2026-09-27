@@ -216,6 +216,21 @@ def test_requeue_checks_the_whole_batch_before_queuing(queue):
         assert len(queue) == 0  # the valid retry was not queued either
 
 
+def test_a_transaction_id_is_used_once(queue):
+    first = queue.add(deposit("a", transaction_id="T-1"))
+    assert queue.next_ready() is first
+    # handed out, so no longer waiting: another transaction must still not take its id
+    with pytest.raises(InvalidOperationError, match="T-1"):
+        queue.add(deposit("b", transaction_id="T-1"))
+    first.start(NOW)
+    first.retry("night window", NOW, NOW)
+    with pytest.raises(InvalidOperationError, match="T-1"):
+        queue.requeue([deposit("c", transaction_id="T-1")])
+    queue.requeue([first])  # the same transaction comes back for a retry
+    assert queue.get("T-1") is first
+    assert drain(queue) == ["a"]
+
+
 def test_failed_audit_write_leaves_nothing_queued(clock, tmp_path):
     queue = TransactionQueue(clock=clock, audit_log=AuditLog(tmp_path))  # a folder, so the write fails
     transaction = deposit("a")

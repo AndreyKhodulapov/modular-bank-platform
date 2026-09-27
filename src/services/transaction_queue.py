@@ -61,6 +61,10 @@ class TransactionQueue:
     def add(self, transaction: Transaction) -> Transaction:
         """Queue a pending transaction; its ``priority`` and ``scheduled_at`` decide the order.
 
+        Its id must be new to the queue, unless it is this same transaction
+        coming back for a retry: another transaction cannot reuse the id of
+        one that has been handed out or finished.
+
         The audit event is recorded first: if it cannot be written, the
         transaction is not queued and the caller gets the error.
         """
@@ -97,6 +101,11 @@ class TransactionQueue:
             )
         if transaction.transaction_id in self._queued:
             raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already queued.")
+        # an id is used once: a known id may come back only with the same transaction, for a retry;
+        # another transaction under it would replace the first one here and run a second time
+        known = self._transactions.get(transaction.transaction_id)
+        if known is not None and known is not transaction:
+            raise InvalidOperationError(f"Transaction id {transaction.transaction_id} has already been used.")
 
     def _enqueue(self, transaction: Transaction, now: datetime) -> None:
         sequence = next(self._sequence)

@@ -60,7 +60,9 @@ def test_refuses_a_transaction_that_is_not_final(history):
 
 def test_a_transaction_enters_the_history_once(history):
     done = finished("deposit", recipient="A")
+    assert not history.has_transaction(done.transaction_id)
     history.record_transaction(done)
+    assert history.has_transaction(done.transaction_id)
     with pytest.raises(InvalidOperationError, match="already"):
         history.record_transaction(done)
     with pytest.raises(InvalidOperationError):
