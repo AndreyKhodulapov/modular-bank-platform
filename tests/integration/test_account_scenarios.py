@@ -26,7 +26,7 @@ def test_sequence_of_operations_keeps_exact_decimal_balance(owner):
 def test_every_domain_error_is_a_bank_error_and_keeps_balance(owner):
     account = BankAccount(owner=owner, currency="CNY", initial_balance=50)
     frozen = BankAccount(owner=owner, currency="CNY", status="frozen", initial_balance=50)
-    closed = BankAccount(owner=owner, currency="CNY", status="closed", initial_balance=50)
+    closed = BankAccount(owner=owner, currency="CNY", status="closed")
     attempts = [
         lambda: account.withdraw(60),
         lambda: account.deposit(-1),
@@ -38,7 +38,7 @@ def test_every_domain_error_is_a_bank_error_and_keeps_balance(owner):
     for attempt in attempts:
         with pytest.raises(BankError):
             attempt()
-    assert (account.balance, frozen.balance, closed.balance) == (Decimal("50.00"),) * 3
+    assert (account.balance, frozen.balance, closed.balance) == (Decimal("50.00"), Decimal("50.00"), Decimal("0.00"))
 
 
 def test_same_withdrawal_behaves_differently_per_account_type(owner):

@@ -151,6 +151,9 @@ class BankAccount(AbstractAccount):
         self._currency = to_enum(Currency, currency, field="currency")
 
         self._balance = to_money(initial_balance, field="initial_balance", require="non_negative")
+        # a closed account refuses every operation, so money on it could never be paid out
+        if self._status is AccountStatus.CLOSED and self._balance != 0:
+            raise InvalidOperationError(f"A closed account cannot hold money; initial_balance is {self._balance}.")
 
     @staticmethod
     def _check_limit(value: Decimal, limit: Decimal) -> None:

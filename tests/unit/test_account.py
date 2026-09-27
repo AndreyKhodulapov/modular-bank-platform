@@ -9,7 +9,7 @@ from exceptions import (
     InvalidOperationError,
     LimitExceededError,
 )
-from models import AbstractAccount, AccountStatus, BankAccount, Currency
+from models import AbstractAccount, AccountStatus, BankAccount, Currency, InvestmentAccount, PremiumAccount
 
 
 def test_abstract_account_cannot_be_instantiated(owner):
@@ -53,6 +53,15 @@ def test_rejects_invalid_constructor_input(owner, kwargs):
 def test_rejects_owner_that_is_not_a_client():
     with pytest.raises(InvalidOperationError):
         BankAccount(owner="Ivan Petrov", currency="RUB")
+
+
+@pytest.mark.parametrize("account_class", [BankAccount, PremiumAccount, InvestmentAccount])
+def test_closed_account_cannot_be_created_with_money(owner, account_class):
+    """Every operation of a closed account is refused, so the money could never be paid out."""
+    with pytest.raises(InvalidOperationError):
+        account_class(owner=owner, currency="RUB", status="closed", initial_balance="0.01")
+    empty = account_class(owner=owner, currency="RUB", status="closed")
+    assert (empty.status, empty.balance) == (AccountStatus.CLOSED, Decimal("0.00"))
 
 
 @pytest.mark.parametrize("attribute", ["balance", "status"])
