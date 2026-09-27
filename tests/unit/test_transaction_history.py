@@ -26,7 +26,7 @@ def finished(kind, *, sender=None, recipient=None, at=NOW, completed=True) -> Tr
     return transaction
 
 
-def movement(history, account_id="A", amount="100", *, at=NOW, kind="deposit", transaction_id=None):
+def movement(history, account_id="A", amount="100", *, at=NOW, kind="deposit", transaction_id=None, **params):
     return history.record_movement(
         moment=at,
         account_id=account_id,
@@ -35,6 +35,7 @@ def movement(history, account_id="A", amount="100", *, at=NOW, kind="deposit", t
         currency="RUB",
         balance_after=amount,
         transaction_id=transaction_id,
+        **params,
     )
 
 
@@ -101,6 +102,7 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
         amount=Decimal("-30.50"),
         currency=Currency.RUB,
         balance_after=Decimal("-30.50"),
+        total_value_after=Decimal("-30.50"),  # no portfolio given: the value is the balance
         transaction_id="T-1",
     )
     assert history.movements() == [first, other, second]
@@ -115,13 +117,31 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
         {"amount": "0"},
         {"amount": "0.004"},  # rounds to zero
         {"at": "2026-09-24"},
-        {"kind": "interest"},
+        {"kind": "bonus"},
+        {"total_value_after": "abc"},
     ],
 )
 def test_refuses_an_invalid_movement(history, params):
     with pytest.raises(InvalidOperationError):
         movement(history, **params)
     assert history.movements() == []
+
+
+def test_movement_keeps_the_total_value_apart_from_the_balance(history):
+    invested = history.record_movement(
+        moment=NOW,
+        account_id="A",
+        kind=MovementKind.INVESTMENT,
+        amount="-400",
+        currency="RUB",
+        balance_after="600",
+        total_value_after="1000",  # the 400 are in the portfolio now
+    )
+    assert (invested.amount, invested.balance_after, invested.total_value_after) == (
+        Decimal("-400.00"),
+        Decimal("600.00"),
+        Decimal("1000.00"),
+    )
 
 
 def test_recorded_history_cannot_be_changed_from_outside(history):

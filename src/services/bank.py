@@ -16,7 +16,7 @@ from exceptions import (
 )
 from models.account import BankAccount
 from models.client import Client
-from models.enums import AccountStatus, Currency
+from models.enums import AccountStatus, AssetType, Currency
 from models.investment_account import InvestmentAccount
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
@@ -36,7 +36,8 @@ class Bank:
     ``account_id`` - and routes every operation through the same checks:
 
     - operations that move money or give access back (open, close, unfreeze,
-      deposit, withdraw, unblock) are forbidden in the night window;
+      deposit, withdraw, invest, divest, unblock) are forbidden in the night
+      window;
     - a blocked client cannot operate on their accounts;
     - failed logins, night attempts, operations on frozen or closed accounts
       and large amounts are recorded as suspicious;
@@ -47,7 +48,9 @@ class Bank:
       change is made; a refused change is recorded only as suspicious;
     - every change of a balance made through the bank goes to the
       transaction history as a ``BalanceMovement`` with the actual change
-      (fees included) and the balance after it.
+      (fees included), the balance and the total value after it; the
+      operations of the account types (``apply_monthly_interest``,
+      ``invest``, ``divest``) go through the bank for that reason.
 
     Protective actions (``freeze_account``), logins and read-only queries are
     allowed at any time. Totals and the ranking are expressed in the
@@ -202,6 +205,7 @@ class Bank:
             amount=change,
             currency=account.currency,
             balance_after=account.balance,
+            total_value_after=account.total_value,
             transaction_id=transaction_id,
         )
 
@@ -430,6 +434,58 @@ class Bank:
         # the actual change, so the premium account's own fee is part of a withdrawal
         self._record_movement(kind, account, before, transaction_id)
         self._review_amount(action, account, abs(balance - before))
+        return balance
+
+    def apply_monthly_interest(self, account_id: str) -> Decimal:
+        """Credit a month of interest to a savings account and return the credited amount.
+
+        A back-office operation of the bank, like ``refund()``: the night
+        window and a blocked client do not stop it, while the account's own
+        rule does - a frozen or closed account earns no interest. The
+        interest is recorded as a movement without a transaction.
+        """
+        account = self.get_account(account_id)
+        if not isinstance(account, SavingsAccount):
+            raise InvalidOperationError(f"Account {account_id} is not a savings account; it earns no interest.")
+        before = account.balance
+        interest = account.apply_monthly_interest()
+        self._record_movement(MovementKind.INTEREST, account, before)
+        return interest
+
+    def invest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
+        """Move free cash of an investment account into ``asset_type``; return the new cash balance."""
+        return self._rebalance(
+            "invest", MovementKind.INVESTMENT, account_id, lambda account: account.invest(asset_type, amount)
+        )
+
+    def divest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
+        """Move money from ``asset_type`` back to free cash of an investment account; return the new cash balance."""
+        return self._rebalance(
+            "divest", MovementKind.DIVESTMENT, account_id, lambda account: account.divest(asset_type, amount)
+        )
+
+    def _rebalance(
+        self,
+        action: str,
+        kind: MovementKind,
+        account_id: str,
+        operation: Callable[[InvestmentAccount], Decimal],
+    ) -> Decimal:
+        """Move money between the cash and the portfolio of an investment account.
+
+        A client operation with the checks of a deposit or a withdrawal: the
+        night window, a blocked client, a frozen or closed account recorded
+        as suspicious. The money stays on the account, so the amount is not
+        reviewed as a large one, and the movement changes the balance, not
+        the total value.
+        """
+        account = self.get_account(account_id)
+        if not isinstance(account, InvestmentAccount):
+            raise InvalidOperationError(f"Account {account_id} is not an investment account; it has no portfolio.")
+        self._guard(action, account.owner, account)
+        before = account.balance
+        balance = self._run_on_account(action, account, lambda: operation(account))
+        self._record_movement(kind, account, before)
         return balance
 
     def search_accounts(

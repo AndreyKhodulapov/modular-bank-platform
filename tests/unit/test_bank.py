@@ -15,7 +15,7 @@ from exceptions import (
     OperationTimeRestrictedError,
     RiskBlockedError,
 )
-from models import AccountStatus, BankAccount, InvestmentAccount, SavingsAccount, Transaction
+from models import AccountStatus, AssetType, BankAccount, InvestmentAccount, SavingsAccount, Transaction
 from services import (
     AuditCategory,
     AuditLevel,
@@ -27,7 +27,7 @@ from services import (
     SuspicionReason,
     TransactionHistory,
 )
-from tests.helpers import lifecycle, reasons
+from tests.helpers import history_gaps, lifecycle, reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
 
@@ -624,6 +624,121 @@ def test_refund_ignores_the_bank_rules_but_is_recorded(bank, client, clock):
         NIGHT,
     )
     assert bank.suspicious_activities == []  # neither the night, the status nor the amount is reviewed
+
+
+# operations of the account types
+
+
+def test_interest_is_credited_through_the_bank_as_a_movement(bank, client, clock):
+    savings = bank.open_account(
+        client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.015"
+    )
+    clock.moment += timedelta(days=30)
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("15.00")
+    movement = bank.history.movements(savings.account_id)[-1]
+    assert (movement.kind, movement.amount, movement.balance_after, movement.total_value_after) == (
+        MovementKind.INTEREST,
+        Decimal("15.00"),
+        Decimal("1015.00"),
+        Decimal("1015.00"),
+    )
+    assert (movement.moment, movement.transaction_id) == (clock.moment, None)  # the bank's own operation
+    assert history_gaps(bank) == {}
+
+
+def test_interest_ignores_the_night_and_a_blocked_client(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    client.block()
+    clock.moment = NIGHT
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")
+    assert bank.suspicious_activities == []
+
+
+def test_no_interest_leaves_no_movement(bank, client):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000)
+    moved = bank.history.movements()
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("0.00")
+    assert bank.history.movements() == moved
+
+
+@pytest.mark.parametrize(
+    ("prepare", "error_type"), [("freeze_account", AccountFrozenError), ("close_account", AccountClosedError)]
+)
+def test_inactive_savings_account_earns_no_interest_through_the_bank(bank, client, prepare, error_type):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    getattr(bank, prepare)(savings.account_id)
+    moved = bank.history.movements()
+    with pytest.raises(error_type):
+        bank.apply_monthly_interest(savings.account_id)
+    assert bank.history.movements() == moved
+
+
+def test_account_type_operations_need_their_account_type(bank, client):
+    basic = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    moved = bank.history.movements()
+    with pytest.raises(InvalidOperationError, match="not a savings account"):
+        bank.apply_monthly_interest(basic.account_id)
+    for operation in (bank.invest, bank.divest):
+        with pytest.raises(InvalidOperationError, match="not an investment account"):
+            operation(basic.account_id, "stocks", 10)
+    with pytest.raises(AccountNotFoundError):
+        bank.invest("missing", "stocks", 10)
+    assert (bank.history.movements(), basic.balance) == (moved, Decimal("100.00"))
+
+
+def test_invest_and_divest_move_the_cash_but_keep_the_total_value(bank, client, clock):
+    investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
+    clock.moment += timedelta(minutes=1)
+    assert bank.invest(investment.account_id, "stocks", 400) == Decimal("600.00")
+    assert bank.divest(investment.account_id, AssetType.STOCKS, 150) == Decimal("750.00")
+    movements = bank.history.movements(investment.account_id)
+    assert [(m.kind, m.amount, m.balance_after, m.total_value_after) for m in movements] == [
+        (MovementKind.OPENING, Decimal("1000.00"), Decimal("1000.00"), Decimal("1000.00")),
+        (MovementKind.INVESTMENT, Decimal("-400.00"), Decimal("600.00"), Decimal("1000.00")),
+        (MovementKind.DIVESTMENT, Decimal("150.00"), Decimal("750.00"), Decimal("1000.00")),
+    ]
+    assert investment.invested_total == Decimal("250.00")
+    assert history_gaps(bank) == {}
+    assert bank.suspicious_activities == []
+
+
+@pytest.mark.parametrize("operation", ["invest", "divest"])
+def test_invest_and_divest_follow_the_rules_of_a_client_operation(bank, client, clock, operation):
+    investment = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=1_000)
+    bank.invest(investment.account_id, "bonds", 100)
+    moved, day = bank.history.movements(), clock.moment
+
+    def attempt(error_type):
+        with pytest.raises(error_type):
+            getattr(bank, operation)(investment.account_id, "bonds", 50)
+
+    clock.moment = NIGHT
+    attempt(OperationTimeRestrictedError)
+    clock.moment = day
+    client.block()
+    attempt(ClientBlockedError)
+    bank.unblock_client(client.client_id)
+    bank.freeze_account(investment.account_id)
+    attempt(AccountFrozenError)
+    assert reasons(bank) == [
+        SuspicionReason.NIGHT_OPERATION,
+        SuspicionReason.BLOCKED_CLIENT_ACTIVITY,
+        SuspicionReason.INACTIVE_ACCOUNT_OPERATION,
+    ]
+    assert bank.history.movements() == moved
+    assert (investment.balance, investment.invested_total) == (Decimal("900.00"), Decimal("100.00"))
+
+
+def test_refused_investment_is_not_recorded(bank, client):
+    investment = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=100)
+    moved = bank.history.movements()
+    with pytest.raises(InsufficientFundsError):
+        bank.invest(investment.account_id, "etf", 500)
+    with pytest.raises(InsufficientFundsError):
+        bank.divest(investment.account_id, "etf", 10)  # nothing in the portfolio
+    with pytest.raises(InvalidOperationError):
+        bank.invest(investment.account_id, "crypto", 10)
+    assert bank.history.movements() == moved
 
 
 def test_bank_uses_injected_history(security):

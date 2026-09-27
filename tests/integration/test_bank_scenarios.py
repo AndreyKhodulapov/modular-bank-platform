@@ -84,3 +84,20 @@ def test_money_moved_past_the_bank_is_missing_from_the_history(bank, client):
     savings.apply_monthly_interest()
     assert history_gaps(bank) == {investment.account_id: Decimal("-400.00"), savings.account_id: Decimal("10.00")}
     assert history_gaps(bank, bypassed=[investment.account_id, savings.account_id]) == {}
+
+
+def test_account_type_operations_through_the_bank_keep_the_history_whole(bank, client):
+    investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    bank.invest(investment.account_id, "stocks", 400)
+    bank.divest(investment.account_id, "stocks", 100)
+    bank.apply_monthly_interest(savings.account_id)
+    bank.withdraw(investment.account_id, 700)
+    assert history_gaps(bank) == {}
+    assert [movement.kind.value for movement in bank.history.movements(investment.account_id)] == [
+        "opening",
+        "investment",
+        "divestment",
+        "withdrawal",
+    ]
+    assert bank.history.movements(investment.account_id)[-1].total_value_after == investment.total_value

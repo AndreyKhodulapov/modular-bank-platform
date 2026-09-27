@@ -1,6 +1,6 @@
 import csv
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -110,6 +110,32 @@ def test_balance_chart_sums_the_smallest_accounts_past_the_line_limit(bank, clie
     assert balance.series["Other 2 accounts"][-1][1] == Decimal("300.00")
     paths = builder.save_charts(report)
     assert "2026-09-26_10-00-05_client_balance.png" in [path.name for path in paths]
+
+
+def test_balance_charts_follow_the_total_value(bank, client, clock, builder):
+    investment = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=1_000)
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    opened = clock()
+    clock.moment = opened + timedelta(hours=1)
+    bank.invest(investment.account_id, "stocks", 400)
+    bank.apply_monthly_interest(savings.account_id)
+
+    report = builder.client_report(client.client_id)
+    assert [row["kind"] for row in rows(report, "statement")] == [
+        MovementKind.OPENING,
+        MovementKind.OPENING,
+        MovementKind.INVESTMENT,
+        MovementKind.INTEREST,
+    ]
+    # the money moved into the portfolio is still the client's; the interest is new money
+    assert list(report.charts[2].series.values()) == [
+        ((opened, Decimal("1000.00")), (clock(), Decimal("1000.00"))),
+        ((opened, Decimal("1000.00")), (clock(), Decimal("1010.00"))),
+    ]
+    assert [tuple(row.values()) for row in rows(builder.bank_report(), "balance_history")] == [
+        (opened, Decimal("2000.00")),
+        (clock(), Decimal("2010.00")),
+    ]
 
 
 @pytest.mark.usefixtures("processed")

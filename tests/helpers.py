@@ -21,7 +21,8 @@ def history_gaps(bank: Bank, *, bypassed: Iterable[str] = ()) -> dict[str, Decim
 
     The movements of an account must add up to its balance, and the last one
     must end on it. ``bypassed`` accounts are skipped: money moved on them past
-    the bank (``invest()``, ``apply_monthly_interest()``).
+    the bank, by calling ``invest()`` or ``apply_monthly_interest()`` of the
+    account itself.
     """
     skipped = set(bypassed)
     gaps = {}

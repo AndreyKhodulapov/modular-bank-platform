@@ -243,9 +243,11 @@ amounts and enum members are values: two equal amounts are interchangeable.
   the logs point at it by transaction id.
 - **One writer.** Only `Bank` records movements, in the same methods that
   change balances, so a movement cannot be forgotten or written twice, and
-  a refused operation leaves none. The processor passes the transaction id
-  through `deposit()` / `withdraw()` / `refund()` and adds the finished
-  transaction itself - once, after its last attempt.
+  a refused operation leaves none. That is why the operations of the account
+  types (`apply_monthly_interest`, `invest`, `divest`) are offered by `Bank`
+  too: the models change the balance, the bank records it. The processor
+  passes the transaction id through `deposit()` / `withdraw()` / `refund()`
+  and adds the finished transaction itself - once, after its last attempt.
 - **The actual change.** A movement stores the balance after minus the
   balance before, not the requested amount, so fees charged by the account
   (the premium withdrawal fee) are not lost. The invariant "the movements of
@@ -253,7 +255,9 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **`balance_after`.** Each movement keeps the balance right after it, so a
   balance chart or a statement for any period is a plain filter, without
   replaying every earlier movement (a running balance, as on a bank
-  statement).
+  statement). `total_value_after` adds the investment portfolio: moving
+  cash into it is a movement of the balance, not a loss of value, so the
+  balance charts are drawn from the total value.
 - **Immutability.** Movements are frozen dataclasses and the getters return
   copies; a finished transaction has no status transitions left, so what is
   in the history cannot change.

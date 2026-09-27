@@ -20,6 +20,9 @@ class MovementKind(Enum):
     WITHDRAWAL = "withdrawal"
     REFUND = "refund"
     PAYOUT = "payout"
+    INTEREST = "interest"
+    INVESTMENT = "investment"  # free cash moved into the portfolio
+    DIVESTMENT = "divestment"  # money moved from the portfolio back to free cash
 
 
 @dataclass(frozen=True)
@@ -30,8 +33,12 @@ class BalanceMovement:
     positive, a debit negative, with every fee the account charged.
     ``balance_after`` is the balance right after the change, so the
     movements of an account draw its balance over time without replaying
-    them. ``transaction_id`` links the movement to the transaction that
-    caused it; ``None`` for a back-office operation of the bank.
+    them. ``total_value_after`` is everything the account was worth at that
+    moment: the same as ``balance_after``, except for an investment
+    account, whose portfolio is added, so moving money between its cash
+    and its portfolio changes the balance but not the value.
+    ``transaction_id`` links the movement to the transaction that caused
+    it; ``None`` for a back-office operation of the bank.
     """
 
     moment: datetime
@@ -40,6 +47,7 @@ class BalanceMovement:
     amount: Decimal
     currency: Currency
     balance_after: Decimal
+    total_value_after: Decimal
     transaction_id: str | None = None
 
     def __str__(self) -> str:
@@ -61,7 +69,8 @@ class TransactionHistory:
       never ran, so it stays in the queue and the audit log only.
     - A movement is recorded by the bank whenever a balance changes through
       it: an account opened with money, a deposit, a withdrawal, a refund of
-      a rolled-back debit, the payout on closing.
+      a rolled-back debit, the payout on closing, monthly interest, and
+      money moved into an investment portfolio or back.
 
     The history is the bank's record of state, not a log: it is kept in
     memory and read by the reports, while the logs describe what the
@@ -100,20 +109,26 @@ class TransactionHistory:
         amount: object,
         currency: Currency | str,
         balance_after: object,
+        total_value_after: object = None,
         transaction_id: str | None = None,
     ) -> BalanceMovement:
+        """Record one change of a balance; ``total_value_after`` defaults to ``balance_after``."""
         if not isinstance(moment, datetime):
             raise InvalidOperationError("moment must be a datetime.")
         change = to_money(amount)
         if change == 0:
             raise InvalidOperationError("A movement must change the balance.")
+        balance = to_money(balance_after, field="balance_after")
         movement = BalanceMovement(
             moment=moment,
             account_id=account_id,
             kind=to_enum(MovementKind, kind, field="movement kind"),
             amount=change,
             currency=to_enum(Currency, currency, field="currency"),
-            balance_after=to_money(balance_after, field="balance_after"),
+            balance_after=balance,
+            total_value_after=(
+                balance if total_value_after is None else to_money(total_value_after, field="total_value_after")
+            ),
             transaction_id=transaction_id,
         )
         self._movements.append(movement)
