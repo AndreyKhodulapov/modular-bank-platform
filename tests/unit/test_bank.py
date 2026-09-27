@@ -31,7 +31,7 @@ from tests.helpers import history_gaps, lifecycle, reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
 
-# (prepare, operation) pairs for the operations refused at night and for a blocked client
+# (prepare, operation) pairs for the operations refused at night and, but a deposit, for a blocked client
 RESTRICTED_OPERATIONS = [
     pytest.param(
         lambda bank, client, account: None,
@@ -241,7 +241,9 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepa
     assert client.account_ids == [account.account_id]
 
 
-@pytest.mark.parametrize(("prepare", "operation"), RESTRICTED_OPERATIONS)
+@pytest.mark.parametrize(
+    ("prepare", "operation"), [operation for operation in RESTRICTED_OPERATIONS if operation.id != "deposit"]
+)
 def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     prepare(bank, client, account)
@@ -253,6 +255,17 @@ def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, pr
     assert (lifecycle(bank), bank.history.movements()) == (recorded, moved)
     assert (account.status, account.balance) == (status, Decimal("100.00"))
     assert client.account_ids == [account.account_id]
+
+
+def test_blocked_client_still_receives_deposits(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    client.block()
+    assert bank.deposit(account.account_id, 50, transaction_id="T-1") == Decimal("150.00")
+    movement = bank.history.movements(account.account_id)[-1]
+    assert (movement.kind, movement.amount, movement.transaction_id) == (MovementKind.DEPOSIT, Decimal("50.00"), "T-1")
+    assert bank.suspicious_activities == []
+    with pytest.raises(ClientBlockedError):  # but cannot take the money out
+        bank.withdraw(account.account_id, 50)
 
 
 def test_blocked_client_account_can_still_be_frozen(bank, client):
@@ -530,6 +543,22 @@ def test_screen_applies_the_hard_rules_before_scoring(bank, client, pair, clock)
     with pytest.raises(ClientBlockedError):
         bank.screen(transfer(sender, recipient.account_id, 100))
     assert bank.risk_analyzer.assessments == []
+
+
+def test_screen_does_not_check_the_recipient_owner(bank, pair, make_client, clock):
+    sender, _ = pair
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    blocked = bank.open_account(boris.client_id, currency="RUB")
+    boris.block()
+    assert bank.screen(transfer(sender, blocked.account_id, 100)).level is RiskLevel.LOW
+    # a deposit has no sender: nobody's status is checked, the night window still is
+    deposit = Transaction("deposit", 100, "RUB", recipient_id=blocked.account_id, created_at=NIGHT)
+    assert bank.screen(deposit).client_id == boris.client_id
+    clock.moment = NIGHT
+    with pytest.raises(OperationTimeRestrictedError):
+        bank.screen(deposit)
+    # the pair opened with a large amount; nothing was recorded against the blocked owner
+    assert reasons(bank) == [SuspicionReason.LARGE_OPERATION, SuspicionReason.NIGHT_OPERATION]
 
 
 def test_screen_deposit_is_assessed_for_the_recipient_owner(bank, client, pair):

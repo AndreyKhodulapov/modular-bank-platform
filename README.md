@@ -308,7 +308,7 @@ Security rules applied by the bank:
 | Rule | Behaviour |
 | --- | --- |
 | Login lockout | 3 wrong passwords in a row block the client; `unblock_client()` restores access |
-| Blocked client | cannot open, close or unfreeze accounts or move money |
+| Blocked client | cannot open, close or unfreeze accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw, invest, divest and unblock are refused; login, freeze, monthly interest and queries are allowed |
 | Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more; kept in the audit log as `security` events |
 
@@ -371,7 +371,7 @@ Processing rules:
 | Negative balance | decided by the account type itself through `withdraw()`: a regular account never goes below zero, a premium account may use its overdraft |
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
-| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `bank.refund()`, which no client rule or limit can refuse. It puts back only a debit recorded on that account under a transaction still in progress, once and no more than was debited, so it cannot make money for a completed or made-up transaction. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
+| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (the deposit limit), the debit is put back with `bank.refund()`, which no client rule or limit can refuse. It puts back only a debit recorded on that account under a transaction still in progress, once and no more than was debited, so it cannot make money for a completed or made-up transaction. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
 | Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
 
 ### Transaction history

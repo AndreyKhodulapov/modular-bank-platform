@@ -35,9 +35,11 @@ def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
         bank.authenticate_client(boris.client_id, "not-his-password")
     with pytest.raises(ClientBlockedError):
         bank.withdraw(boris_usd.account_id, 10)
+    # someone else may have typed the passwords: money sent to Boris still arrives
+    assert bank.deposit(boris_usd.account_id, 10) == Decimal("1010.00")
     bank.unblock_client(boris.client_id)
     bank.authenticate_client(boris.client_id, "boris-password")
-    assert bank.withdraw(boris_usd.account_id, 10) < Decimal("1000")
+    assert bank.withdraw(boris_usd.account_id, 10) < Decimal("1010")
 
     bank.freeze_account(anna_rub.account_id)
     with pytest.raises(AccountFrozenError):

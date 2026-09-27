@@ -38,7 +38,8 @@ class Bank:
     - operations that move money or give access back (open, close, unfreeze,
       deposit, withdraw, invest, divest, unblock) are forbidden in the night
       window;
-    - a blocked client cannot operate on their accounts;
+    - a blocked client cannot move money out or change their accounts;
+      money sent to them still arrives;
     - failed logins, night attempts, operations on frozen or closed accounts
       and large amounts are recorded as suspicious;
     - ``screen()`` scores a transaction with the risk analyzer before money
@@ -147,11 +148,19 @@ class Bank:
             raise InvalidOperationError(f"Unsupported account type {account_type!r}; allowed: {allowed}.")
         return account_class
 
-    def _guard(self, action: str, client: Client, account: BankAccount | None = None) -> None:
-        """Run the checks shared by every restricted operation: night window, then client status."""
+    def _guard(
+        self, action: str, client: Client, account: BankAccount | None = None, *, incoming: bool = False
+    ) -> None:
+        """Run the checks shared by every restricted operation: night window, then client status.
+
+        An ``incoming`` credit checks the night window only. Anyone can block
+        a client by guessing their password, so blocking stops what the
+        client does, not the money sent to them, and someone else's credit
+        is not recorded as the client's attempt.
+        """
         account_id = account.account_id if account is not None else None
         self._security.ensure_daytime(action, client_id=client.client_id, account_id=account_id)
-        if client.is_blocked:
+        if not incoming and client.is_blocked:
             self._security.flag(
                 SuspicionReason.BLOCKED_CLIENT_ACTIVITY,
                 f"{action} attempted by a blocked client",
@@ -329,11 +338,12 @@ class Bank:
     def screen(self, transaction: Transaction) -> RiskAssessment:
         """Check a transaction before its money moves; refuse it when the risk is high.
 
-        The hard rules come first - the night window and a blocked client -
-        so a transaction they refuse is not scored. Then the risk analyzer
-        scores it and the result goes to the audit log: ``INFO`` for a low
-        risk, ``WARNING`` for a medium one (the transaction goes on) and
-        ``CRITICAL`` for a high one, which raises ``RiskBlockedError``.
+        The hard rules come first - the night window and a blocked sender -
+        so a transaction they refuse is not scored. A deposit has no sender:
+        it only credits its recipient, whose status does not matter. Then the
+        risk analyzer scores it and the result goes to the audit log: ``INFO``
+        for a low risk, ``WARNING`` for a medium one (the transaction goes
+        on) and ``CRITICAL`` for a high one, which raises ``RiskBlockedError``.
         """
         if not isinstance(transaction, Transaction):
             raise InvalidOperationError("transaction must be a Transaction instance.")
@@ -341,7 +351,7 @@ class Bank:
         recipient_id = transaction.internal_recipient_id
         recipient = self.get_account(recipient_id) if recipient_id is not None else None
         action = transaction.transaction_type.value
-        self._guard(action, initiator.owner, initiator)
+        self._guard(action, initiator.owner, initiator, incoming=transaction.sender_id is None)
 
         assessment = self._risk.assess(
             RiskContext(
@@ -394,9 +404,15 @@ class Bank:
         return account
 
     def deposit(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
-        """Credit the account and return its new balance; ``transaction_id`` links the movement to a transaction."""
+        """Credit the account and return its new balance; ``transaction_id`` links the movement to a transaction.
+
+        A blocked owner still receives money: only the night window, the
+        account status and its deposit limit can refuse a credit.
+        """
         account = self.get_account(account_id)
-        return self._move_money("deposit", MovementKind.DEPOSIT, account, account.deposit, amount, transaction_id)
+        return self._move_money(
+            "deposit", MovementKind.DEPOSIT, account, account.deposit, amount, transaction_id, incoming=True
+        )
 
     def withdraw(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
         """Debit the account and return its new balance; ``transaction_id`` links the movement to a transaction."""
@@ -452,9 +468,11 @@ class Bank:
         operation: Callable[[Decimal], Decimal],
         amount: object,
         transaction_id: str | None,
+        *,
+        incoming: bool = False,
     ) -> Decimal:
         value = to_money(amount, require="positive")
-        self._guard(action, account.owner, account)
+        self._guard(action, account.owner, account, incoming=incoming)
         before = account.balance
         balance = self._run_on_account(action, account, lambda: operation(value))
         # the actual change, so the premium account's own fee is part of a withdrawal

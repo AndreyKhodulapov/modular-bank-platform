@@ -188,6 +188,12 @@ amounts and enum members are values: two equal amounts are interchangeable.
   client; a successful login resets the counter. The counter is kept by
   `Client` next to the status, so unblocking resets it by whatever path it
   happens and the two can never disagree.
+- **A lockout limits the client, not the money sent to them.** Anyone can
+  type three wrong passwords for someone else's id, so blocking only stops
+  what the client does: opening and closing accounts, debits, sending
+  transactions. Incoming credits still arrive, otherwise password guessing
+  would become a way to cut a client off their salary (a lockout used as
+  denial of service), and the attempt is recorded against whoever acted.
 - **Risky time is closed.** Between 00:00 and 05:00 the bank refuses
   operations that move money or give access back; freezing (a protective
   action) and logins stay available.

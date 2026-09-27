@@ -148,10 +148,7 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     processor = TransactionProcessor(bank)
     client = bank.add_client(owner, password)
     other = bank.add_client(make_client("Boris"), "boris-password")
-    recipient = bank.open_account(other.client_id, currency="RUB")
-    for _ in range(3):  # three wrong passwords block the recipient's owner
-        with pytest.raises((AuthenticationError, ClientBlockedError)):
-            bank.authenticate_client(other.client_id, "wrong-password")
+    recipient = bank.open_account(other.client_id, currency="RUB")  # takes at most MAX_DEPOSIT at once
     cap = bank.open_account(
         client.client_id, "premium", currency="RUB", initial_balance=10_000_000, overdraft_limit=100, withdrawal_fee=10
     )
@@ -159,7 +156,7 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     transaction = transfer(cap, recipient, 10_000_000)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.FAILED
-    assert transaction.failure_reason.startswith("ClientBlockedError")
+    assert transaction.failure_reason.startswith("LimitExceededError")
     assert (cap.balance, recipient.balance) == (Decimal("10000000.00"), Decimal("0.00"))
     # the refund is not a client operation: one large withdrawal is reviewed, the refund is not
     assert reasons(bank).count(SuspicionReason.LARGE_OPERATION) == 2  # opening the account, then the withdrawal
@@ -172,6 +169,35 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     ]
     assert bank.history.movements(recipient.account_id) == []
     assert bank.history.transactions() == [transaction]
+
+
+def test_a_blocked_client_keeps_receiving_money(bank, processor, rub, make_client):
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    blocked = bank.open_account(boris.client_id, currency="RUB")
+    for _ in range(3):  # anyone can type three wrong passwords for Boris
+        with pytest.raises((AuthenticationError, ClientBlockedError)):
+            bank.authenticate_client(boris.client_id, "wrong-password")
+    incoming = [
+        processor.process(transfer(rub, blocked, 300)),
+        processor.process(Transaction("deposit", 200, "RUB", recipient_id=blocked.account_id, created_at=NOW)),
+    ]
+    assert [transaction.status for transaction in incoming] == [TransactionStatus.COMPLETED] * 2
+    assert blocked.balance == Decimal("500.00")
+    credits = bank.history.movements(blocked.account_id, kind=MovementKind.DEPOSIT)
+    assert [movement.transaction_id for movement in credits] == [transaction.transaction_id for transaction in incoming]
+    assert SuspicionReason.BLOCKED_CLIENT_ACTIVITY not in reasons(bank)
+
+
+def test_a_blocked_sender_is_refused_and_recorded_as_the_actor(bank, processor, client, rub, make_client):
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    recipient = bank.open_account(boris.client_id, currency="RUB")
+    client.block()
+    transaction = processor.process(transfer(rub, recipient, 300))
+    assert transaction.status is TransactionStatus.FAILED
+    assert transaction.failure_reason.startswith("ClientBlockedError")
+    assert (rub.balance, recipient.balance) == (Decimal("10000.00"), Decimal("0.00"))
+    [activity] = [a for a in bank.suspicious_activities if a.reason is SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
+    assert (activity.client_id, activity.account_id) == (client.client_id, rub.account_id)
 
 
 def test_a_completed_transfer_cannot_be_refunded(bank, processor, rub, premium):
