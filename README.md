@@ -37,12 +37,16 @@ every run prints the same story:
    and a large transfer late in the evening are blocked, a night transfer
    waits for the morning. After every round a feed shows what the audit
    log recorded: `queued`, `completed`, `retry`, `failed`, `warning`,
-   `blocked`, `cancelled`.
+   `blocked`, `cancelled`. The last round is the back office of the bank:
+   monthly interest, money moved into a portfolio and back (both recorded
+   in the history), a salary sent twice under one id (refused by the queue
+   and by a processor before any money moves) and an attempt to open an
+   account that is already closed (refused by the bank and by the model).
 3. **Logging** - the events of the audit log by name, and the life cycle
    of six transactions as the journal holds it.
 4. **Client view** - Oleg logs in and sees his accounts, a statement of
-   each (the balance movements), his transactions, his suspicious
-   operations and his risk profile.
+   each (the balance movements, with the balance and the total value after
+   each), his transactions, his suspicious operations and his risk profile.
 5. **Reports** - the bank report (totals, balances by currency and account
    type, transactions by status and type, the top three clients, the total
    balance from the start of the day) and the risk report (assessments by

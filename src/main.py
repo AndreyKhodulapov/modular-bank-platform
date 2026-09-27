@@ -15,7 +15,10 @@ with a warning or blocks them.
 Sections:
 1. Initialization - the bank, its clients and accounts.
 2. Simulation - the transactions, round by round, with a feed of what the
-   audit log recorded: queued, completed, retried, failed, blocked.
+   audit log recorded: queued, completed, retried, failed, blocked. The
+   last round is the back office of the bank: monthly interest, money moved
+   into a portfolio and back, a transaction sent twice under one id and an
+   attempt to open an account that is already closed.
 3. Logging - totals of the audit log and the life cycle of a few
    transactions as the journal holds it.
 4. Client view - a client logs in and sees their accounts, a statement,
@@ -148,6 +151,25 @@ class Simulation:
 
     def cancel(self, label: str) -> None:
         self._queue.cancel(self.transaction(label).transaction_id)
+
+    def copy_of(self, label: str) -> Transaction:
+        """A new transaction with the same id and content as the queued one: what a system sending it twice makes."""
+        original = self.transaction(label)
+        return Transaction(
+            original.transaction_type,
+            original.amount,
+            original.currency,
+            sender_id=original.sender_id,
+            recipient_id=original.recipient_id,
+            priority=original.priority,
+            scheduled_at=original.scheduled_at,
+            created_at=self._demo.clock(),
+            transaction_id=original.transaction_id,
+        )
+
+    def add(self, transaction: Transaction) -> None:
+        """Queue a transaction built by hand; it gets no numbered label, so it is not counted among the rows."""
+        self._queue.add(transaction)
 
     def process(self) -> None:
         """Run everything that is due by the bank's clock and print the feed."""
@@ -330,6 +352,39 @@ def simulate(demo: DemoBank) -> Simulation:
     )
     simulation.process()
 
+    start_round(datetime(2026, 9, 25, 10, 0), "Late morning: the back office of the bank")
+    for name in ("maria_savings", "elena_savings"):
+        savings = accounts[name]
+        interest = bank.apply_monthly_interest(savings.account_id)
+        note(f"monthly interest on {name}: +{interest}, balance {savings.balance} {savings.currency.value}")
+    invest = accounts["oleg_invest"]
+    bank.invest(invest.account_id, "etf", 5_000)
+    bank.divest(invest.account_id, "etf", 1_000)
+    note(
+        f"Oleg put 5_000 into ETF and took 1_000 back: "
+        f"cash {invest.balance}, total {invest.total_value} {invest.currency.value}"
+    )
+
+    duplicate = simulation.copy_of("salary Maria")
+    try:
+        simulation.add(duplicate)
+    except InvalidOperationError as error:
+        note(f"payroll sent salary Maria again under the same id; the queue refused it: {error}")
+    salary_account = accounts["maria_rub"]
+    before = salary_account.balance
+    TransactionProcessor(bank).process(duplicate)  # handed to another processor, past the queue
+    note(f"another processor took it: {duplicate.status.value}, {duplicate.failure_reason}")
+    note(f"Maria's balance stayed {salary_account.balance} {salary_account.currency.value} (was {before})")
+
+    try:
+        bank.open_account(clients["sofia"].client_id, currency="RUB", initial_balance=1_000, status="closed")
+    except InvalidOperationError as error:
+        note(f"an account opened closed with 1_000 RUB on it, through the bank: {error}")
+    try:
+        BankAccount(clients["sofia"], "RUB", initial_balance=1_000, status="closed")
+    except InvalidOperationError as error:
+        note(f"the same by the model itself: {error}")
+
     print(f"\n  {simulation.queued} transactions queued")
     return simulation
 
@@ -365,7 +420,8 @@ def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
     for account in accounts:
         print(f"\n  Statement of {account.account_type} {account.account_id[:8]}:")
         for movement in bank.history.movements(account.account_id):
-            print(f"    {movement}  {simulation.label(movement.transaction_id)}".rstrip())
+            total = f"total {movement.total_value_after:>12}"
+            print(f"    {movement}  {total}  {simulation.label(movement.transaction_id)}".rstrip())
 
     print("\n  Transactions:")
     for transaction in bank.history.transactions(account_ids=[account.account_id for account in accounts]):
