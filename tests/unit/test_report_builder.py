@@ -116,7 +116,7 @@ def test_balance_charts_follow_the_total_value(bank, client, clock, builder):
     investment = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=1_000)
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
     opened = clock()
-    clock.moment = opened + timedelta(hours=1)
+    clock.moment = opened + timedelta(days=31)  # interest is due a month after the opening
     bank.invest(investment.account_id, "stocks", 400)
     bank.apply_monthly_interest(savings.account_id)
 

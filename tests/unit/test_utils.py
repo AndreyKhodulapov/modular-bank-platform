@@ -1,12 +1,21 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
 
 from exceptions import InvalidOperationError
 from models import AccountStatus, Currency, TransactionPriority
-from utils import ManualClock, resolve_identifier, to_enum, to_money, to_positive_decimal, to_positive_int, to_rate
+from utils import (
+    ManualClock,
+    next_month_day,
+    resolve_identifier,
+    to_enum,
+    to_money,
+    to_positive_decimal,
+    to_positive_int,
+    to_rate,
+)
 
 
 @pytest.mark.parametrize(
@@ -142,3 +151,17 @@ def test_manual_clock_returns_the_moment_it_was_set_to():
     assert clock() == datetime(2026, 1, 1, 12, 0)
     clock.moment = datetime(2026, 1, 2, 3, 0)
     assert clock() == datetime(2026, 1, 2, 3, 0)
+
+
+@pytest.mark.parametrize(
+    ("start", "day", "expected"),
+    [
+        (date(2026, 1, 15), 15, date(2026, 2, 15)),
+        (date(2026, 1, 31), 31, date(2026, 2, 28)),  # a shorter month: its last day
+        (date(2028, 1, 31), 31, date(2028, 2, 29)),  # a leap year
+        (date(2026, 2, 28), 31, date(2026, 3, 31)),  # the day comes back in a longer month
+        (date(2026, 12, 15), 15, date(2027, 1, 15)),
+    ],
+)
+def test_next_month_day(start, day, expected):
+    assert next_month_day(start, day) == expected

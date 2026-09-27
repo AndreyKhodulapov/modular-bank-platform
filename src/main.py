@@ -191,8 +191,8 @@ class Simulation:
 
 
 def open_bank(audit_log: AuditLog) -> DemoBank:
-    """Register the clients and open their accounts three weeks before the day; Sofia opens hers on the day."""
-    clock = ManualClock(datetime(2026, 9, 1, 10, 0))
+    """Register the clients and open their accounts a month before the day; Sofia opens hers on the day."""
+    clock = ManualClock(datetime(2026, 8, 25, 10, 0))
     bank = Bank(security=SecurityGuard(clock=clock, audit_log=audit_log))
     clients: dict[str, Client] = {}
     passwords: dict[str, str] = {}
@@ -358,6 +358,10 @@ def simulate(demo: DemoBank) -> Simulation:
         savings = accounts[name]
         interest = bank.apply_monthly_interest(savings.account_id)
         note(f"monthly interest on {name}: +{interest}, balance {savings.balance} {savings.currency.value}")
+    try:
+        bank.apply_monthly_interest(accounts["maria_savings"].account_id)
+    except InvalidOperationError as error:
+        note(f"the interest batch ran again for maria_savings; the bank refused: {error}")
     invest = accounts["oleg_invest"]
     bank.invest(invest.account_id, "etf", 5_000)
     bank.divest(invest.account_id, "etf", 1_000)

@@ -211,6 +211,12 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **Idempotency.** Running the same operation twice must not double its
   effect. `start()` is allowed only from `PENDING`, so a transaction that
   was already processed is rejected instead of moving money a second time.
+- **A periodic job is safe to run again.** Monthly interest is a batch the
+  bank runs by the calendar, and batches get rerun after a failure or by
+  mistake. The bank remembers the date of the last interest per account,
+  so a second run in the same month is refused instead of paying twice.
+  The date follows the day the account was opened (the last day of a
+  shorter month), so it does not drift from the 31st to the 28th.
 - **Priority queue on a heap.** `heapq` gives O(log n) insertion and
   removal of the most urgent item. The key is `(-priority, sequence)`: the
   sequence number keeps first-in-first-out order within a priority and

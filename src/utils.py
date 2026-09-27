@@ -1,7 +1,8 @@
 """Helper functions shared across the platform."""
 
+import calendar
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import Enum
 from typing import Literal
@@ -122,6 +123,12 @@ def to_positive_decimal(value: object, *, field: str) -> Decimal:
     if number <= 0:
         raise InvalidOperationError(f"{field} must be greater than zero, got {number}.")
     return number
+
+
+def next_month_day(start: date, day: int) -> date:
+    """Day ``day`` of the month after the month of ``start``; the last day when that month is shorter."""
+    year, month = (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
 
 
 class ManualClock:

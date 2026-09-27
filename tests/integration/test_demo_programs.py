@@ -108,6 +108,8 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "#19 short of money: failed" in output
     # the last round: the back office records its operations, a reused id and a closed account are refused
     assert "monthly interest on maria_savings: +1200.00, balance 121200.00 RUB" in output
+    assert "the interest batch ran again for maria_savings; the bank refused: Interest on account" in output
+    assert "is paid once a month; next on 2026-10-25." in output
     assert "Oleg put 5_000 into ETF and took 1_000 back: cash 12000.00, total 16000.00 EUR" in output
     assert "the queue refused it: Transaction id" in output
     assert "another processor took it: failed, InvalidOperationError: Transaction id" in output

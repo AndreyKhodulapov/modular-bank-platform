@@ -30,6 +30,7 @@ from services import (
 from tests.helpers import history_gaps, lifecycle, reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
+MONTH_LATER = datetime(2026, 10, 24, 14, 0)  # the day monthly interest is due on an account opened at the start
 
 # (prepare, operation) pairs for the operations refused at night and, but a deposit, for a blocked client
 RESTRICTED_OPERATIONS = [
@@ -755,28 +756,98 @@ def test_interest_is_credited_through_the_bank_as_a_movement(bank, client, clock
 def test_interest_ignores_the_night_and_a_blocked_client(bank, client, clock):
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
     client.block()
-    clock.moment = NIGHT
+    clock.moment = NIGHT + timedelta(days=31)  # a night a month later
     assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")
     assert bank.suspicious_activities == []
 
 
-def test_no_interest_leaves_no_movement(bank, client):
+def test_no_interest_leaves_no_movement_but_settles_the_month(bank, client, clock):
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000)
-    moved = bank.history.movements()
+    moved, recorded = bank.history.movements(), len(bank.audit_log)
+    clock.moment = MONTH_LATER
     assert bank.apply_monthly_interest(savings.account_id) == Decimal("0.00")
-    assert bank.history.movements() == moved
+    assert (bank.history.movements(), len(bank.audit_log)) == (moved, recorded)
+    with pytest.raises(InvalidOperationError, match="once a month"):
+        bank.apply_monthly_interest(savings.account_id)
 
 
 @pytest.mark.parametrize(
     ("prepare", "error_type"), [("freeze_account", AccountFrozenError), ("close_account", AccountClosedError)]
 )
-def test_inactive_savings_account_earns_no_interest_through_the_bank(bank, client, prepare, error_type):
+def test_inactive_savings_account_earns_no_interest_through_the_bank(bank, client, clock, prepare, error_type):
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
     getattr(bank, prepare)(savings.account_id)
     moved = bank.history.movements()
+    clock.moment = MONTH_LATER
     with pytest.raises(error_type):
         bank.apply_monthly_interest(savings.account_id)
     assert bank.history.movements() == moved
+
+
+def test_interest_is_paid_once_a_calendar_month(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    with pytest.raises(InvalidOperationError, match="next on 2026-10-24"):
+        bank.apply_monthly_interest(savings.account_id)
+    clock.moment = MONTH_LATER
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")
+    moved = bank.history.movements()
+    clock.moment = MONTH_LATER.replace(hour=23)  # the same day
+    with pytest.raises(InvalidOperationError, match="next on 2026-11-24"):
+        bank.apply_monthly_interest(savings.account_id)
+    assert (savings.balance, bank.history.movements()) == (Decimal("1010.00"), moved)
+    assert bank.suspicious_activities == []  # the attempt is the bank's own
+    clock.moment = datetime(2026, 11, 24, 0, 1)
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.10")
+
+
+def test_interest_keeps_the_day_of_the_opening(bank, client, clock):
+    clock.moment = datetime(2027, 1, 31, 12, 0)
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    for refused, paid in [
+        (datetime(2027, 2, 27, 12, 0), datetime(2027, 2, 28, 12, 0)),  # a shorter month: its last day
+        (datetime(2027, 3, 30, 12, 0), datetime(2027, 3, 31, 12, 0)),  # back to the 31st
+    ]:
+        clock.moment = refused
+        with pytest.raises(InvalidOperationError, match=f"next on {paid:%Y-%m-%d}"):
+            bank.apply_monthly_interest(savings.account_id)
+        clock.moment = paid
+        bank.apply_monthly_interest(savings.account_id)
+    assert savings.balance == Decimal("1020.10")
+
+
+def test_interest_is_audited_and_reviewed_as_a_large_amount(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=600_000, monthly_rate="1")
+    clock.moment = MONTH_LATER
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("600000.00")
+    [event] = bank.audit_log.filter(event="interest_credited")
+    assert (event.level, event.category, event.client_id, event.account_id, event.timestamp) == (
+        AuditLevel.INFO,
+        AuditCategory.ACCOUNT,
+        client.client_id,
+        savings.account_id,
+        MONTH_LATER,
+    )
+    assert dict(event.details) == {
+        "interest": "600000.00",
+        "monthly_rate": "1",
+        "balance": "1200000.00",
+        "currency": "RUB",
+    }
+    large = [activity for activity in bank.suspicious_activities if activity.reason is SuspicionReason.LARGE_OPERATION]
+    assert [activity.details for activity in large] == [
+        "open_account of 600000.00 in base currency (threshold 500000.00)",
+        "apply_monthly_interest of 600000.00 in base currency (threshold 500000.00)",
+    ]
+
+
+def test_a_refused_interest_keeps_the_calendar(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    bank.freeze_account(savings.account_id)
+    clock.moment = MONTH_LATER
+    with pytest.raises(AccountFrozenError):
+        bank.apply_monthly_interest(savings.account_id)
+    bank.unfreeze_account(savings.account_id)
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")  # the same day, once unfrozen
 
 
 def test_account_type_operations_need_their_account_type(bank, client):

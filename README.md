@@ -24,7 +24,7 @@ The program plays one day of a small bank on a clock it moves by hand, so
 every run prints the same story:
 
 1. **Initialization** - the bank, 7 clients and 12 accounts of every type
-   in five currencies. Six clients opened their accounts three weeks ago,
+   in five currencies. Six clients opened their accounts a month ago,
    Sofia opens hers on the day.
 2. **Simulation** - 40 transactions go through the priority queue in rounds
    from 09:00 to 08:00 the next morning. Most of them are ordinary
@@ -316,7 +316,12 @@ Security rules applied by the bank:
 `Bank.invest()` and `Bank.divest()` are client operations with the same
 checks as a deposit or a withdrawal. `Bank.apply_monthly_interest()` is the
 bank's own operation: neither the night window nor a blocked client stops it,
-while a frozen or closed account earns no interest. The same methods of the
+while a frozen or closed account earns no interest. The bank keeps the
+calendar: interest is paid once a month, on the day of the month the account
+was opened (the last day of a shorter month), and an earlier call is refused
+with the date of the next one. It is the only money the bank creates itself,
+so it goes to the audit log as `interest_credited` and a large one is
+recorded as suspicious. The same methods of the
 account itself still work, but they bypass the bank: no checks and no
 movement in the history.
 
@@ -432,7 +437,7 @@ for movement in bank.history.movements(account.account_id):
   | --- | --- | --- | --- |
   | `SecurityGuard` | `security` | every suspicious activity (named after `SuspicionReason`) | `WARNING`; a blocked client `CRITICAL` |
   | `Bank` | `client` | `client_registered`, `client_unblocked` | `INFO` |
-  | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed` | `INFO` |
+  | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed`, `interest_credited` | `INFO` |
   | `Bank.screen()` | `risk` | `risk_assessed`, `operation_blocked` | `INFO` / `WARNING` for a medium risk / `CRITICAL` |
   | `TransactionQueue` | `transaction` | `transaction_queued`, `transaction_cancelled` | `INFO` |
   | `TransactionProcessor` | `transaction` | `transaction_completed`; `transaction_failed` (`details.will_retry` tells a retry from a final failure) | `INFO`; `ERROR`, an unexpected error `CRITICAL` |

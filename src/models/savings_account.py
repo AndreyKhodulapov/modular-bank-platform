@@ -14,8 +14,9 @@ class SavingsAccount(BankAccount):
     """A deposit account that keeps ``min_balance`` locked and earns interest.
 
     ``monthly_rate`` is a fraction (``0.01`` means 1% per month). Interest is
-    credited explicitly through ``apply_monthly_interest()``; the platform has
-    no clock, so the caller decides when a month has passed.
+    credited explicitly through ``apply_monthly_interest()``; the account has
+    no clock, so the bank keeps the calendar and decides when a month has
+    passed.
     """
 
     def __init__(

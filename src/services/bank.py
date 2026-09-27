@@ -2,7 +2,7 @@
 
 import inspect
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from exceptions import (
@@ -26,7 +26,7 @@ from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
 from services.transaction_history import MovementKind, TransactionHistory
-from utils import to_enum, to_money
+from utils import next_month_day, to_enum, to_money
 
 
 class Bank:
@@ -45,8 +45,9 @@ class Bank:
     - ``screen()`` scores a transaction with the risk analyzer before money
       moves and refuses a high-risk one;
     - the life cycle of clients and accounts (registered, unblocked; opened,
-      frozen, unfrozen, closed) goes to the audit log as ``INFO`` once the
-      change is made; a refused change is recorded only as suspicious;
+      frozen, unfrozen, closed) and monthly interest go to the audit log as
+      ``INFO`` once the change is made; a refused change of a client or an
+      account is recorded only as suspicious;
     - every change of a balance made through the bank goes to the
       transaction history as a ``BalanceMovement`` with the actual change
       (fees included), the balance and the total value after it; the
@@ -87,6 +88,7 @@ class Bank:
         self._accounts: dict[str, BankAccount] = {}
         # kept by the bank, not the account: the models have no clock
         self._opened_at: dict[str, datetime] = {}
+        self._interest_paid_at: dict[str, datetime] = {}  # the last monthly interest of a savings account
 
     @property
     def base_currency(self) -> Currency:
@@ -484,22 +486,57 @@ class Bank:
         self._review_amount(action, account, abs(balance - before))
         return balance
 
+    def _next_interest_date(self, account_id: str) -> date:
+        """The day the next monthly interest is due: the day of the month the account was opened.
+
+        A month after the last interest (after the opening before the first
+        one); in a shorter month, its last day. The day is kept from the
+        opening, so an account opened on the 31st is paid on Feb 28 and then
+        on Mar 31 again.
+        """
+        opened_at = self._opened_at[account_id]
+        last = self._interest_paid_at.get(account_id, opened_at)
+        return next_month_day(last.date(), opened_at.day)
+
     def apply_monthly_interest(self, account_id: str) -> Decimal:
         """Credit a month of interest to a savings account and return the credited amount.
 
         A back-office operation of the bank, like ``refund()``: the night
         window and a blocked client do not stop it, while the account's own
-        rule does - a frozen or closed account earns no interest. Such a
-        refusal is not recorded as suspicious: the attempt is the bank's, not
-        the client's. The interest is recorded as a movement without a
-        transaction.
+        rule does - a frozen or closed account earns no interest. The bank
+        keeps the calendar: interest is paid once a calendar month (see
+        ``_next_interest_date``), an earlier call is refused, and a missed
+        month is not paid back. Such refusals are not recorded as suspicious:
+        the attempt is the bank's, not the client's.
+
+        Interest is the only money the bank creates itself rather than
+        receives, so it is recorded as a movement without a transaction, goes
+        to the audit log as ``interest_credited`` and is reviewed as a large
+        amount. A
+        zero interest (a zero rate or balance) still settles the month but
+        leaves no movement and no event.
         """
         account = self.get_account(account_id)
         if not isinstance(account, SavingsAccount):
             raise InvalidOperationError(f"Account {account_id} is not a savings account; it earns no interest.")
+        due = self._next_interest_date(account_id)
+        if self.now().date() < due:
+            raise InvalidOperationError(f"Interest on account {account_id} is paid once a month; next on {due}.")
         before = account.balance
         interest = account.apply_monthly_interest()
+        self._interest_paid_at[account_id] = self.now()
         self._record_movement(MovementKind.INTEREST, account, before)
+        if interest != 0:
+            self._record_account(
+                AccountEvent.INTEREST_CREDITED,
+                account,
+                f"interest of {interest} {account.currency.value} credited at {account.monthly_rate:.2%}/month",
+                interest=interest,
+                monthly_rate=account.monthly_rate,
+                balance=account.balance,
+                currency=account.currency,
+            )
+        self._review_amount("apply_monthly_interest", account, interest)
         return interest
 
     def invest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
