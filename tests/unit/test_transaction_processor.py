@@ -323,17 +323,28 @@ def test_failed_transaction_enters_the_history_without_movements(bank, processor
     assert bank.history.movements() == moved
 
 
-def test_transaction_id_from_the_history_is_refused_before_money_moves(bank, processor, rub, usd):
+def test_transaction_id_from_the_history_fails_before_money_moves(bank, processor, rub, usd):
     first = transfer(rub, usd, 900, transaction_id="T-1")
     processor.process(first)
     moved = bank.history.movements()
     again = transfer(rub, usd, 900, transaction_id="T-1")
-    with pytest.raises(InvalidOperationError, match="T-1"):
-        processor.process(again)
-    assert (again.status, again.attempts) == (TransactionStatus.PENDING, 0)
+    processor.process(again)
+    assert (again.status, again.attempts) == (TransactionStatus.FAILED, 1)
+    assert again.failure_reason == "InvalidOperationError: Transaction T-1 is already in the history."
+    assert (processor.errors[-1].error_type, processor.errors[-1].will_retry) == ("InvalidOperationError", False)
     assert (rub.balance, usd.balance) == (Decimal("9100.00"), Decimal("110.00"))
-    assert bank.history.transactions() == [first]
+    assert bank.history.transactions() == [first]  # the history keeps the first transaction under the id
     assert bank.history.movements() == moved
+
+
+def test_transaction_id_from_the_history_does_not_hold_up_the_queue(bank, processor, queue, rub, usd):
+    processor.process(transfer(rub, usd, 900, transaction_id="T-1"))
+    again = queue.add(transfer(rub, usd, 900, transaction_id="T-1", priority="urgent"))
+    behind = queue.add(transfer(rub, usd, 100))
+    report = processor.process_queue(queue)
+    assert (report.failed, report.completed, report.rescheduled) == ([again], [behind], [])
+    assert len(queue) == 0
+    assert (rub.balance, usd.balance) == (Decimal("9000.00"), Decimal("111.11"))
 
 
 def test_cancelled_transaction_stays_out_of_the_history(bank, processor, queue, rub, usd):

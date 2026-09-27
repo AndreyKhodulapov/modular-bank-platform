@@ -34,9 +34,9 @@ class BalanceMovement:
     ``balance_after`` is the balance right after the change, so the
     movements of an account draw its balance over time without replaying
     them. ``total_value_after`` is everything the account was worth at that
-    moment: the same as ``balance_after``, except for an investment
-    account, whose portfolio is added, so moving money between its cash
-    and its portfolio changes the balance but not the value.
+    moment (``total_value``): the same as ``balance_after``, except for an
+    investment account, whose portfolio is added, so moving money between
+    its cash and its portfolio changes the balance but not the value.
     ``transaction_id`` links the movement to the transaction that caused
     it; ``None`` for a back-office operation of the bank.
     """
@@ -109,26 +109,22 @@ class TransactionHistory:
         amount: object,
         currency: Currency | str,
         balance_after: object,
-        total_value_after: object = None,
+        total_value_after: object,
         transaction_id: str | None = None,
     ) -> BalanceMovement:
-        """Record one change of a balance; ``total_value_after`` defaults to ``balance_after``."""
         if not isinstance(moment, datetime):
             raise InvalidOperationError("moment must be a datetime.")
         change = to_money(amount)
         if change == 0:
             raise InvalidOperationError("A movement must change the balance.")
-        balance = to_money(balance_after, field="balance_after")
         movement = BalanceMovement(
             moment=moment,
             account_id=account_id,
             kind=to_enum(MovementKind, kind, field="movement kind"),
             amount=change,
             currency=to_enum(Currency, currency, field="currency"),
-            balance_after=balance,
-            total_value_after=(
-                balance if total_value_after is None else to_money(total_value_after, field="total_value_after")
-            ),
+            balance_after=to_money(balance_after, field="balance_after"),
+            total_value_after=to_money(total_value_after, field="total_value_after"),
             transaction_id=transaction_id,
         )
         self._movements.append(movement)

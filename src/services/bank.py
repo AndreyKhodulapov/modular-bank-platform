@@ -441,8 +441,10 @@ class Bank:
 
         A back-office operation of the bank, like ``refund()``: the night
         window and a blocked client do not stop it, while the account's own
-        rule does - a frozen or closed account earns no interest. The
-        interest is recorded as a movement without a transaction.
+        rule does - a frozen or closed account earns no interest. Such a
+        refusal is not recorded as suspicious: the attempt is the bank's, not
+        the client's. The interest is recorded as a movement without a
+        transaction.
         """
         account = self.get_account(account_id)
         if not isinstance(account, SavingsAccount):
@@ -455,13 +457,21 @@ class Bank:
     def invest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move free cash of an investment account into ``asset_type``; return the new cash balance."""
         return self._rebalance(
-            "invest", MovementKind.INVESTMENT, account_id, lambda account: account.invest(asset_type, amount)
+            "invest",
+            MovementKind.INVESTMENT,
+            account_id,
+            amount,
+            lambda account, value: account.invest(asset_type, value),
         )
 
     def divest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move money from ``asset_type`` back to free cash of an investment account; return the new cash balance."""
         return self._rebalance(
-            "divest", MovementKind.DIVESTMENT, account_id, lambda account: account.divest(asset_type, amount)
+            "divest",
+            MovementKind.DIVESTMENT,
+            account_id,
+            amount,
+            lambda account, value: account.divest(asset_type, value),
         )
 
     def _rebalance(
@@ -469,7 +479,8 @@ class Bank:
         action: str,
         kind: MovementKind,
         account_id: str,
-        operation: Callable[[InvestmentAccount], Decimal],
+        amount: object,
+        operation: Callable[[InvestmentAccount, Decimal], Decimal],
     ) -> Decimal:
         """Move money between the cash and the portfolio of an investment account.
 
@@ -482,9 +493,11 @@ class Bank:
         account = self.get_account(account_id)
         if not isinstance(account, InvestmentAccount):
             raise InvalidOperationError(f"Account {account_id} is not an investment account; it has no portfolio.")
+        # the amount first, as in _move_money: an invalid one is an input error, not a suspicious attempt
+        value = to_money(amount, require="positive")
         self._guard(action, account.owner, account)
         before = account.balance
-        balance = self._run_on_account(action, account, lambda: operation(account))
+        balance = self._run_on_account(action, account, lambda: operation(account, value))
         self._record_movement(kind, account, before)
         return balance
 

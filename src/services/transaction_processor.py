@@ -148,12 +148,11 @@ class TransactionProcessor:
     def process(self, transaction: Transaction) -> Transaction:
         """Make one attempt; the transaction ends completed, failed or pending for a retry.
 
-        A transaction whose id is already in the history is refused before
-        anything happens: its money would move, but the history could not
-        record it a second time.
+        A transaction whose id is already in the history fails before any
+        money moves, without a retry: the history keeps the first transaction
+        under that id and cannot record a second one. It is a failure like
+        any other - logged, audited, and a queue run goes on past it.
         """
-        if self._bank.history.has_transaction(transaction.transaction_id):
-            raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already in the history.")
         transaction.start(self._bank.now())
         _logger.debug(
             "attempt started",
@@ -166,6 +165,8 @@ class TransactionProcessor:
             },
         )
         try:
+            if self._bank.history.has_transaction(transaction.transaction_id):
+                raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already in the history.")
             fee, debited, credited = self._execute(transaction)
         except BankError as error:
             self._handle_failure(transaction, error)
@@ -276,8 +277,10 @@ class TransactionProcessor:
             transaction.retry(reason, now, now + delay)
         else:
             transaction.fail(reason, now)
-            # before the audit write: a failing write must not keep a finished transaction out of the history
-            self._bank.history.record_transaction(transaction)
+            # before the audit write: a failing write must not keep a finished transaction out of the history;
+            # a reused id stays out, the history already holds the first transaction under it
+            if not self._bank.history.has_transaction(transaction.transaction_id):
+                self._bank.history.record_transaction(transaction)
         # logged after the status change: a failing audit write must not leave the transaction in PROCESSING
         client_id, account_id = self._initiator(transaction)
         self._bank.audit_log.record(

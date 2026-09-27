@@ -350,7 +350,7 @@ def populated(bank, client, make_client, password):
     rub = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
     usd = bank.open_account(client.client_id, "savings", currency="USD", initial_balance=100)
     eur = bank.open_account(other.client_id, "investment", currency="EUR", initial_balance=50)
-    eur.invest("bonds", 30)
+    bank.invest(eur.account_id, "bonds", 30)
     empty = bank.open_account(other.client_id, currency="RUB")
     bank.close_account(empty.account_id)
     return {"client": client, "other": other, "rub": rub, "usd": usd, "eur": eur, "empty": empty}
@@ -727,6 +727,15 @@ def test_invest_and_divest_follow_the_rules_of_a_client_operation(bank, client, 
     ]
     assert bank.history.movements() == moved
     assert (investment.balance, investment.invested_total) == (Decimal("900.00"), Decimal("100.00"))
+
+
+@pytest.mark.parametrize("operation", ["invest", "divest"])
+def test_invalid_amount_is_refused_before_the_client_checks(bank, client, clock, operation):
+    investment = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=1_000)
+    clock.moment = NIGHT
+    with pytest.raises(InvalidOperationError):
+        getattr(bank, operation)(investment.account_id, "bonds", -5)
+    assert bank.suspicious_activities == []  # an input error, as for a deposit, not a night attempt
 
 
 def test_refused_investment_is_not_recorded(bank, client):

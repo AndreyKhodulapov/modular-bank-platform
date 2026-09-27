@@ -26,7 +26,10 @@ def finished(kind, *, sender=None, recipient=None, at=NOW, completed=True) -> Tr
     return transaction
 
 
-def movement(history, account_id="A", amount="100", *, at=NOW, kind="deposit", transaction_id=None, **params):
+def movement(
+    history, account_id="A", amount="100", *, at=NOW, kind="deposit", transaction_id=None, total_value_after=None
+):
+    # no portfolio unless given: the value is the balance
     return history.record_movement(
         moment=at,
         account_id=account_id,
@@ -34,8 +37,8 @@ def movement(history, account_id="A", amount="100", *, at=NOW, kind="deposit", t
         amount=amount,
         currency="RUB",
         balance_after=amount,
+        total_value_after=amount if total_value_after is None else total_value_after,
         transaction_id=transaction_id,
-        **params,
     )
 
 
@@ -102,7 +105,7 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
         amount=Decimal("-30.50"),
         currency=Currency.RUB,
         balance_after=Decimal("-30.50"),
-        total_value_after=Decimal("-30.50"),  # no portfolio given: the value is the balance
+        total_value_after=Decimal("-30.50"),
         transaction_id="T-1",
     )
     assert history.movements() == [first, other, second]
