@@ -26,7 +26,8 @@ def test_sequence_of_operations_keeps_exact_decimal_balance(owner):
 def test_every_domain_error_is_a_bank_error_and_keeps_balance(owner):
     account = BankAccount(owner=owner, currency="CNY", initial_balance=50)
     frozen = BankAccount(owner=owner, currency="CNY", status="frozen", initial_balance=50)
-    closed = BankAccount(owner=owner, currency="CNY", status="closed")
+    closed = BankAccount(owner=owner, currency="CNY", initial_balance=50)
+    closed.close()
     attempts = [
         lambda: account.withdraw(60),
         lambda: account.deposit(-1),

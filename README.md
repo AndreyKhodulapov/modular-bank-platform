@@ -275,7 +275,9 @@ Three subclasses of `BankAccount`; each overrides `withdraw()`,
 Every account can be frozen, unfrozen and closed (`freeze()`, `unfreeze()`,
 `close()`). Closing is a settlement: the cash is paid out and returned, even
 below a savings `min_balance`. It is refused while the account is in
-overdraft, holds money in a portfolio or is frozen with money on it.
+overdraft, holds money in a portfolio or is frozen with money on it. An
+account is created active or frozen, never closed: only `close()` closes it,
+so money never ends up on an account that refuses every operation.
 
 ### Bank System
 
