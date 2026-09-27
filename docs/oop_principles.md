@@ -471,7 +471,10 @@ their collaborators (`Client`, currency, status, limits, rates) through the
 constructor; `Portfolio` is tested on its own without any account; there is no
 clock inside the models, so `apply_monthly_interest()` is called explicitly and
 tests stay deterministic; `Client` takes an optional `today` for the age check,
-so the 18th-birthday boundary is tested on fixed dates. Services receive their
+so the 18th-birthday boundary is tested on fixed dates. The bank does not
+trust that date: `add_client()` runs the same rule (`Client.ensure_adult()`)
+by its own clock, so a client object built with any `today` cannot slip in -
+the model owns the rule, the bank owns the time. Services receive their
 dependencies: tests build `SecurityGuard(clock=ManualClock(...))` and move the
 clock to 00:00, 04:59:59 or 05:00 to check the night window exactly, and pass
 their own rates to `CurrencyConverter`. Tests are split into `tests/unit/`

@@ -287,14 +287,14 @@ so money never ends up on an account that refuses every operation.
 ### Bank System
 
 - `Bank` - the entry point to the platform. It registers clients with a
-  password, opens accounts of a registered type (`basic`, `savings`,
-  `premium`, `investment`), closes, freezes and unfreezes them, runs deposits
-  and withdrawals and the operations of the account types
-  (`apply_monthly_interest()`, `invest()`, `divest()`), searches accounts by
-  client, status, currency, type and balance range, and reports
-  `get_total_balance()` and `get_clients_ranking()` in roubles. Every
-  balance change it makes goes to the
-  [transaction history](#transaction-history).
+  password, checking their age by the bank's clock, opens accounts of a
+  registered type (`basic`, `savings`, `premium`, `investment`), closes,
+  freezes and unfreezes them, runs deposits and withdrawals and the
+  operations of the account types (`apply_monthly_interest()`, `invest()`,
+  `divest()`), searches accounts by client, status, currency, type and
+  balance range, and reports `get_total_balance()` and
+  `get_clients_ranking()` in roubles. Every balance change it makes goes to
+  the [transaction history](#transaction-history).
 - `SecurityGuard` - stores salted password hashes, blocks a client after three
   failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
   a log of suspicious activities.

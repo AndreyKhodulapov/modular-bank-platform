@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -15,7 +15,7 @@ from exceptions import (
     OperationTimeRestrictedError,
     RiskBlockedError,
 )
-from models import AccountStatus, AssetType, BankAccount, InvestmentAccount, SavingsAccount, Transaction
+from models import AccountStatus, AssetType, BankAccount, Client, InvestmentAccount, SavingsAccount, Transaction
 from services import (
     AuditCategory,
     AuditLevel,
@@ -90,6 +90,40 @@ def test_client_with_weak_password_is_not_registered(bank, owner):
         bank.add_client(owner, "123")
     with pytest.raises(ClientNotFoundError):
         bank.get_client(owner.client_id)
+
+
+def test_client_is_checked_for_age_by_the_bank_clock(bank, password):
+    # the model accepted the date it was given; the bank's clock says 2026
+    child = Client(
+        first_name="Timur",
+        last_name="Volkov",
+        birth_date=date(2015, 5, 1),
+        email="timur@example.com",
+        phone="+79035550404",
+        today=date(2040, 1, 1),
+    )
+    for _ in range(2):  # nothing was kept: the second attempt fails the same way, not as a duplicate
+        with pytest.raises(InvalidOperationError, match="at least 18 years old, got 11"):
+            bank.add_client(child, password)
+    with pytest.raises(ClientNotFoundError):
+        bank.get_client(child.client_id)
+    assert lifecycle(bank) == []
+
+
+def test_the_18th_birthday_is_counted_by_the_bank_clock(bank, clock, password):
+    client = Client(
+        first_name="Sofia",
+        last_name="Lebedeva",
+        birth_date=date(2008, 9, 25),
+        email="sofia@example.com",
+        phone="+79035550707",
+        today=date(2026, 12, 31),
+    )
+    clock.moment = datetime(2026, 9, 24, 23, 59)  # the last day of being 17
+    with pytest.raises(InvalidOperationError, match="got 17"):
+        bank.add_client(client, password)
+    clock.moment = datetime(2026, 9, 25, 9, 0)
+    assert bank.add_client(client, password) is client
 
 
 def test_unknown_ids_raise_not_found(bank):

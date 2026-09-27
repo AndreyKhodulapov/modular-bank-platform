@@ -233,11 +233,16 @@ class Bank:
         )
 
     def add_client(self, client: Client, password: str) -> Client:
-        """Register ``client`` with a login password; the password is stored as a hash only."""
+        """Register ``client`` with a login password; the password is stored as a hash only.
+
+        The age is checked again by the bank's clock: the model may have been
+        built with any ``today``, the bank relies on its own date.
+        """
         if not isinstance(client, Client):
             raise InvalidOperationError("client must be a Client instance.")
         if client.client_id in self._clients:
             raise InvalidOperationError(f"Client {client.client_id} is already registered.")
+        Client.ensure_adult(client.birth_date, self.now().date())
         self._security.register_password(client.client_id, password)
         self._clients[client.client_id] = client
         self._record(AuditCategory.CLIENT, ClientEvent.REGISTERED, "client registered", client_id=client.client_id)
