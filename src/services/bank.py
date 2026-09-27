@@ -473,7 +473,7 @@ class Bank:
                 f"{refundable} of it is not refunded yet."
             )
         before = account.balance
-        balance = account.refund(value)
+        balance = account._refund(value)
         self._record_movement(MovementKind.REFUND, account, before, transaction_id)
         return balance
 
@@ -534,7 +534,7 @@ class Bank:
         if self.now().date() < due:
             raise InvalidOperationError(f"Interest on account {account_id} is paid once a month; next on {due}.")
         before = account.balance
-        interest = account.apply_monthly_interest()
+        interest = account._apply_monthly_interest()
         self._interest_paid_at[account_id] = self.now()
         self._record_movement(MovementKind.INTEREST, account, before)
         if interest != 0:
@@ -553,13 +553,13 @@ class Bank:
     def invest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move free cash of an investment account into ``asset_type``; return the new cash balance."""
         return self._rebalance(
-            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount.invest
+            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount._invest
         )
 
     def divest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move money from ``asset_type`` back to free cash of an investment account; return the new cash balance."""
         return self._rebalance(
-            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount.divest
+            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount._divest
         )
 
     def _rebalance(

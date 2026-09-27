@@ -268,13 +268,13 @@ modular-bank-platform/
 Three subclasses of `BankAccount`; each overrides `withdraw()`,
 `get_account_info()` and `__str__()`:
 
-- `SavingsAccount` - keeps `min_balance` locked on the account and credits
-  interest with `apply_monthly_interest()` at a `monthly_rate`.
+- `SavingsAccount` - keeps `min_balance` locked on the account and earns
+  interest at a `monthly_rate`, credited by `Bank.apply_monthly_interest()`.
 - `PremiumAccount` - limits ten times higher, an `overdraft_limit` that lets the
   balance go negative and a fixed `withdrawal_fee` charged on every withdrawal.
 - `InvestmentAccount` - free cash plus a `Portfolio` of virtual asset types
-  (`stocks`, `bonds`, `etf`). `invest()` / `divest()` move money between cash
-  and the portfolio, `withdraw()` never touches invested money, and
+  (`stocks`, `bonds`, `etf`). `Bank.invest()` / `Bank.divest()` move money
+  between cash and the portfolio, `withdraw()` never touches invested money, and
   `project_yearly_growth(growth_rates)` estimates one year of growth.
 
 Every account can be frozen, unfrozen and closed (`freeze()`, `unfreeze()`,
@@ -321,9 +321,10 @@ calendar: interest is paid once a month, on the day of the month the account
 was opened (the last day of a shorter month), and an earlier call is refused
 with the date of the next one. It is the only money the bank creates itself,
 so it goes to the audit log as `interest_credited` and a large one is
-recorded as suspicious. The same methods of the
-account itself still work, but they bypass the bank: no checks and no
-movement in the history.
+recorded as suspicious. The account types keep the rules (the rate, the
+portfolio), the bank owns the operations: `_apply_monthly_interest()`,
+`_invest()`, `_divest()` and `_refund()` of the models are internal, called
+by the bank only.
 
 ### Transactions
 
@@ -414,7 +415,10 @@ no loss, and the statement of a client report prints both columns. The
 change is measured as the balance after minus the balance before, so a
 premium account's own withdrawal fee is part of the withdrawal. A refused
 operation leaves no movement. As a result the movements of every account add
-up to its balance, unless an account's own methods were called past the bank.
+up to its balance, unless `deposit()`, `withdraw()` or `close()` of the
+account itself are called past the bank: they are the account's own
+interface (the first two are the abstract methods of `AbstractAccount`) and
+stay public.
 
 ```python
 for movement in bank.history.movements(account.account_id):

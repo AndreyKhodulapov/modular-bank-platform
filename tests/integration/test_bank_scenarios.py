@@ -79,15 +79,6 @@ def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
     ]  # closing an empty account pays nothing out
 
 
-def test_money_moved_past_the_bank_is_missing_from_the_history(bank, client):
-    investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
-    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
-    investment.invest("stocks", 400)
-    savings.apply_monthly_interest()
-    assert history_gaps(bank) == {investment.account_id: Decimal("-400.00"), savings.account_id: Decimal("10.00")}
-    assert history_gaps(bank, bypassed=[investment.account_id, savings.account_id]) == {}
-
-
 def test_account_type_operations_through_the_bank_keep_the_history_whole(bank, client, clock):
     investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")

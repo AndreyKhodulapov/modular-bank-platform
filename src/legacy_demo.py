@@ -110,6 +110,8 @@ def run_accounts_basic(owner: Client) -> list[AbstractAccount]:
 def run_accounts_advanced(owner: Client) -> list[AbstractAccount]:
     print_stage(2, "Accounts Advanced")
 
+    # the models as they were before the bank: interest and portfolio moves are internal to the bank now,
+    # which checks and records them; the tour calls the models directly to show their own rules
     print_step(1, "Savings accounts: minimum balance and monthly interest")
     savings = SavingsAccount(
         owner=owner, currency="RUB", initial_balance=10_000, min_balance=1_000, monthly_rate="0.015"
@@ -124,8 +126,8 @@ def run_accounts_advanced(owner: Client) -> list[AbstractAccount]:
     )
     print(f"  {savings}")
     print(f"  {savings_frozen}")
-    attempt("apply monthly interest", savings.apply_monthly_interest, label="interest")
-    attempt("apply monthly interest (frozen)", savings_frozen.apply_monthly_interest, label="interest")
+    attempt("apply monthly interest", savings._apply_monthly_interest, label="interest")
+    attempt("apply monthly interest (frozen)", savings_frozen._apply_monthly_interest, label="interest")
     attempt("withdraw 9_000 RUB (keeps min balance)", lambda: savings.withdraw(9_000))
     attempt("withdraw 200 RUB (breaks min balance)", lambda: savings.withdraw(200))
 
@@ -148,15 +150,15 @@ def run_accounts_advanced(owner: Client) -> list[AbstractAccount]:
     investment_small = InvestmentAccount(owner=owner, currency="KZT", initial_balance=1_000)
     print(f"  {investment}")
     print(f"  {investment_small}")
-    attempt("invest 5_000 EUR in stocks", lambda: investment.invest("stocks", 5_000), label="cash")
-    attempt("invest 2_000 EUR in bonds", lambda: investment.invest(AssetType.BONDS, 2_000), label="cash")
-    attempt("invest 1_000 EUR in etf", lambda: investment.invest("etf", 1_000), label="cash")
-    attempt("invest 100 EUR in crypto", lambda: investment.invest("crypto", 100), label="cash")
-    attempt("invest 5_000 EUR in etf (not enough cash)", lambda: investment.invest("etf", 5_000), label="cash")
+    attempt("invest 5_000 EUR in stocks", lambda: investment._invest("stocks", 5_000), label="cash")
+    attempt("invest 2_000 EUR in bonds", lambda: investment._invest(AssetType.BONDS, 2_000), label="cash")
+    attempt("invest 1_000 EUR in etf", lambda: investment._invest("etf", 1_000), label="cash")
+    attempt("invest 100 EUR in crypto", lambda: investment._invest("crypto", 100), label="cash")
+    attempt("invest 5_000 EUR in etf (not enough cash)", lambda: investment._invest("etf", 5_000), label="cash")
     attempt("withdraw 3_000 EUR (only cash)", lambda: investment.withdraw(3_000))
-    attempt("divest 1_500 EUR from stocks", lambda: investment.divest("stocks", 1_500), label="cash")
+    attempt("divest 1_500 EUR from stocks", lambda: investment._divest("stocks", 1_500), label="cash")
     attempt("withdraw 3_000 EUR", lambda: investment.withdraw(3_000))
-    attempt("invest 1_000 KZT in etf", lambda: investment_small.invest("etf", 1_000), label="cash")
+    attempt("invest 1_000 KZT in etf", lambda: investment_small._invest("etf", 1_000), label="cash")
     rates = ", ".join(f"{asset.value} {Decimal(rate):.0%}" for asset, rate in growth_rates.items())
     print(f"  Portfolio: {investment.get_account_info()['portfolio']}")
     attempt(

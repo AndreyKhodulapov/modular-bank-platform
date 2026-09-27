@@ -44,7 +44,7 @@ def test_withdraw_below_min_balance_raises(savings_account):
 
 
 def test_apply_monthly_interest_credits_and_returns_interest(savings_account):
-    interest = savings_account.apply_monthly_interest()
+    interest = savings_account._apply_monthly_interest()
     assert interest == Decimal("15.00")
     assert savings_account.balance == Decimal("1015.00")
 
@@ -52,12 +52,12 @@ def test_apply_monthly_interest_credits_and_returns_interest(savings_account):
 def test_interest_is_rounded_half_up(owner):
     account = SavingsAccount(owner=owner, currency="RUB", initial_balance="100.10", monthly_rate="0.015")
     # 100.10 * 0.015 = 1.5015 -> 1.50
-    assert account.apply_monthly_interest() == Decimal("1.50")
+    assert account._apply_monthly_interest() == Decimal("1.50")
 
 
 def test_zero_rate_yields_no_interest(owner):
     account = SavingsAccount(owner=owner, currency="RUB", initial_balance=500)
-    assert account.apply_monthly_interest() == Decimal("0.00")
+    assert account._apply_monthly_interest() == Decimal("0.00")
     assert account.balance == Decimal("500.00")
 
 
@@ -69,7 +69,7 @@ def test_inactive_account_earns_no_interest(owner, transition, error_type, balan
     account = SavingsAccount(owner=owner, currency="RUB", initial_balance=1000, monthly_rate="0.1")
     getattr(account, transition)()
     with pytest.raises(error_type):
-        account.apply_monthly_interest()
+        account._apply_monthly_interest()
     assert account.balance == balance
 
 

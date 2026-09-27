@@ -16,8 +16,11 @@ class InvestmentAccount(BankAccount):
     """An account whose money is split between free cash and a portfolio.
 
     ``balance`` is the free cash only. Money moves into the portfolio with
-    ``invest()`` and back with ``divest()``; ``withdraw()`` never touches
-    invested money, so a client has to divest first.
+    ``_invest()`` and back with ``_divest()``; ``withdraw()`` never touches
+    invested money, so a client has to divest first. Both moves are internal:
+    the account keeps the portfolio rules, and ``Bank.invest()`` /
+    ``Bank.divest()`` run them with the checks of a client operation and
+    record the movement.
     """
 
     def __init__(
@@ -44,8 +47,8 @@ class InvestmentAccount(BankAccount):
         """Free cash plus everything allocated in the portfolio."""
         return self._balance + self._portfolio.total
 
-    def invest(self, asset_type: AssetType | str, amount: object) -> Decimal:
-        """Move ``amount`` of free cash into ``asset_type``; return the new cash balance."""
+    def _invest(self, asset_type: AssetType | str, amount: object) -> Decimal:
+        """Move ``amount`` of free cash into ``asset_type``; return the new cash balance. Called by the bank."""
         self.ensure_operational()
         asset = Portfolio.resolve_asset_type(asset_type)
         value = to_money(amount, require="positive")
@@ -59,8 +62,8 @@ class InvestmentAccount(BankAccount):
         self._balance -= value
         return self._balance
 
-    def divest(self, asset_type: AssetType | str, amount: object) -> Decimal:
-        """Move ``amount`` from ``asset_type`` back to free cash; return the new cash balance."""
+    def _divest(self, asset_type: AssetType | str, amount: object) -> Decimal:
+        """Move ``amount`` from ``asset_type`` back to free cash; return the new cash balance. Called by the bank."""
         self.ensure_operational()
         asset = Portfolio.resolve_asset_type(asset_type)
         value = to_money(amount, require="positive")

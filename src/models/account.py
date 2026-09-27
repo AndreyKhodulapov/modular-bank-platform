@@ -198,12 +198,14 @@ class BankAccount(AbstractAccount):
         self._balance -= value
         return self._balance
 
-    def refund(self, amount: object) -> Decimal:
+    def _refund(self, amount: object) -> Decimal:
         """Put back money that a rolled-back operation took from the account.
 
         This is not a client operation: the status and the deposit limit are
         ignored, because the money was on the account a moment ago and must
-        come back whatever happened in between.
+        come back whatever happened in between. Internal, since it skips every
+        rule: only ``Bank.refund()`` calls it, after checking that the debit
+        was recorded and is not refunded yet.
         """
         self._balance += to_money(amount, require="positive")
         return self._balance

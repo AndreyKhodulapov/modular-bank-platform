@@ -11,8 +11,13 @@ cannot mutate it arbitrarily.
 
 *In the project:* `AbstractAccount` stores `_balance` and `_status` as
 protected attributes and exposes them through read-only properties. The
-balance can only change via `deposit()` / `withdraw()`, which enforce every
-business rule. `Client` validates its personal data once and exposes it only
+balance changes through `deposit()` / `withdraw()`, which enforce every
+business rule, and through the operations the bank owns: the model keeps the
+rule (the minimum balance, the interest rate, the portfolio, a refund that
+skips every limit), the bank runs the operation. `_refund()`,
+`_apply_monthly_interest()`, `_invest()` and `_divest()` are internal, called
+only by `Bank`, which checks each call and records the movement; a refund
+that skips every rule cannot be called by anyone else. `Client` validates its personal data once and exposes it only
 through read-only properties; its status changes only through `block()` /
 `unblock()`, and `account_ids` returns a copy of the internal list. `Portfolio.holdings` returns a copy, so the allocation can only
 change through `add()` / `remove()`, and `InvestmentAccount` never hands out
@@ -102,8 +107,8 @@ numbers).
   `BankError`" - is never broken, and the shared checks always run first and
   in the same order.
 - **I - Interface Segregation:** the abstract interface is minimal (three
-  methods); type-specific operations (`apply_monthly_interest`, `invest`,
-  `divest`, `project_yearly_growth`) live only on the classes that need them.
+  methods); type-specific operations (`_apply_monthly_interest`, `_invest`,
+  `_divest`, `project_yearly_growth`) live only on the classes that need them.
 - **D - Dependency Inversion:** high-level modules depend on abstractions,
   not on concrete implementations. Partly applied: `SecurityGuard` depends on
   an abstract clock (any zero-argument callable returning a `datetime`), not on
@@ -269,7 +274,8 @@ amounts and enum members are values: two equal amounts are interchangeable.
   change balances, so a movement cannot be forgotten or written twice, and
   a refused operation leaves none. That is why the operations of the account
   types (`apply_monthly_interest`, `invest`, `divest`) are offered by `Bank`
-  too: the models change the balance, the bank records it. The processor
+  only: the models keep them internal and change the balance, the bank
+  checks and records it. The processor
   passes the transaction id through `deposit()` / `withdraw()` / `refund()`
   and adds the finished transaction itself - once, after its last attempt.
 - **The actual change.** A movement stores the balance after minus the
@@ -478,7 +484,7 @@ exceptions.
 *In the project:* `to_money()` and `to_rate()` are pure functions; accounts take
 their collaborators (`Client`, currency, status, limits, rates) through the
 constructor; `Portfolio` is tested on its own without any account; there is no
-clock inside the models, so `apply_monthly_interest()` is called explicitly and
+clock inside the models, so `Bank.apply_monthly_interest()` is called explicitly and
 tests stay deterministic; `Client` takes an optional `today` for the age check,
 so the 18th-birthday boundary is tested on fixed dates. The bank does not
 trust that date: `add_client()` runs the same rule (`Client.ensure_adult()`)
