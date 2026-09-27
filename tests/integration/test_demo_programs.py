@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -125,8 +126,8 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     bank_report = output.split("= 5. Reports =")[1].split("  Risk report")[0]
     assert "open_accounts           11" in bank_report  # the closed CNY account is not counted
     assert "total_balance           4331411.00" in bank_report  # the interest of the last round included
-    assert "transactions            40" in bank_report
-    assert "failure_rate_percent    20.5" in bank_report
+    assert "transactions            41" in bank_report  # the salary sent twice is a failed one
+    assert "failure_rate_percent    22.5" in bank_report
     assert "tariff_fees             450.00" in bank_report
     first_place = bank_report.split("Top 3 clients\n")[1].splitlines()[1]  # the line after the column names
     assert first_place.split()[0] == "1"
@@ -138,6 +139,9 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     risk_report = output.split("  Risk report")[1].split("= 6. Export =")[0]
     assert "suspicious            7" in risk_report
     assert "blocked_by_risk       2" in risk_report
+    # both reports count the failures from the same transactions
+    rates = [re.search(r"failure_rate_percent +(\S+)", report).group(1) for report in (bank_report, risk_report)]
+    assert rates == ["22.5", "22.5"]
     # the terminal shows warnings and above only
     assert "CRITICAL bank.audit        operation_blocked" in output
     assert "INFO     bank." not in output

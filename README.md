@@ -387,7 +387,10 @@ kept in memory next to the accounts (`bank.history`, or injected with
 
 - **Transactions** - each one once, when it reaches its final status after
   the last attempt: `completed` or `failed`. A cancelled transaction never
-  ran, so it stays in the queue and the audit log only.
+  ran, so it stays in the queue and the audit log only. A transaction
+  refused because another one holds its id enters as `failed` too
+  (`record_duplicate()`), without taking the id: the history and the audit
+  log count the same failures, and a client sees the refused submission.
   `transactions(account_ids=..., status=..., transaction_type=..., since=...,
   until=...)` returns them in the order they finished; `account_ids` matches
   both outgoing and incoming ones, and the time range applies to
@@ -502,9 +505,9 @@ whose `str()` is the printed form:
 ```python
 report = BankReport(bank)
 print(report.transaction_statistics())
-# Transactions: 40 (completed 31, failed 8, cancelled 1)
-#   by type: deposit 5, withdrawal 7, transfer 25, external_transfer 2
-#   failure rate 20.5% of 39 finished, blocked by risk control 2
+# Transactions: 41 (completed 31, failed 9, cancelled 1)
+#   by type: deposit 6, withdrawal 7, transfer 25, external_transfer 2
+#   failure rate 22.5% of 40 finished, blocked by risk control 2
 #   volume 1839899.00 RUB, average 59351.58 RUB, largest 7000.00 USD (transfer)
 #   tariff fees collected 450.00 RUB
 ```

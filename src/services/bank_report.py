@@ -27,7 +27,8 @@ class TransactionStatistics:
     """What happened to the transactions the bank has seen.
 
     - ``by_status`` counts the finished transactions of the history
-      (completed, failed) and the cancelled ones, which never ran and are
+      (completed, failed, a refused duplicate of an id among the failed
+      ones) and the cancelled ones, which never ran and are
       known only from the ``transaction_cancelled`` events of the bank's
       audit log: a queue records them only when it is given that log
       (``TransactionQueue(..., audit_log=bank.audit_log)``);
@@ -156,6 +157,8 @@ class BankReport:
         )
         # a blocked transaction is not retried, so its latest assessment is the blocking one
         blocked_ids = {item.transaction_id for item in self._bank.risk_analyzer.assessments if item.blocked}
+        # by id: a refused duplicate of a blocked transaction shares its id and is not a second block
+        failed_ids = {transaction.transaction_id for transaction in failed}
         rate = Decimal(100 * len(failed)) / len(finished) if finished else Decimal(0)
         types = Counter(transaction.transaction_type for transaction in finished)
         return TransactionStatistics(
@@ -170,7 +173,7 @@ class BankReport:
             average_amount=average.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
             largest=max(completed, key=lambda transaction: amounts[transaction.transaction_id], default=None),
             tariff_fees=tariff_fees,
-            blocked_by_risk=sum(1 for transaction in failed if transaction.transaction_id in blocked_ids),
+            blocked_by_risk=len(failed_ids & blocked_ids),
             finished=len(finished),
             failure_rate=rate.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP),
         )

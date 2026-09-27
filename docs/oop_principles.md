@@ -418,7 +418,12 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
 - **Each fact from its source.** Finished transactions come from the
   history, cancellations from the audit log (a cancelled transaction never
   ran, so the history does not have it), blocked ones from the risk
-  analyzer. Nothing is counted twice.
+  analyzer. Nothing is counted twice. Two sources of one fact must agree:
+  a transaction refused for a used id is a failure in the audit log, so it
+  enters the history as failed too, and the bank report and the risk
+  report give the same failure rate. A refused duplicate shares the id of
+  the first transaction, so blocked ones are counted by id, not by
+  transaction.
 - **Compute in services, lay out in `reporting`.** `ReportBuilder` only
   picks numbers from `BankReport`, `AuditReport` and the history and puts
   them into a `Report`: named values (`KeyValueSection`) and tables

@@ -11,6 +11,7 @@ from services import (
     AuditLog,
     AuditReport,
     Bank,
+    BankReport,
     RiskLevel,
     SecurityGuard,
     TransactionProcessor,
@@ -146,3 +147,35 @@ def test_ordinary_and_suspicious_transactions(world, tmp_path):
 
     # the file holds exactly what memory holds
     assert AuditLog.load_events(tmp_path / "audit.jsonl") == bank.audit_log.events
+
+
+def resent(transaction):
+    """What a system sending ``transaction`` twice makes: a new transaction under the same id."""
+    return Transaction(
+        transaction.transaction_type,
+        transaction.amount,
+        transaction.currency,
+        sender_id=transaction.sender_id,
+        recipient_id=transaction.recipient_id,
+        created_at=NOON,
+        transaction_id=transaction.transaction_id,
+    )
+
+
+def test_both_reports_count_the_same_failures(world):
+    clock, bank, queue, processor, _, accounts = world
+    maria, oleg = accounts["maria"], accounts["oleg"]
+    paid = make("transfer", 5_000, "RUB", maria, accounts["alina_rub"])
+    huge = make("external_transfer", 25_000, "USD", oleg, "CY17-0020-0128-0000-0012-0052-7600")
+    run(queue, processor, clock, NOON, paid, huge)
+    assert (paid.status, huge.status) == (TransactionStatus.COMPLETED, TransactionStatus.FAILED)
+    # both are sent again under their ids and reach another processor, past the queue
+    duplicates = [TransactionProcessor(bank).process(resent(transaction)) for transaction in (paid, huge)]
+    assert [transaction.status for transaction in duplicates] == [TransactionStatus.FAILED] * 2
+
+    statistics = BankReport(bank).transaction_statistics()
+    errors = AuditReport(bank.audit_log, bank.risk_analyzer).error_statistics()
+    assert statistics.finished == errors.completed + errors.final_failures == 4
+    assert statistics.failure_rate == errors.failure_rate == Decimal("75.0")
+    # the duplicate of the blocked transaction shares its id, but risk control blocked it once
+    assert statistics.blocked_by_risk == errors.blocked_by_risk == 1

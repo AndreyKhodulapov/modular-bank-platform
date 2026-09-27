@@ -403,7 +403,9 @@ def test_transaction_id_from_the_history_fails_before_money_moves(bank, processo
     assert again.failure_reason == "InvalidOperationError: Transaction id T-1 is already used by another transaction."
     assert (processor.errors[-1].error_type, processor.errors[-1].will_retry) == ("InvalidOperationError", False)
     assert (rub.balance, usd.balance) == (Decimal("9100.00"), Decimal("110.00"))
-    assert bank.history.transactions() == [first]  # the history keeps the first transaction under the id
+    # the refused one is in the history as failed, but the id stays with the first transaction
+    assert bank.history.transactions() == [first, again]
+    assert bank.history.claimed_by("T-1") is first
     assert bank.history.movements() == moved
 
 
@@ -414,11 +416,12 @@ def test_id_of_a_transaction_waiting_for_a_retry_cannot_be_reused(bank, processo
     processor.process(other)
     assert (waiting.status, other.status) == (TransactionStatus.PENDING, TransactionStatus.FAILED)
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
-    assert bank.history.transactions() == []  # the failed one does not take the id in the history
+    assert bank.history.transactions() == [other]  # finished as failed, without taking the id
     bank.deposit(rub.account_id, 1_000)
     processor.process(waiting)  # the retry of the first transaction under the id goes through
     assert waiting.status is TransactionStatus.COMPLETED
-    assert bank.history.transactions() == [waiting]
+    assert bank.history.transactions() == [other, waiting]
+    assert bank.history.claimed_by("T-1") is waiting
 
 
 def test_processors_of_one_bank_share_the_used_ids(bank, processor, rub, usd):
@@ -430,7 +433,7 @@ def test_processors_of_one_bank_share_the_used_ids(bank, processor, rub, usd):
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
     bank.deposit(rub.account_id, 1_000)
     processor.process(waiting)
-    assert bank.history.transactions() == [waiting]
+    assert bank.history.transactions(status="completed") == [waiting]
 
 
 def test_transaction_id_from_the_history_does_not_hold_up_the_queue(bank, processor, queue, rub, usd):
