@@ -1,6 +1,6 @@
 """End-to-end scenarios of the bank: several clients, accounts, logins and security rules."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -35,9 +35,11 @@ def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
         bank.authenticate_client(boris.client_id, "not-his-password")
     with pytest.raises(ClientBlockedError):
         bank.withdraw(boris_usd.account_id, 10)
+    # someone else may have typed the passwords: money sent to Boris still arrives
+    assert bank.deposit(boris_usd.account_id, 10) == Decimal("1010.00")
     bank.unblock_client(boris.client_id)
     bank.authenticate_client(boris.client_id, "boris-password")
-    assert bank.withdraw(boris_usd.account_id, 10) < Decimal("1000")
+    assert bank.withdraw(boris_usd.account_id, 10) < Decimal("1010")
 
     bank.freeze_account(anna_rub.account_id)
     with pytest.raises(AccountFrozenError):
@@ -77,20 +79,12 @@ def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
     ]  # closing an empty account pays nothing out
 
 
-def test_money_moved_past_the_bank_is_missing_from_the_history(bank, client):
-    investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
-    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
-    investment.invest("stocks", 400)
-    savings.apply_monthly_interest()
-    assert history_gaps(bank) == {investment.account_id: Decimal("-400.00"), savings.account_id: Decimal("10.00")}
-    assert history_gaps(bank, bypassed=[investment.account_id, savings.account_id]) == {}
-
-
-def test_account_type_operations_through_the_bank_keep_the_history_whole(bank, client):
+def test_account_type_operations_through_the_bank_keep_the_history_whole(bank, client, clock):
     investment = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
     bank.invest(investment.account_id, "stocks", 400)
     bank.divest(investment.account_id, "stocks", 100)
+    clock.moment += timedelta(days=31)  # interest is due a month after the opening
     bank.apply_monthly_interest(savings.account_id)
     bank.withdraw(investment.account_id, 700)
     assert history_gaps(bank) == {}

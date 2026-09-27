@@ -4,7 +4,13 @@ from decimal import Decimal
 
 import pytest
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, RiskBlockedError
+from exceptions import (
+    AuthenticationError,
+    ClientBlockedError,
+    InvalidOperationError,
+    OperationTimeRestrictedError,
+    RiskBlockedError,
+)
 from models import Transaction, TransactionStatus
 from services import (
     AuditLevel,
@@ -20,6 +26,7 @@ from tests.helpers import reasons
 
 NOW = datetime(2026, 9, 24, 14, 0)
 NIGHT = datetime(2026, 9, 25, 2, 30)
+DAWN = datetime(2026, 9, 25, 5, 0)  # the night window ends
 
 
 @pytest.fixture
@@ -148,10 +155,7 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     processor = TransactionProcessor(bank)
     client = bank.add_client(owner, password)
     other = bank.add_client(make_client("Boris"), "boris-password")
-    recipient = bank.open_account(other.client_id, currency="RUB")
-    for _ in range(3):  # three wrong passwords block the recipient's owner
-        with pytest.raises((AuthenticationError, ClientBlockedError)):
-            bank.authenticate_client(other.client_id, "wrong-password")
+    recipient = bank.open_account(other.client_id, currency="RUB")  # takes at most MAX_DEPOSIT at once
     cap = bank.open_account(
         client.client_id, "premium", currency="RUB", initial_balance=10_000_000, overdraft_limit=100, withdrawal_fee=10
     )
@@ -159,7 +163,7 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     transaction = transfer(cap, recipient, 10_000_000)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.FAILED
-    assert transaction.failure_reason.startswith("ClientBlockedError")
+    assert transaction.failure_reason.startswith("LimitExceededError")
     assert (cap.balance, recipient.balance) == (Decimal("10000000.00"), Decimal("0.00"))
     # the refund is not a client operation: one large withdrawal is reviewed, the refund is not
     assert reasons(bank).count(SuspicionReason.LARGE_OPERATION) == 2  # opening the account, then the withdrawal
@@ -174,23 +178,79 @@ def test_refund_after_a_failed_credit_ignores_bank_limits_and_review(security, o
     assert bank.history.transactions() == [transaction]
 
 
-def test_night_window_is_retried_with_exponential_delay(bank, processor, rub, usd, clock):
+def test_a_blocked_client_keeps_receiving_money(bank, processor, rub, make_client):
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    blocked = bank.open_account(boris.client_id, currency="RUB")
+    for _ in range(3):  # anyone can type three wrong passwords for Boris
+        with pytest.raises((AuthenticationError, ClientBlockedError)):
+            bank.authenticate_client(boris.client_id, "wrong-password")
+    incoming = [
+        processor.process(transfer(rub, blocked, 300)),
+        processor.process(Transaction("deposit", 200, "RUB", recipient_id=blocked.account_id, created_at=NOW)),
+    ]
+    assert [transaction.status for transaction in incoming] == [TransactionStatus.COMPLETED] * 2
+    assert blocked.balance == Decimal("500.00")
+    credits = bank.history.movements(blocked.account_id, kind=MovementKind.DEPOSIT)
+    assert [movement.transaction_id for movement in credits] == [transaction.transaction_id for transaction in incoming]
+    assert SuspicionReason.BLOCKED_CLIENT_ACTIVITY not in reasons(bank)
+
+
+def test_a_blocked_sender_is_refused_and_recorded_as_the_actor(bank, processor, client, rub, make_client):
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    recipient = bank.open_account(boris.client_id, currency="RUB")
+    client.block()
+    transaction = processor.process(transfer(rub, recipient, 300))
+    assert transaction.status is TransactionStatus.FAILED
+    assert transaction.failure_reason.startswith("ClientBlockedError")
+    assert (rub.balance, recipient.balance) == (Decimal("10000.00"), Decimal("0.00"))
+    [activity] = [a for a in bank.suspicious_activities if a.reason is SuspicionReason.BLOCKED_CLIENT_ACTIVITY]
+    assert (activity.client_id, activity.account_id) == (client.client_id, rub.account_id)
+
+
+def test_night_window_is_retried_when_it_ends(bank, processor, rub, usd, clock):
     clock.moment = NIGHT
     transaction = transfer(rub, usd, 900)
     processor.process(transaction)
     assert transaction.status is TransactionStatus.PENDING
-    assert transaction.scheduled_at == NIGHT + timedelta(minutes=5)
+    assert transaction.scheduled_at == DAWN  # not after retry_delay: the bank tells when the night ends
 
     clock.moment = transaction.scheduled_at
     processor.process(transaction)
-    assert transaction.scheduled_at == NIGHT + timedelta(minutes=15)  # 5 more, then 10
+    assert (transaction.status, transaction.attempts) == (TransactionStatus.COMPLETED, 2)
+    assert [(record.attempt, record.error_type, record.will_retry) for record in processor.errors] == [
+        (1, "OperationTimeRestrictedError", True)
+    ]
+    assert bank.history.transactions() == [transaction]
+
+
+def test_night_transfer_completes_at_the_first_run_after_the_window(bank, processor, queue, rub, usd, clock):
+    clock.moment = NIGHT.replace(hour=0, minute=30)
+    transaction = queue.add(transfer(rub, usd, 900))
+    assert processor.process_queue(queue).rescheduled == [transaction]
+    for moment in (NIGHT.replace(hour=1, minute=0), DAWN - timedelta(seconds=1)):
+        clock.moment = moment
+        assert processor.process_queue(queue).rescheduled == []  # nothing is due, no attempt is wasted
+    clock.moment = DAWN
+    assert processor.process_queue(queue).completed == [transaction]
+    assert transaction.attempts == 2
+
+
+def test_missing_money_is_retried_with_exponential_delay(bank, processor, rub, usd, clock):
+    transaction = transfer(rub, usd, 12_000)
+    processor.process(transaction)
+    assert transaction.status is TransactionStatus.PENDING
+    assert transaction.scheduled_at == NOW + timedelta(minutes=5)
+
+    clock.moment = transaction.scheduled_at
+    processor.process(transaction)
+    assert transaction.scheduled_at == NOW + timedelta(minutes=15)  # 5 more, then 10
 
     clock.moment = transaction.scheduled_at
     processor.process(transaction)
     assert (transaction.status, transaction.attempts) == (TransactionStatus.FAILED, 3)
-    assert transaction.failure_reason.startswith("OperationTimeRestrictedError")
+    assert transaction.failure_reason.startswith("InsufficientFundsError")
     assert [(record.attempt, record.will_retry) for record in processor.errors] == [(1, True), (2, True), (3, False)]
-    assert {record.error_type for record in processor.errors} == {"OperationTimeRestrictedError"}
+    assert {record.error_type for record in processor.errors} == {"InsufficientFundsError"}
     assert bank.history.transactions() == [transaction]  # once, after the last attempt
 
 
@@ -204,7 +264,7 @@ def test_each_attempt_is_traced(processor, rub, usd, clock, caplog):
     traces = [record for record in caplog.records if record.name == "bank.transactions"]
     assert [(record.getMessage(), record.fields["attempt"], record.fields["event_time"]) for record in traces] == [
         ("attempt started", 1, NIGHT),
-        ("attempt started", 2, NIGHT + timedelta(minutes=5)),
+        ("attempt started", 2, DAWN),
     ]
     assert {record.fields["transaction_id"] for record in traces} == {transaction.transaction_id}
 
@@ -333,7 +393,9 @@ def test_transaction_id_from_the_history_fails_before_money_moves(bank, processo
     assert again.failure_reason == "InvalidOperationError: Transaction id T-1 is already used by another transaction."
     assert (processor.errors[-1].error_type, processor.errors[-1].will_retry) == ("InvalidOperationError", False)
     assert (rub.balance, usd.balance) == (Decimal("9100.00"), Decimal("110.00"))
-    assert bank.history.transactions() == [first]  # the history keeps the first transaction under the id
+    # the refused one is in the history as failed, but the id stays with the first transaction
+    assert bank.history.transactions() == [first, again]
+    assert bank.history.claimed_by("T-1") is first
     assert bank.history.movements() == moved
 
 
@@ -344,11 +406,12 @@ def test_id_of_a_transaction_waiting_for_a_retry_cannot_be_reused(bank, processo
     processor.process(other)
     assert (waiting.status, other.status) == (TransactionStatus.PENDING, TransactionStatus.FAILED)
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
-    assert bank.history.transactions() == []  # the failed one does not take the id in the history
+    assert bank.history.transactions() == [other]  # finished as failed, without taking the id
     bank.deposit(rub.account_id, 1_000)
     processor.process(waiting)  # the retry of the first transaction under the id goes through
     assert waiting.status is TransactionStatus.COMPLETED
-    assert bank.history.transactions() == [waiting]
+    assert bank.history.transactions() == [other, waiting]
+    assert bank.history.claimed_by("T-1") is waiting
 
 
 def test_processors_of_one_bank_share_the_used_ids(bank, processor, rub, usd):
@@ -360,7 +423,7 @@ def test_processors_of_one_bank_share_the_used_ids(bank, processor, rub, usd):
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
     bank.deposit(rub.account_id, 1_000)
     processor.process(waiting)
-    assert bank.history.transactions() == [waiting]
+    assert bank.history.transactions(status="completed") == [waiting]
 
 
 def test_transaction_id_from_the_history_does_not_hold_up_the_queue(bank, processor, queue, rub, usd):
@@ -453,12 +516,12 @@ def test_completed_transfer_makes_the_recipient_known(bank, processor, client, c
     assert (first.rules, second.rules) == (("new_recipient",), ())
 
 
-def break_audit_log(bank, monkeypatch, *events: str) -> None:
-    """Make the bank's audit log refuse to record ``events``, as if the disk were full."""
+def break_audit_log(bank, monkeypatch, *events: str, account_id: str | None = None) -> None:
+    """Make the bank's audit log refuse to record ``events`` (only on ``account_id``, if given), like a full disk."""
     record = bank.audit_log.record
 
     def broken(level, category, event, *args, **kwargs):
-        if event in events:
+        if event in events and account_id in (None, kwargs.get("account_id")):
             raise OSError("disk full")
         return record(level, category, event, *args, **kwargs)
 
@@ -496,3 +559,85 @@ def test_process_queue_keeps_a_retry_when_the_audit_write_fails(bank, processor,
         processor.process_queue(queue)
     assert short.status is TransactionStatus.PENDING
     assert queue.pending() == [short]
+
+
+@pytest.fixture
+def unscored_bank(security):
+    """A bank without risk rules: a large transfer to a new account is not refused before its money moves."""
+    return Bank(security=security, risk_analyzer=RiskAnalyzer(rules=[]))
+
+
+@pytest.fixture
+def large_parties(unscored_bank, owner, password, make_client):
+    """A sender with 1 000 000 RUB and a recipient with nothing, both opened before the audit log breaks."""
+    anna = unscored_bank.add_client(owner, password)
+    boris = unscored_bank.add_client(make_client("Boris"), "boris-password")
+    sender = unscored_bank.open_account(anna.client_id, currency="RUB", initial_balance=1_000_000)
+    recipient = unscored_bank.open_account(boris.client_id, currency="RUB")
+    return sender, recipient
+
+
+def movement_kinds(bank, account, transaction):
+    return [m.kind for m in bank.history.movements(account.account_id, transaction_id=transaction.transaction_id)]
+
+
+def test_a_credit_that_went_through_is_not_refunded(unscored_bank, large_parties, monkeypatch):
+    bank, (sender, recipient) = unscored_bank, large_parties
+    total = bank.get_total_balance()
+    # the recipient is credited and the movement recorded, then the review of the large credit cannot be written
+    break_audit_log(bank, monkeypatch, "large_operation", account_id=recipient.account_id)
+    transaction = transfer(sender, recipient, 600_000)
+    with pytest.raises(OSError):
+        TransactionProcessor(bank).process(transaction)
+    assert (sender.balance, recipient.balance) == (Decimal("400000.00"), Decimal("600000.00"))
+    assert bank.get_total_balance() == total
+    assert movement_kinds(bank, sender, transaction) == [MovementKind.WITHDRAWAL]
+    assert movement_kinds(bank, recipient, transaction) == [MovementKind.DEPOSIT]
+    # an unexpected error is a defect: the transaction fails without a retry, the movements tell what happened
+    assert transaction.status is TransactionStatus.FAILED
+    [event] = bank.audit_log.filter(event="transaction_failed")
+    assert (event.level, event.details["will_retry"]) == (AuditLevel.CRITICAL, False)
+
+
+def test_a_debit_without_a_credit_is_refunded_even_if_the_bank_raised_after_it(
+    unscored_bank, large_parties, monkeypatch
+):
+    bank, (sender, recipient) = unscored_bank, large_parties
+    total = bank.get_total_balance()
+    # the sender is debited and the movement recorded, then the review of the large debit cannot be written
+    break_audit_log(bank, monkeypatch, "large_operation", account_id=sender.account_id)
+    transaction = transfer(sender, recipient, 600_000)
+    with pytest.raises(OSError):
+        TransactionProcessor(bank).process(transaction)
+    assert (sender.balance, recipient.balance) == (Decimal("1000000.00"), Decimal("0.00"))
+    assert bank.get_total_balance() == total
+    assert movement_kinds(bank, sender, transaction) == [MovementKind.WITHDRAWAL, MovementKind.REFUND]
+    assert bank.history.movements(recipient.account_id) == []
+    assert transaction.status is TransactionStatus.FAILED
+
+
+def test_a_withdrawal_is_not_refunded_after_the_money_left(unscored_bank, large_parties, monkeypatch):
+    bank, (sender, _) = unscored_bank, large_parties
+    break_audit_log(bank, monkeypatch, "large_operation", account_id=sender.account_id)
+    transaction = Transaction("withdrawal", 600_000, "RUB", sender_id=sender.account_id, created_at=NOW)
+    with pytest.raises(OSError):
+        TransactionProcessor(bank).process(transaction)
+    # the cash is paid out, there is no recipient in the bank to take it back from
+    assert sender.balance == Decimal("400000.00")
+    assert movement_kinds(bank, sender, transaction) == [MovementKind.WITHDRAWAL]
+    assert transaction.status is TransactionStatus.FAILED
+
+
+def test_every_retry_that_debits_is_rolled_back(bank, processor, queue, rub, premium, clock, monkeypatch):
+    # e.g. the night window starts between the debit and the credit, on every attempt
+    def deposit(account_id, amount, **kwargs):
+        raise OperationTimeRestrictedError("deposit", "00:00 and 05:00")
+
+    monkeypatch.setattr(bank, "deposit", deposit)
+    transaction = queue.add(transfer(rub, premium, 100))
+    for _ in range(3):
+        processor.process_queue(queue)
+        clock.moment = transaction.scheduled_at
+    assert (transaction.status, transaction.attempts) == (TransactionStatus.FAILED, 3)
+    assert rub.balance == Decimal("10000.00")
+    assert movement_kinds(bank, rub, transaction) == [MovementKind.WITHDRAWAL, MovementKind.REFUND] * 3

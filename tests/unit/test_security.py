@@ -111,6 +111,9 @@ def test_night_window_boundaries(security, clock, moment, night):
             security.ensure_daytime("withdraw")
     else:
         security.ensure_daytime("withdraw")
+    # the same day's 05:00 for a moment inside the window, nothing outside it
+    expected = datetime.combine(clock.moment.date(), time(5, 0)) if night else None
+    assert security.night_ends_at(clock.moment) == expected
 
 
 def test_ensure_daytime_rejects_and_logs_night_action(security, clock):

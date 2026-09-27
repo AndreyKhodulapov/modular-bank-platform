@@ -11,8 +11,13 @@ cannot mutate it arbitrarily.
 
 *In the project:* `AbstractAccount` stores `_balance` and `_status` as
 protected attributes and exposes them through read-only properties. The
-balance can only change via `deposit()` / `withdraw()`, which enforce every
-business rule. `Client` validates its personal data once and exposes it only
+balance changes through `deposit()` / `withdraw()`, which enforce every
+business rule, and through the operations the bank owns: the model keeps the
+rule (the minimum balance, the interest rate, the portfolio, a refund that
+skips every limit), the bank runs the operation. `_refund()`,
+`_apply_monthly_interest()`, `_invest()` and `_divest()` are internal, called
+only by `Bank`, which checks each call and records the movement; a refund
+that skips every rule cannot be called by anyone else. `Client` validates its personal data once and exposes it only
 through read-only properties; its status changes only through `block()` /
 `unblock()`, and `account_ids` returns a copy of the internal list. `Portfolio.holdings` returns a copy, so the allocation can only
 change through `add()` / `remove()`, and `InvestmentAccount` never hands out
@@ -102,8 +107,8 @@ numbers).
   `BankError`" - is never broken, and the shared checks always run first and
   in the same order.
 - **I - Interface Segregation:** the abstract interface is minimal (three
-  methods); type-specific operations (`apply_monthly_interest`, `invest`,
-  `divest`, `project_yearly_growth`) live only on the classes that need them.
+  methods); type-specific operations (`_apply_monthly_interest`, `_invest`,
+  `_divest`, `project_yearly_growth`) live only on the classes that need them.
 - **D - Dependency Inversion:** high-level modules depend on abstractions,
   not on concrete implementations. Partly applied: `SecurityGuard` depends on
   an abstract clock (any zero-argument callable returning a `datetime`), not on
@@ -188,6 +193,12 @@ amounts and enum members are values: two equal amounts are interchangeable.
   client; a successful login resets the counter. The counter is kept by
   `Client` next to the status, so unblocking resets it by whatever path it
   happens and the two can never disagree.
+- **A lockout limits the client, not the money sent to them.** Anyone can
+  type three wrong passwords for someone else's id, so blocking only stops
+  what the client does: opening and closing accounts, debits, sending
+  transactions. Incoming credits still arrive, otherwise password guessing
+  would become a way to cut a client off their salary (a lockout used as
+  denial of service), and the attempt is recorded against whoever acted.
 - **Risky time is closed.** Between 00:00 and 05:00 the bank refuses
   operations that move money or give access back; freezing (a protective
   action) and logins stay available.
@@ -205,6 +216,14 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **Idempotency.** Running the same operation twice must not double its
   effect. `start()` is allowed only from `PENDING`, so a transaction that
   was already processed is rejected instead of moving money a second time.
+- **A periodic job is safe to run again.** Monthly interest is a batch the
+  bank runs by the calendar, and batches get rerun after a failure or by
+  mistake. The bank remembers the date of the last interest per account,
+  so a second run before the next date is refused instead of paying twice.
+  The next date is the first day-of-opening after the last run (the last
+  day of a shorter month), so the calendar drifts neither from the 31st to
+  the 28th nor when a run is late: interest paid on Mar 1 for Feb 15 is
+  due again on Mar 15, while a month with no run at all is not paid back.
 - **Priority queue on a heap.** `heapq` gives O(log n) insertion and
   removal of the most urgent item. The key is `(-priority, sequence)`: the
   sequence number keeps first-in-first-out order within a priority and
@@ -215,19 +234,31 @@ amounts and enum members are values: two equal amounts are interchangeable.
   stale entries are skipped when they reach the top.
 - **Atomicity and compensation.** A transfer has two steps (debit, credit)
   and must not stop halfway. Both accounts are checked and both amounts
-  converted before money moves; if the bank still refuses the credit, a
-  compensating operation returns the debit. The compensation is
+  converted before money moves; if the credit does not happen after the
+  debit, a compensating operation returns the debit. Whether it happened is
+  read from the history, not guessed from the error: the bank records a
+  movement before it writes the audit log, so an audit write that fails
+  after the credit leaves a recorded credit, and taking the debit back then
+  would make money. The compensation is
   `bank.refund()`, which skips the checks of a client operation: a rollback
   must not be refused by a deposit limit or the night window, and must not
   be reviewed as a new client operation. It still goes through the bank, so
-  the history records it next to the debit it cancels. This is the idea
+  the history records it next to the debit it cancels. A compensation is
+  keyed by the id of the step it undoes: the bank refunds only a debit
+  recorded under a transaction still in progress, each debit once and no
+  more than it, so a rollback can be neither invented nor applied twice
+  (an idempotent compensating step). This is the idea
   behind the Saga pattern for operations that span several services, where
   one database transaction is not available.
 - **Retries with exponential backoff.** Only temporary errors are retried
   (the night window ends, money may arrive); permanent ones (a frozen
   account, bad input) fail at once, because retrying them only adds load.
   Each retry waits twice as long as the previous one, and `max_attempts`
-  bounds the total.
+  bounds the total. When the error says when it passes, the retry is
+  scheduled for that moment instead of a guess: a transaction refused at
+  night comes back when the window ends (like an HTTP `Retry-After`), so no
+  attempt is spent on a refusal known in advance. Backoff is for errors
+  with no known end, such as missing money.
 - **Money and currencies.** Amounts stay `Decimal`; conversion between two
   foreign currencies goes through the base currency (a cross rate) and is
   rounded once, at the end, so rounding errors do not accumulate.
@@ -245,7 +276,8 @@ amounts and enum members are values: two equal amounts are interchangeable.
   change balances, so a movement cannot be forgotten or written twice, and
   a refused operation leaves none. That is why the operations of the account
   types (`apply_monthly_interest`, `invest`, `divest`) are offered by `Bank`
-  too: the models change the balance, the bank records it. The processor
+  only: the models keep them internal and change the balance, the bank
+  checks and records it. The processor
   passes the transaction id through `deposit()` / `withdraw()` / `refund()`
   and adds the finished transaction itself - once, after its last attempt.
 - **The actual change.** A movement stores the balance after minus the
@@ -394,7 +426,12 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
 - **Each fact from its source.** Finished transactions come from the
   history, cancellations from the audit log (a cancelled transaction never
   ran, so the history does not have it), blocked ones from the risk
-  analyzer. Nothing is counted twice.
+  analyzer. Nothing is counted twice. Two sources of one fact must agree:
+  a transaction refused for a used id is a failure in the audit log, so it
+  enters the history as failed too, and the bank report and the risk
+  report give the same failure rate. A refused duplicate shares the id of
+  the first transaction, so blocked ones are counted by id, not by
+  transaction.
 - **Compute in services, lay out in `reporting`.** `ReportBuilder` only
   picks numbers from `BankReport`, `AuditReport` and the history and puts
   them into a `Report`: named values (`KeyValueSection`) and tables
@@ -449,9 +486,12 @@ exceptions.
 *In the project:* `to_money()` and `to_rate()` are pure functions; accounts take
 their collaborators (`Client`, currency, status, limits, rates) through the
 constructor; `Portfolio` is tested on its own without any account; there is no
-clock inside the models, so `apply_monthly_interest()` is called explicitly and
+clock inside the models, so `Bank.apply_monthly_interest()` is called explicitly and
 tests stay deterministic; `Client` takes an optional `today` for the age check,
-so the 18th-birthday boundary is tested on fixed dates. Services receive their
+so the 18th-birthday boundary is tested on fixed dates. The bank does not
+trust that date: `add_client()` runs the same rule (`Client.ensure_adult()`)
+by its own clock, so a client object built with any `today` cannot slip in -
+the model owns the rule, the bank owns the time. Services receive their
 dependencies: tests build `SecurityGuard(clock=ManualClock(...))` and move the
 clock to 00:00, 04:59:59 or 05:00 to check the night window exactly, and pass
 their own rates to `CurrencyConverter`. Tests are split into `tests/unit/`

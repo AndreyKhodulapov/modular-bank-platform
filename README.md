@@ -24,10 +24,10 @@ The program plays one day of a small bank on a clock it moves by hand, so
 every run prints the same story:
 
 1. **Initialization** - the bank, 7 clients and 12 accounts of every type
-   in five currencies. Six clients opened their accounts three weeks ago,
+   in five currencies. Six clients opened their accounts a month ago,
    Sofia opens hers on the day.
-2. **Simulation** - 40 transactions go through the priority queue in
-   rounds from 09:00 to 08:00 the next morning. Most of them are ordinary
+2. **Simulation** - 40 transactions go through the priority queue in rounds
+   from 09:00 to 08:00 the next morning. Most of them are ordinary
    (salaries, rent, cash, conversions, a payment abroad with a fee, a
    premium overdraft). Some fail: a frozen account, a closed account, a
    client blocked after three wrong passwords, the withdrawal limit, an
@@ -35,13 +35,14 @@ every run prints the same story:
    cancelled. Some are suspicious: a large transfer is let through with a
    warning, quick transfers in a row raise the risk, a huge payment abroad
    and a large transfer late in the evening are blocked, a night transfer
-   waits for the morning. After every round a feed shows what the audit
-   log recorded: `queued`, `completed`, `retry`, `failed`, `warning`,
-   `blocked`, `cancelled`. The last round is the back office of the bank:
-   monthly interest, money moved into a portfolio and back (both recorded
-   in the history), a salary sent twice under one id (refused by the queue
-   and by a processor before any money moves) and an attempt to open an
-   account that is already closed (refused by the bank and by the model).
+   waits in the queue until the night window ends. After every round a feed
+   shows what the audit log recorded: `queued`, `completed`, `retry`,
+   `failed`, `warning`, `blocked`, `cancelled`. The last round is the back
+   office of the bank: monthly interest, money moved into a portfolio and
+   back (both recorded in the history), a salary sent twice under one id
+   (refused by the queue and by a processor before any money moves) and an
+   attempt to open an account that is already closed (refused by the bank
+   and by the model).
 3. **Logging** - the events of the audit log by name, and the life cycle
    of six transactions as the journal holds it.
 4. **Client view** - Oleg logs in and sees his accounts, a statement of
@@ -267,13 +268,13 @@ modular-bank-platform/
 Three subclasses of `BankAccount`; each overrides `withdraw()`,
 `get_account_info()` and `__str__()`:
 
-- `SavingsAccount` - keeps `min_balance` locked on the account and credits
-  interest with `apply_monthly_interest()` at a `monthly_rate`.
+- `SavingsAccount` - keeps `min_balance` locked on the account and earns
+  interest at a `monthly_rate`, credited by `Bank.apply_monthly_interest()`.
 - `PremiumAccount` - limits ten times higher, an `overdraft_limit` that lets the
   balance go negative and a fixed `withdrawal_fee` charged on every withdrawal.
 - `InvestmentAccount` - free cash plus a `Portfolio` of virtual asset types
-  (`stocks`, `bonds`, `etf`). `invest()` / `divest()` move money between cash
-  and the portfolio, `withdraw()` never touches invested money, and
+  (`stocks`, `bonds`, `etf`). `Bank.invest()` / `Bank.divest()` move money
+  between cash and the portfolio, `withdraw()` never touches invested money, and
   `project_yearly_growth(growth_rates)` estimates one year of growth.
 
 Every account can be frozen, unfrozen and closed (`freeze()`, `unfreeze()`,
@@ -286,14 +287,14 @@ so money never ends up on an account that refuses every operation.
 ### Bank System
 
 - `Bank` - the entry point to the platform. It registers clients with a
-  password, opens accounts of a registered type (`basic`, `savings`,
-  `premium`, `investment`), closes, freezes and unfreezes them, runs deposits
-  and withdrawals and the operations of the account types
-  (`apply_monthly_interest()`, `invest()`, `divest()`), searches accounts by
-  client, status, currency, type and balance range, and reports
-  `get_total_balance()` and `get_clients_ranking()` in roubles. Every
-  balance change it makes goes to the
-  [transaction history](#transaction-history).
+  password, checking their age by the bank's clock, opens accounts of a
+  registered type (`basic`, `savings`, `premium`, `investment`), closes,
+  freezes and unfreezes them, runs deposits and withdrawals and the
+  operations of the account types (`apply_monthly_interest()`, `invest()`,
+  `divest()`), searches accounts by client, status, currency, type and
+  balance range, and reports `get_total_balance()` and
+  `get_clients_ranking()` in roubles. Every balance change it makes goes to
+  the [transaction history](#transaction-history).
 - `SecurityGuard` - stores salted password hashes, blocks a client after three
   failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
   a log of suspicious activities.
@@ -308,16 +309,22 @@ Security rules applied by the bank:
 | Rule | Behaviour |
 | --- | --- |
 | Login lockout | 3 wrong passwords in a row block the client; `unblock_client()` restores access |
-| Blocked client | cannot open, close or unfreeze accounts or move money |
+| Blocked client | cannot open, close or unfreeze accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw, invest, divest and unblock are refused; login, freeze, monthly interest and queries are allowed |
 | Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more; kept in the audit log as `security` events |
 
 `Bank.invest()` and `Bank.divest()` are client operations with the same
 checks as a deposit or a withdrawal. `Bank.apply_monthly_interest()` is the
 bank's own operation: neither the night window nor a blocked client stops it,
-while a frozen or closed account earns no interest. The same methods of the
-account itself still work, but they bypass the bank: no checks and no
-movement in the history.
+while a frozen or closed account earns no interest. The bank keeps the
+calendar: interest is paid once a month, on the day of the month the account
+was opened (the last day of a shorter month), and an earlier call is refused
+with the date of the next one. It is the only money the bank creates itself,
+so it goes to the audit log as `interest_credited` and a large one is
+recorded as suspicious. The account types keep the rules (the rate, the
+portfolio), the bank owns the operations: `_apply_monthly_interest()`,
+`_invest()`, `_divest()` and `_refund()` of the models are internal, called
+by the bank only.
 
 ### Transactions
 
@@ -352,10 +359,9 @@ movement in the history.
   share the bank's clock and audit log
   (`TransactionQueue(clock=bank.now, audit_log=bank.audit_log)`): delays
   and retries are then measured by the same time, and the queue's events
-  go to the bank's journal. Without them the queue uses the wall clock (as
-  does `Transaction` for a `created_at` that is not passed in) and records
-  nothing. The programs pass both; the tests pass the clock and add the
-  journal where they check it.
+  go to the bank's journal. Without them the queue uses the wall clock and
+  records nothing. The programs pass both; the tests pass the clock and add
+  the journal where they check it.
 - `FeePolicy` - the tariff: external transfers pay 1% of the amount, at
   least 50 and at most 5 000 RUB (converted into the sender's currency);
   everything else is free. Pass another policy to change the tariff.
@@ -371,8 +377,8 @@ Processing rules:
 | Negative balance | decided by the account type itself through `withdraw()`: a regular account never goes below zero, a premium account may use its overdraft |
 | External transfer fee | charged with the debit, in the sender's currency; the premium account's own withdrawal fee comes on top |
 | Currency conversion | the amount is converted into the sender's and the recipient's currency through the base currency |
-| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if the bank still refuses the credit after the debit (a blocked owner, the deposit limit), the debit is put back with `bank.refund()`, which no bank rule or limit can refuse. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
-| Retries | the night window and insufficient funds are retried up to 3 attempts with an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
+| Atomic transfer | both accounts are checked and both amounts converted before any money moves; if anything fails after the debit and the recipient was not credited (the deposit limit, an audit write that failed), the debit is put back with `bank.refund()`, which no client rule or limit can refuse. A credit that went through is never taken back, even if the bank raised after it: the history, written before the audit log, tells whether the recipient got the money. `refund()` puts back only a debit recorded on that account under a transaction still in progress, each debit once and no more than was debited, so it cannot make money for a completed or made-up transaction, while a retry that debits again can still be rolled back. The debit itself was a real bank operation, so a large one stays in the suspicious activity log even after it is put back; the history keeps both the debit and its refund |
+| Retries | up to 3 attempts: a transaction refused in the night window comes back when the window ends (05:00), one short of money after an exponential delay (5, 10 minutes by default); other bank errors fail at once; an unexpected error fails the transaction, is logged and re-raised |
 
 ### Transaction history
 
@@ -382,7 +388,10 @@ kept in memory next to the accounts (`bank.history`, or injected with
 
 - **Transactions** - each one once, when it reaches its final status after
   the last attempt: `completed` or `failed`. A cancelled transaction never
-  ran, so it stays in the queue and the audit log only.
+  ran, so it stays in the queue and the audit log only. A transaction
+  refused because another one holds its id enters as `failed` too
+  (`record_duplicate()`), without taking the id: the history and the audit
+  log count the same failures, and a client sees the refused submission.
   `transactions(account_ids=..., status=..., transaction_type=..., since=...,
   until=...)` returns them in the order they finished; `account_ids` matches
   both outgoing and incoming ones, and the time range applies to
@@ -393,7 +402,8 @@ kept in memory next to the accounts (`bank.history`, or injected with
   the signed change in the account's currency, the balance and the total
   value (`total_value_after`: cash plus portfolio) right after it and the
   transaction id (`None` for a back-office operation).
-  `movements(account_id, since=..., until=...)` returns them in order.
+  `movements(account_id, kind=..., transaction_id=..., since=..., until=...)`
+  returns them in order.
 
 `Bank` is the only writer of movements: an account opened with money,
 `deposit()`, `withdraw()` (both take an optional `transaction_id`), the
@@ -405,7 +415,10 @@ no loss, and the statement of a client report prints both columns. The
 change is measured as the balance after minus the balance before, so a
 premium account's own withdrawal fee is part of the withdrawal. A refused
 operation leaves no movement. As a result the movements of every account add
-up to its balance, unless an account's own methods were called past the bank.
+up to its balance, unless `deposit()`, `withdraw()` or `close()` of the
+account itself are called past the bank: they are the account's own
+interface (the first two are the abstract methods of `AbstractAccount`) and
+stay public.
 
 ```python
 for movement in bank.history.movements(account.account_id):
@@ -430,7 +443,7 @@ for movement in bank.history.movements(account.account_id):
   | --- | --- | --- | --- |
   | `SecurityGuard` | `security` | every suspicious activity (named after `SuspicionReason`) | `WARNING`; a blocked client `CRITICAL` |
   | `Bank` | `client` | `client_registered`, `client_unblocked` | `INFO` |
-  | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed` | `INFO` |
+  | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed`, `interest_credited` | `INFO` |
   | `Bank.screen()` | `risk` | `risk_assessed`, `operation_blocked` | `INFO` / `WARNING` for a medium risk / `CRITICAL` |
   | `TransactionQueue` | `transaction` | `transaction_queued`, `transaction_cancelled` | `INFO` |
   | `TransactionProcessor` | `transaction` | `transaction_completed`; `transaction_failed` (`details.will_retry` tells a retry from a final failure) | `INFO`; `ERROR`, an unexpected error `CRITICAL` |
@@ -496,9 +509,9 @@ whose `str()` is the printed form:
 ```python
 report = BankReport(bank)
 print(report.transaction_statistics())
-# Transactions: 40 (completed 31, failed 8, cancelled 1)
-#   by type: deposit 5, withdrawal 7, transfer 25, external_transfer 2
-#   failure rate 20.5% of 39 finished, blocked by risk control 2
+# Transactions: 41 (completed 31, failed 9, cancelled 1)
+#   by type: deposit 6, withdrawal 7, transfer 25, external_transfer 2
+#   failure rate 22.5% of 40 finished, blocked by risk control 2
 #   volume 1839899.00 RUB, average 59351.58 RUB, largest 7000.00 USD (transfer)
 #   tariff fees collected 450.00 RUB
 ```

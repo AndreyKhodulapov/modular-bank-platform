@@ -52,12 +52,13 @@ class TransactionEvent(Enum):
 
 
 class AccountEvent(Enum):
-    """Names of the ``account`` events: the life cycle of an account."""
+    """Names of the ``account`` events: the life cycle of an account and the bank's own credits to it."""
 
     OPENED = "account_opened"
     FROZEN = "account_frozen"
     UNFROZEN = "account_unfrozen"
     CLOSED = "account_closed"
+    INTEREST_CREDITED = "interest_credited"
 
 
 class ClientEvent(Enum):

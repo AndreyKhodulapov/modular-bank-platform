@@ -87,9 +87,12 @@ def test_client_must_be_at_least_18(birth_date, today, accepted):
     fields = {**VALID, "birth_date": birth_date, "today": today}
     if accepted:
         assert Client(**fields).birth_date == birth_date
+        assert Client.ensure_adult(birth_date, today) == birth_date  # the same rule, for the bank's own date
     else:
         with pytest.raises(InvalidOperationError, match="at least 18"):
             Client(**fields)
+        with pytest.raises(InvalidOperationError, match="at least 18"):
+            Client.ensure_adult(birth_date, today)
 
 
 def test_block_and_unblock():

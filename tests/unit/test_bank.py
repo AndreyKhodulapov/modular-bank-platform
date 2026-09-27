@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -15,7 +15,7 @@ from exceptions import (
     OperationTimeRestrictedError,
     RiskBlockedError,
 )
-from models import AccountStatus, AssetType, BankAccount, InvestmentAccount, SavingsAccount, Transaction
+from models import AccountStatus, AssetType, BankAccount, Client, InvestmentAccount, SavingsAccount, Transaction
 from services import (
     AuditCategory,
     AuditLevel,
@@ -30,8 +30,9 @@ from services import (
 from tests.helpers import history_gaps, lifecycle, reasons
 
 NIGHT = datetime(2026, 9, 25, 2, 30)
+MONTH_LATER = datetime(2026, 10, 24, 14, 0)  # the day monthly interest is due on an account opened at the start
 
-# (prepare, operation) pairs for the operations refused at night and for a blocked client
+# (prepare, operation) pairs for the operations refused at night and, except a deposit, for a blocked client
 RESTRICTED_OPERATIONS = [
     pytest.param(
         lambda bank, client, account: None,
@@ -89,6 +90,40 @@ def test_client_with_weak_password_is_not_registered(bank, owner):
         bank.add_client(owner, "123")
     with pytest.raises(ClientNotFoundError):
         bank.get_client(owner.client_id)
+
+
+def test_client_is_checked_for_age_by_the_bank_clock(bank, password):
+    # the model accepted the date it was given; the bank's clock says 2026
+    child = Client(
+        first_name="Timur",
+        last_name="Volkov",
+        birth_date=date(2015, 5, 1),
+        email="timur@example.com",
+        phone="+79035550404",
+        today=date(2040, 1, 1),
+    )
+    for _ in range(2):  # nothing was kept: the second attempt fails the same way, not as a duplicate
+        with pytest.raises(InvalidOperationError, match="at least 18 years old, got 11"):
+            bank.add_client(child, password)
+    with pytest.raises(ClientNotFoundError):
+        bank.get_client(child.client_id)
+    assert lifecycle(bank) == []
+
+
+def test_the_18th_birthday_is_counted_by_the_bank_clock(bank, clock, password):
+    client = Client(
+        first_name="Sofia",
+        last_name="Lebedeva",
+        birth_date=date(2008, 9, 25),
+        email="sofia@example.com",
+        phone="+79035550707",
+        today=date(2026, 12, 31),
+    )
+    clock.moment = datetime(2026, 9, 24, 23, 59)  # the last day of being 17
+    with pytest.raises(InvalidOperationError, match="got 17"):
+        bank.add_client(client, password)
+    clock.moment = datetime(2026, 9, 25, 9, 0)
+    assert bank.add_client(client, password) is client
 
 
 def test_unknown_ids_raise_not_found(bank):
@@ -241,7 +276,9 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepa
     assert client.account_ids == [account.account_id]
 
 
-@pytest.mark.parametrize(("prepare", "operation"), RESTRICTED_OPERATIONS)
+@pytest.mark.parametrize(
+    ("prepare", "operation"), [operation for operation in RESTRICTED_OPERATIONS if operation.id != "deposit"]
+)
 def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
     prepare(bank, client, account)
@@ -253,6 +290,17 @@ def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, pr
     assert (lifecycle(bank), bank.history.movements()) == (recorded, moved)
     assert (account.status, account.balance) == (status, Decimal("100.00"))
     assert client.account_ids == [account.account_id]
+
+
+def test_blocked_client_still_receives_deposits(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    client.block()
+    assert bank.deposit(account.account_id, 50, transaction_id="T-1") == Decimal("150.00")
+    movement = bank.history.movements(account.account_id)[-1]
+    assert (movement.kind, movement.amount, movement.transaction_id) == (MovementKind.DEPOSIT, Decimal("50.00"), "T-1")
+    assert bank.suspicious_activities == []
+    with pytest.raises(ClientBlockedError):  # but cannot take the money out
+        bank.withdraw(account.account_id, 50)
 
 
 def test_blocked_client_account_can_still_be_frozen(bank, client):
@@ -532,6 +580,24 @@ def test_screen_applies_the_hard_rules_before_scoring(bank, client, pair, clock)
     assert bank.risk_analyzer.assessments == []
 
 
+def test_screen_does_not_check_the_recipient_owner(bank, pair, make_client, clock):
+    sender, _ = pair
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    blocked = bank.open_account(boris.client_id, currency="RUB")
+    boris.block()
+    assert bank.screen(transfer(sender, blocked.account_id, 100)).level is RiskLevel.LOW
+    # a deposit has no sender: nobody's status is checked, the night window still is
+    deposit = Transaction("deposit", 100, "RUB", recipient_id=blocked.account_id, created_at=NIGHT)
+    assert bank.screen(deposit).client_id == boris.client_id
+    clock.moment = NIGHT
+    with pytest.raises(OperationTimeRestrictedError):
+        bank.screen(deposit)
+    # the pair opened with a large amount; the night credit is recorded on the account, not on its blocked owner
+    assert reasons(bank) == [SuspicionReason.LARGE_OPERATION, SuspicionReason.NIGHT_OPERATION]
+    night = bank.suspicious_activities[-1]
+    assert (night.client_id, night.account_id) == (None, blocked.account_id)
+
+
 def test_screen_deposit_is_assessed_for_the_recipient_owner(bank, client, pair):
     _, recipient = pair
     deposit = Transaction("deposit", 100, "RUB", recipient_id=recipient.account_id, created_at=NIGHT)
@@ -610,20 +676,105 @@ def test_refused_money_movement_is_not_recorded(bank, client):
     assert bank.history.movements() == moved
 
 
+def debit_in_progress(bank, account, amount, transaction_id="T-1") -> Transaction:
+    """A withdrawal the processor has started and debited, as it is right before a rollback."""
+    transaction = Transaction(
+        "withdrawal",
+        amount,
+        account.currency,
+        sender_id=account.account_id,
+        created_at=bank.now(),
+        transaction_id=transaction_id,
+    )
+    transaction.start(bank.now())
+    bank.history.claim(transaction)
+    bank.withdraw(account.account_id, amount, transaction_id=transaction_id)
+    return transaction
+
+
 def test_refund_ignores_the_bank_rules_but_is_recorded(bank, client, clock):
-    account = bank.open_account(client.client_id, currency="RUB")
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=600_000)
+    debit_in_progress(bank, account, 600_000)
+    flagged = len(bank.suspicious_activities)
     bank.freeze_account(account.account_id)
     client.block()
     clock.moment = NIGHT
     assert bank.refund(account.account_id, 600_000, transaction_id="T-1") == Decimal("600000.00")
-    [movement] = bank.history.movements(account.account_id)
+    movement = bank.history.movements(account.account_id)[-1]
     assert (movement.kind, movement.amount, movement.transaction_id, movement.moment) == (
         MovementKind.REFUND,
         Decimal("600000.00"),
         "T-1",
         NIGHT,
     )
-    assert bank.suspicious_activities == []  # neither the night, the status nor the amount is reviewed
+    # neither the night, the status nor the amount is reviewed
+    assert len(bank.suspicious_activities) == flagged
+
+
+def test_refund_of_an_unknown_transaction_is_refused(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB")
+    bank.close_account(account.account_id)
+    total = bank.get_total_balance()
+    moved = bank.history.movements()
+    for _ in range(2):
+        with pytest.raises(InvalidOperationError, match="no transaction"):
+            bank.refund(account.account_id, 1_000_000, transaction_id="made-up")
+    assert account.balance == Decimal("0.00")
+    assert (bank.get_total_balance(), bank.history.movements()) == (total, moved)
+
+
+def test_refund_of_a_finished_transaction_is_refused(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    transaction = debit_in_progress(bank, account, 100)
+    # completed, its recipient was credited: putting the debit back would make money
+    transaction.complete(bank.now(), fee=Decimal("0.00"), debited_amount=Decimal("100.00"), credited_amount=None)
+    with pytest.raises(InvalidOperationError, match="completed"):
+        bank.refund(account.account_id, 100, transaction_id="T-1")
+    assert account.balance == Decimal("900.00")
+
+
+def test_refund_needs_a_debit_of_the_transaction_on_the_account(bank, client, make_client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    other = bank.add_client(make_client("Boris"), "boris-password")
+    elsewhere = bank.open_account(other.client_id, currency="RUB")
+    debit_in_progress(bank, account, 100)
+    with pytest.raises(InvalidOperationError, match="debited nothing"):
+        bank.refund(elsewhere.account_id, 100, transaction_id="T-1")
+    # claimed and in progress, but nothing was debited yet
+    started = Transaction("deposit", 100, "RUB", recipient_id=account.account_id, created_at=bank.now())
+    started.start(bank.now())
+    bank.history.claim(started)
+    with pytest.raises(InvalidOperationError, match="debited nothing"):
+        bank.refund(account.account_id, 100, transaction_id=started.transaction_id)
+    assert (account.balance, elsewhere.balance) == (Decimal("900.00"), Decimal("0.00"))
+
+
+def test_refund_is_made_once_and_not_above_the_debit(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    debit_in_progress(bank, account, 100, "T-1")
+    debit_in_progress(bank, account, 100, "T-2")
+    with pytest.raises(InvalidOperationError, match="debited 100.00"):
+        bank.refund(account.account_id, "100.01", transaction_id="T-1")
+    assert bank.refund(account.account_id, 100, transaction_id="T-1") == Decimal("900.00")
+    assert bank.refund(account.account_id, 40, transaction_id="T-2") == Decimal("940.00")
+    for transaction_id in ("T-1", "T-2"):  # after a full and after a partial refund
+        with pytest.raises(InvalidOperationError, match="already refunded"):
+            bank.refund(account.account_id, 1, transaction_id=transaction_id)
+    assert account.balance == Decimal("940.00")
+    assert history_gaps(bank) == {}
+
+
+def test_a_retry_that_debits_again_is_rolled_back_again(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=1_000)
+    transaction = debit_in_progress(bank, account, 100)
+    assert bank.refund(account.account_id, 100, transaction_id="T-1") == Decimal("1000.00")
+    # the next attempt of the same transaction debits again, and its rollback is not refused
+    bank.withdraw(account.account_id, 100, transaction_id=transaction.transaction_id)
+    assert bank.refund(account.account_id, 100, transaction_id="T-1") == Decimal("1000.00")
+    with pytest.raises(InvalidOperationError, match="already refunded"):
+        bank.refund(account.account_id, 1, transaction_id="T-1")
+    assert account.balance == Decimal("1000.00")
+    assert history_gaps(bank) == {}
 
 
 # operations of the account types
@@ -649,16 +800,19 @@ def test_interest_is_credited_through_the_bank_as_a_movement(bank, client, clock
 def test_interest_ignores_the_night_and_a_blocked_client(bank, client, clock):
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
     client.block()
-    clock.moment = NIGHT
+    clock.moment = NIGHT + timedelta(days=31)  # a night a month later
     assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")
     assert bank.suspicious_activities == []
 
 
-def test_no_interest_leaves_no_movement(bank, client):
+def test_no_interest_leaves_no_movement_but_settles_the_month(bank, client, clock):
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000)
-    moved = bank.history.movements()
+    moved, recorded = bank.history.movements(), len(bank.audit_log)
+    clock.moment = MONTH_LATER
     assert bank.apply_monthly_interest(savings.account_id) == Decimal("0.00")
-    assert bank.history.movements() == moved
+    assert (bank.history.movements(), len(bank.audit_log)) == (moved, recorded)
+    with pytest.raises(InvalidOperationError, match="once a month"):
+        bank.apply_monthly_interest(savings.account_id)
 
 
 @pytest.mark.parametrize(
@@ -668,9 +822,89 @@ def test_inactive_savings_account_earns_no_interest_through_the_bank(bank, clien
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
     getattr(bank, prepare)(savings.account_id)
     moved = bank.history.movements()
-    with pytest.raises(error_type):
+    with pytest.raises(error_type):  # before the calendar: the interest is not due yet
         bank.apply_monthly_interest(savings.account_id)
     assert bank.history.movements() == moved
+
+
+def test_interest_is_paid_once_a_calendar_month(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    with pytest.raises(InvalidOperationError, match="next on 2026-10-24"):
+        bank.apply_monthly_interest(savings.account_id)
+    clock.moment = MONTH_LATER
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")
+    moved = bank.history.movements()
+    clock.moment = MONTH_LATER.replace(hour=23)  # the same day
+    with pytest.raises(InvalidOperationError, match="next on 2026-11-24"):
+        bank.apply_monthly_interest(savings.account_id)
+    assert (savings.balance, bank.history.movements()) == (Decimal("1010.00"), moved)
+    assert bank.suspicious_activities == []  # the attempt is the bank's own
+    clock.moment = datetime(2026, 11, 24, 0, 1)
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.10")
+
+
+def test_interest_keeps_the_day_of_the_opening(bank, client, clock):
+    clock.moment = datetime(2027, 1, 31, 12, 0)
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    for refused, paid in [
+        (datetime(2027, 2, 27, 12, 0), datetime(2027, 2, 28, 12, 0)),  # a shorter month: its last day
+        (datetime(2027, 3, 30, 12, 0), datetime(2027, 3, 31, 12, 0)),  # back to the 31st
+    ]:
+        clock.moment = refused
+        with pytest.raises(InvalidOperationError, match=f"next on {paid:%Y-%m-%d}"):
+            bank.apply_monthly_interest(savings.account_id)
+        clock.moment = paid
+        bank.apply_monthly_interest(savings.account_id)
+    assert savings.balance == Decimal("1020.10")
+
+
+def test_a_late_interest_run_does_not_shift_the_calendar(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    clock.moment = datetime(2026, 11, 8, 12, 0)  # the run due on Oct 24, two weeks late
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")
+    with pytest.raises(InvalidOperationError, match="next on 2026-11-24"):
+        bank.apply_monthly_interest(savings.account_id)
+    clock.moment = datetime(2026, 11, 24, 12, 0)
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.10")
+    clock.moment = datetime(2027, 2, 10, 12, 0)  # two runs were missed: one month is paid, not three
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.20")
+    with pytest.raises(InvalidOperationError, match="next on 2027-02-24"):
+        bank.apply_monthly_interest(savings.account_id)
+
+
+def test_interest_is_audited_and_reviewed_as_a_large_amount(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=600_000, monthly_rate="1")
+    clock.moment = MONTH_LATER
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("600000.00")
+    [event] = bank.audit_log.filter(event="interest_credited")
+    assert (event.level, event.category, event.client_id, event.account_id, event.timestamp) == (
+        AuditLevel.INFO,
+        AuditCategory.ACCOUNT,
+        client.client_id,
+        savings.account_id,
+        MONTH_LATER,
+    )
+    assert dict(event.details) == {
+        "interest": "600000.00",
+        "monthly_rate": "1",
+        "balance": "1200000.00",
+        "currency": "RUB",
+    }
+    large = [activity for activity in bank.suspicious_activities if activity.reason is SuspicionReason.LARGE_OPERATION]
+    assert [activity.details for activity in large] == [
+        "open_account of 600000.00 in base currency (threshold 500000.00)",
+        "apply_monthly_interest of 600000.00 in base currency (threshold 500000.00)",
+    ]
+
+
+def test_a_refused_interest_keeps_the_calendar(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    bank.freeze_account(savings.account_id)
+    clock.moment = MONTH_LATER
+    with pytest.raises(AccountFrozenError):
+        bank.apply_monthly_interest(savings.account_id)
+    bank.unfreeze_account(savings.account_id)
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")  # the same day, once unfrozen
 
 
 def test_account_type_operations_need_their_account_type(bank, client):

@@ -2,7 +2,7 @@
 
 import inspect
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from exceptions import (
@@ -16,7 +16,7 @@ from exceptions import (
 )
 from models.account import BankAccount
 from models.client import Client
-from models.enums import AccountStatus, AssetType, Currency
+from models.enums import AccountStatus, AssetType, Currency, TransactionStatus
 from models.investment_account import InvestmentAccount
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
@@ -26,7 +26,7 @@ from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
 from services.transaction_history import MovementKind, TransactionHistory
-from utils import to_enum, to_money
+from utils import next_monthly_date, to_enum, to_money
 
 
 class Bank:
@@ -38,14 +38,16 @@ class Bank:
     - operations that move money or give access back (open, close, unfreeze,
       deposit, withdraw, invest, divest, unblock) are forbidden in the night
       window;
-    - a blocked client cannot operate on their accounts;
+    - a blocked client cannot move money out or change their accounts;
+      money sent to them still arrives;
     - failed logins, night attempts, operations on frozen or closed accounts
       and large amounts are recorded as suspicious;
     - ``screen()`` scores a transaction with the risk analyzer before money
       moves and refuses a high-risk one;
     - the life cycle of clients and accounts (registered, unblocked; opened,
-      frozen, unfrozen, closed) goes to the audit log as ``INFO`` once the
-      change is made; a refused change is recorded only as suspicious;
+      frozen, unfrozen, closed) and monthly interest go to the audit log as
+      ``INFO`` once the change is made; a refused change of a client or an
+      account is recorded only as suspicious;
     - every change of a balance made through the bank goes to the
       transaction history as a ``BalanceMovement`` with the actual change
       (fees included), the balance and the total value after it; the
@@ -86,6 +88,7 @@ class Bank:
         self._accounts: dict[str, BankAccount] = {}
         # kept by the bank, not the account: the models have no clock
         self._opened_at: dict[str, datetime] = {}
+        self._interest_paid_at: dict[str, datetime] = {}  # the last monthly interest of a savings account
 
     @property
     def base_currency(self) -> Currency:
@@ -122,6 +125,10 @@ class Bank:
         """The bank's current time, from the security guard's clock."""
         return self._security.now()
 
+    def night_ends_at(self, moment: datetime) -> datetime | None:
+        """When the night window that ``moment`` falls in ends; ``None`` in the daytime."""
+        return self._security.night_ends_at(moment)
+
     def get_client(self, client_id: str) -> Client:
         client = self._clients.get(client_id)
         if client is None:
@@ -147,11 +154,20 @@ class Bank:
             raise InvalidOperationError(f"Unsupported account type {account_type!r}; allowed: {allowed}.")
         return account_class
 
-    def _guard(self, action: str, client: Client, account: BankAccount | None = None) -> None:
-        """Run the checks shared by every restricted operation: night window, then client status."""
+    def _guard(
+        self, action: str, client: Client, account: BankAccount | None = None, *, incoming: bool = False
+    ) -> None:
+        """Run the checks shared by every restricted operation: night window, then client status.
+
+        An ``incoming`` credit checks the night window only. Anyone can block
+        a client by guessing their password, so blocking stops what the
+        client does, not the money sent to them, and someone else's credit
+        is not recorded as the client's attempt: a night one is recorded on
+        the account alone.
+        """
         account_id = account.account_id if account is not None else None
-        self._security.ensure_daytime(action, client_id=client.client_id, account_id=account_id)
-        if client.is_blocked:
+        self._security.ensure_daytime(action, client_id=None if incoming else client.client_id, account_id=account_id)
+        if not incoming and client.is_blocked:
             self._security.flag(
                 SuspicionReason.BLOCKED_CLIENT_ACTIVITY,
                 f"{action} attempted by a blocked client",
@@ -218,11 +234,16 @@ class Bank:
         )
 
     def add_client(self, client: Client, password: str) -> Client:
-        """Register ``client`` with a login password; the password is stored as a hash only."""
+        """Register ``client`` with a login password; the password is stored as a hash only.
+
+        The age is checked again by the bank's clock: the model may have been
+        built with any ``today``, the bank relies on its own date.
+        """
         if not isinstance(client, Client):
             raise InvalidOperationError("client must be a Client instance.")
         if client.client_id in self._clients:
             raise InvalidOperationError(f"Client {client.client_id} is already registered.")
+        Client.ensure_adult(client.birth_date, self.now().date())
         self._security.register_password(client.client_id, password)
         self._clients[client.client_id] = client
         self._record(AuditCategory.CLIENT, ClientEvent.REGISTERED, "client registered", client_id=client.client_id)
@@ -329,11 +350,12 @@ class Bank:
     def screen(self, transaction: Transaction) -> RiskAssessment:
         """Check a transaction before its money moves; refuse it when the risk is high.
 
-        The hard rules come first - the night window and a blocked client -
-        so a transaction they refuse is not scored. Then the risk analyzer
-        scores it and the result goes to the audit log: ``INFO`` for a low
-        risk, ``WARNING`` for a medium one (the transaction goes on) and
-        ``CRITICAL`` for a high one, which raises ``RiskBlockedError``.
+        The hard rules come first - the night window and a blocked sender -
+        so a transaction they refuse is not scored. A deposit has no sender:
+        it only credits its recipient, whose status does not matter. Then the
+        risk analyzer scores it and the result goes to the audit log: ``INFO``
+        for a low risk, ``WARNING`` for a medium one (the transaction goes
+        on) and ``CRITICAL`` for a high one, which raises ``RiskBlockedError``.
         """
         if not isinstance(transaction, Transaction):
             raise InvalidOperationError("transaction must be a Transaction instance.")
@@ -341,7 +363,7 @@ class Bank:
         recipient_id = transaction.internal_recipient_id
         recipient = self.get_account(recipient_id) if recipient_id is not None else None
         action = transaction.transaction_type.value
-        self._guard(action, initiator.owner, initiator)
+        self._guard(action, initiator.owner, initiator, incoming=transaction.sender_id is None)
 
         assessment = self._risk.assess(
             RiskContext(
@@ -394,9 +416,15 @@ class Bank:
         return account
 
     def deposit(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
-        """Credit the account and return its new balance; ``transaction_id`` links the movement to a transaction."""
+        """Credit the account and return its new balance; ``transaction_id`` links the movement to a transaction.
+
+        A blocked owner still receives money: only the night window, the
+        account status and its deposit limit can refuse a credit.
+        """
         account = self.get_account(account_id)
-        return self._move_money("deposit", MovementKind.DEPOSIT, account, account.deposit, amount, transaction_id)
+        return self._move_money(
+            "deposit", MovementKind.DEPOSIT, account, account.deposit, amount, transaction_id, incoming=True
+        )
 
     def withdraw(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
         """Debit the account and return its new balance; ``transaction_id`` links the movement to a transaction."""
@@ -411,10 +439,42 @@ class Bank:
         do not apply, because the money was on the account a moment ago and
         must come back whatever happened in between. It is still recorded as
         a movement, so the history adds up to the balance.
+
+        Only what really left the account in a transaction being rolled back
+        can come back: the transaction must hold its id in the history and be
+        in progress (a completed one already credited its recipient), and a
+        withdrawal under that id must be recorded on this account. Each debit
+        comes back once, and all refunds together are not larger than the
+        debits: a retry that debits again after a rollback can be rolled
+        back again. No refund reaches a closed account: it cannot be debited
+        by a transaction in progress.
         """
         account = self.get_account(account_id)
+        value = to_money(amount, require="positive")
+        transaction = self._history.claimed_by(transaction_id)
+        if transaction is None:
+            raise InvalidOperationError(f"There is no transaction {transaction_id} to refund.")
+        if transaction.status is not TransactionStatus.PROCESSING:
+            raise InvalidOperationError(
+                f"Transaction {transaction_id} is {transaction.status.value}; only one in progress is rolled back."
+            )
+        debits = self._history.movements(account_id, kind=MovementKind.WITHDRAWAL, transaction_id=transaction_id)
+        if not debits:
+            raise InvalidOperationError(f"Transaction {transaction_id} debited nothing from account {account_id}.")
+        refunds = self._history.movements(account_id, kind=MovementKind.REFUND, transaction_id=transaction_id)
+        # one refund per debit: a retry of the transaction may debit again after a rollback
+        if len(refunds) >= len(debits):
+            raise InvalidOperationError(f"Transaction {transaction_id} is already refunded to account {account_id}.")
+        # withdrawals are recorded as negative changes, refunds as positive ones
+        debited = -sum((movement.amount for movement in debits), Decimal("0.00"))
+        refundable = debited - sum((movement.amount for movement in refunds), Decimal("0.00"))
+        if value > refundable:
+            raise InvalidOperationError(
+                f"Cannot refund {value} to account {account_id}: transaction {transaction_id} debited {debited}, "
+                f"{refundable} of it is not refunded yet."
+            )
         before = account.balance
-        balance = account.refund(amount)
+        balance = account._refund(value)
         self._record_movement(MovementKind.REFUND, account, before, transaction_id)
         return balance
 
@@ -426,9 +486,11 @@ class Bank:
         operation: Callable[[Decimal], Decimal],
         amount: object,
         transaction_id: str | None,
+        *,
+        incoming: bool = False,
     ) -> Decimal:
         value = to_money(amount, require="positive")
-        self._guard(action, account.owner, account)
+        self._guard(action, account.owner, account, incoming=incoming)
         before = account.balance
         balance = self._run_on_account(action, account, lambda: operation(value))
         # the actual change, so the premium account's own fee is part of a withdrawal
@@ -436,34 +498,70 @@ class Bank:
         self._review_amount(action, account, abs(balance - before))
         return balance
 
+    def _next_interest_date(self, account_id: str) -> date:
+        """The day the next monthly interest is due: the day of the month the account was opened.
+
+        The first such day after the last interest (after the opening before
+        the first one); in a shorter month, its last day. The day is kept
+        from the opening, so an account opened on the 31st is paid on Feb 28
+        and then on Mar 31 again, and a late run does not shift the calendar:
+        interest paid on Mar 1 for Feb 15 is due again on Mar 15.
+        """
+        opened_at = self._opened_at[account_id]
+        last = self._interest_paid_at.get(account_id, opened_at)
+        return next_monthly_date(last.date(), opened_at.day)
+
     def apply_monthly_interest(self, account_id: str) -> Decimal:
         """Credit a month of interest to a savings account and return the credited amount.
 
         A back-office operation of the bank, like ``refund()``: the night
         window and a blocked client do not stop it, while the account's own
-        rule does - a frozen or closed account earns no interest. Such a
-        refusal is not recorded as suspicious: the attempt is the bank's, not
-        the client's. The interest is recorded as a movement without a
-        transaction.
+        rule does - a frozen or closed account earns no interest. The bank
+        keeps the calendar: interest is paid once a calendar month (see
+        ``_next_interest_date``), an earlier call is refused, and a missed
+        month is not paid back. Such refusals are not recorded as suspicious:
+        the attempt is the bank's, not the client's.
+
+        Interest is the only money the bank creates itself rather than
+        receives, so it is recorded as a movement without a transaction, goes
+        to the audit log as ``interest_credited`` and is reviewed as a large
+        amount. A zero interest (a zero rate or balance) still settles the
+        month but leaves no movement and no event.
         """
         account = self.get_account(account_id)
         if not isinstance(account, SavingsAccount):
             raise InvalidOperationError(f"Account {account_id} is not a savings account; it earns no interest.")
+        account.ensure_operational()  # the account's own rule comes before the calendar
+        due = self._next_interest_date(account_id)
+        if self.now().date() < due:
+            raise InvalidOperationError(f"Interest on account {account_id} is paid once a month; next on {due}.")
         before = account.balance
-        interest = account.apply_monthly_interest()
+        interest = account._apply_monthly_interest()
+        self._interest_paid_at[account_id] = self.now()
         self._record_movement(MovementKind.INTEREST, account, before)
+        if interest != 0:
+            self._record_account(
+                AccountEvent.INTEREST_CREDITED,
+                account,
+                f"interest of {interest} {account.currency.value} credited at {account.monthly_rate:.2%}/month",
+                interest=interest,
+                monthly_rate=account.monthly_rate,
+                balance=account.balance,
+                currency=account.currency,
+            )
+        self._review_amount("apply_monthly_interest", account, interest)
         return interest
 
     def invest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move free cash of an investment account into ``asset_type``; return the new cash balance."""
         return self._rebalance(
-            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount.invest
+            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount._invest
         )
 
     def divest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move money from ``asset_type`` back to free cash of an investment account; return the new cash balance."""
         return self._rebalance(
-            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount.divest
+            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount._divest
         )
 
     def _rebalance(

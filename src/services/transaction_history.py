@@ -70,10 +70,18 @@ class TransactionHistory:
     - A transaction id is used once across the bank: the processor claims
       it here before the first attempt, so another transaction under a known
       id is refused before its money moves, whichever processor runs it.
+      The refused one still enters the history as failed
+      (``record_duplicate()``), without taking the id: the history counts
+      every submission that finished, as the audit log does, and the id
+      stays with the first transaction.
     - A movement is recorded by the bank whenever a balance changes through
       it: an account opened with money, a deposit, a withdrawal, a refund of
       a rolled-back debit, the payout on closing, monthly interest, and
       money moved into an investment portfolio or back.
+
+    ``claimed_by()`` tells which transaction holds an id, and
+    ``movements()`` filters by account, kind, transaction and time, so the
+    bank can check that a refund puts back a debit that really happened.
 
     The history is the bank's record of state, not a log: it is kept in
     memory and read by the reports, while the logs describe what the
@@ -83,7 +91,8 @@ class TransactionHistory:
     FINAL_STATUSES = frozenset({TransactionStatus.COMPLETED, TransactionStatus.FAILED})
 
     def __init__(self) -> None:
-        self._transactions: dict[str, Transaction] = {}  # in the order they finished
+        self._finished: list[Transaction] = []  # in the order they finished, refused duplicates included
+        self._recorded: set[str] = set()  # ids whose holder is in the history
         self._claimed: dict[str, Transaction] = {}  # transaction_id -> the transaction that holds the id
         self._movements: list[BalanceMovement] = []
 
@@ -103,6 +112,10 @@ class TransactionHistory:
             )
         return transaction
 
+    def claimed_by(self, transaction_id: str) -> Transaction | None:
+        """The transaction that holds this id, finished or not; ``None`` for an id nobody claimed."""
+        return self._claimed.get(transaction_id)
+
     def record_transaction(self, transaction: Transaction) -> Transaction:
         self.claim(transaction)
         if transaction.status not in self.FINAL_STATUSES:
@@ -110,9 +123,32 @@ class TransactionHistory:
                 f"Only completed or failed transactions enter the history; "
                 f"{transaction.transaction_id} is {transaction.status.value}."
             )
-        if transaction.transaction_id in self._transactions:
+        if transaction.transaction_id in self._recorded:
             raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already in the history.")
-        self._transactions[transaction.transaction_id] = transaction
+        self._recorded.add(transaction.transaction_id)
+        self._finished.append(transaction)
+        return transaction
+
+    def record_duplicate(self, transaction: Transaction) -> Transaction:
+        """Record a transaction refused because another one holds its id; the id stays with that one.
+
+        Only a failed transaction under an id claimed by another transaction
+        is a refused duplicate, and it is recorded once.
+        """
+        if not isinstance(transaction, Transaction):
+            raise InvalidOperationError("transaction must be a Transaction instance.")
+        if transaction.status is not TransactionStatus.FAILED:
+            raise InvalidOperationError(
+                f"A refused duplicate is failed; {transaction.transaction_id} is {transaction.status.value}."
+            )
+        holder = self._claimed.get(transaction.transaction_id)
+        if holder is None or holder is transaction:
+            raise InvalidOperationError(
+                f"Transaction {transaction.transaction_id} is not a duplicate: no other transaction holds its id."
+            )
+        if any(recorded is transaction for recorded in self._finished):
+            raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already in the history.")
+        self._finished.append(transaction)
         return transaction
 
     def record_movement(
@@ -170,7 +206,7 @@ class TransactionHistory:
         )
         return [
             transaction
-            for transaction in self._transactions.values()
+            for transaction in self._finished
             if (accounts is None or not accounts.isdisjoint({transaction.sender_id, transaction.recipient_id}))
             and (status_filter is None or transaction.status is status_filter)
             and (type_filter is None or transaction.transaction_type is type_filter)
@@ -178,14 +214,25 @@ class TransactionHistory:
         ]
 
     def movements(
-        self, account_id: str | None = None, *, since: datetime | None = None, until: datetime | None = None
+        self,
+        account_id: str | None = None,
+        *,
+        kind: MovementKind | str | None = None,
+        transaction_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[BalanceMovement]:
         """Balance movements of one account (all accounts without ``account_id``), in order.
 
-        ``since`` is inclusive, ``until`` exclusive.
+        ``kind`` and ``transaction_id`` keep only the movements of that kind
+        and of that transaction. ``since`` is inclusive, ``until`` exclusive.
         """
+        kind_filter = to_enum(MovementKind, kind, field="movement kind") if kind is not None else None
         return [
             movement
             for movement in self._movements
-            if (account_id is None or movement.account_id == account_id) and _within(movement.moment, since, until)
+            if (account_id is None or movement.account_id == account_id)
+            and (kind_filter is None or movement.kind is kind_filter)
+            and (transaction_id is None or movement.transaction_id == transaction_id)
+            and _within(movement.moment, since, until)
         ]

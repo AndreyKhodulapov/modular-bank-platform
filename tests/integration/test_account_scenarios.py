@@ -51,7 +51,7 @@ def test_same_withdrawal_behaves_differently_per_account_type(owner):
         PremiumAccount(owner=owner, currency="EUR", initial_balance=100, overdraft_limit=10, withdrawal_fee=5),
         InvestmentAccount(owner=owner, currency="EUR", initial_balance=100),
     ]
-    accounts[-1].invest("stocks", 50)
+    accounts[-1]._invest("stocks", 50)
 
     outcomes = []
     for account in accounts:

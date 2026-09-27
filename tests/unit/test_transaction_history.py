@@ -84,6 +84,46 @@ def test_a_claimed_id_belongs_to_one_transaction(history):
     with pytest.raises(InvalidOperationError):
         history.claim("T-1")
     assert history.transactions() == []
+    assert (history.claimed_by("T-1"), history.claimed_by("T-2")) == (waiting, None)
+
+
+def test_a_refused_duplicate_enters_the_history_without_taking_the_id(history):
+    holder = finished("deposit", recipient="A", transaction_id="T-1")
+    history.record_transaction(holder)
+    duplicate = finished("deposit", recipient="A", completed=False, transaction_id="T-1")
+    assert history.record_duplicate(duplicate) is duplicate
+    assert history.transactions() == [holder, duplicate]
+    assert history.transactions(status="failed") == [duplicate]
+    assert history.claimed_by("T-1") is holder
+    # a duplicate of a holder still waiting for a retry comes first
+    waiting = Transaction("deposit", 100, "RUB", recipient_id="A", created_at=NOW, transaction_id="T-2")
+    history.claim(waiting)
+    early = finished("deposit", recipient="A", completed=False, transaction_id="T-2")
+    history.record_duplicate(early)
+    assert history.transactions() == [holder, duplicate, early]
+    assert history.claimed_by("T-2") is waiting
+
+
+def test_only_a_failed_transaction_under_another_ones_id_is_a_duplicate(history):
+    holder = finished("deposit", recipient="A", transaction_id="T-1")
+    history.record_transaction(holder)
+    duplicate = finished("deposit", recipient="A", completed=False, transaction_id="T-1")
+    history.record_duplicate(duplicate)
+    failed_holder = history.record_transaction(finished("deposit", recipient="A", completed=False))
+    refused = [
+        (finished("deposit", recipient="A", transaction_id="T-1"), "is completed"),
+        (failed_holder, "not a duplicate"),  # it holds its own id
+        (finished("deposit", recipient="A", completed=False, transaction_id="T-9"), "not a duplicate"),
+        (duplicate, "already in the history"),
+        ("T-1", "Transaction instance"),
+    ]
+    for transaction, message in refused:
+        with pytest.raises(InvalidOperationError, match=message):
+            history.record_duplicate(transaction)
+    # recording a duplicate as a regular transaction is still refused: the id is taken
+    with pytest.raises(InvalidOperationError, match="already used"):
+        history.record_transaction(finished("deposit", recipient="A", completed=False, transaction_id="T-1"))
+    assert history.transactions() == [holder, duplicate, failed_holder]
 
 
 def test_filters_by_account_on_either_side(history):
@@ -125,6 +165,9 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
     assert history.movements("A") == [first, second]
     assert history.movements("A", since=NOW) == [second]
     assert history.movements(until=NOW) == [first]
+    assert history.movements(kind="withdrawal") == [second]
+    assert history.movements("A", kind=MovementKind.OPENING, transaction_id="T-1") == []
+    assert history.movements(transaction_id="T-1") == [second]
 
 
 @pytest.mark.parametrize(

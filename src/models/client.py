@@ -38,12 +38,13 @@ class Client:
         """Validate and store the client's data.
 
         ``today`` is the reference date for the age check; it defaults to the
-        current date and exists so that tests can pin the calendar.
+        current date and exists so that tests can pin the calendar. The bank
+        does not rely on it: it checks the age again by its own clock.
         """
         self._first_name = self._validate_name("first_name", first_name)
         self._last_name = self._validate_name("last_name", last_name)
         self._middle_name = None if middle_name is None else self._validate_name("middle_name", middle_name)
-        self._birth_date = self._validate_birth_date(birth_date, today if today is not None else date.today())
+        self._birth_date = self.ensure_adult(birth_date, today if today is not None else date.today())
         if not isinstance(email, str) or not self.EMAIL_PATTERN.fullmatch(email):
             raise InvalidOperationError(f"Invalid email address: {email!r}.")
         if not isinstance(phone, str) or not self.PHONE_PATTERN.fullmatch(phone):
@@ -70,7 +71,8 @@ class Client:
             raise InvalidOperationError(f"{field} must be a datetime.date.")
 
     @classmethod
-    def _validate_birth_date(cls, birth_date: object, today: object) -> date:
+    def ensure_adult(cls, birth_date: object, today: object) -> date:
+        """Return ``birth_date`` if the person is at least ``MIN_AGE`` full years old on ``today``."""
         cls._ensure_plain_date("birth_date", birth_date)
         cls._ensure_plain_date("today", today)
         if birth_date > today:
