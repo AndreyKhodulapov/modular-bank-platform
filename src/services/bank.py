@@ -26,7 +26,7 @@ from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
 from services.transaction_history import MovementKind, TransactionHistory
-from utils import next_month_day, to_enum, to_money
+from utils import next_monthly_date, to_enum, to_money
 
 
 class Bank:
@@ -500,14 +500,15 @@ class Bank:
     def _next_interest_date(self, account_id: str) -> date:
         """The day the next monthly interest is due: the day of the month the account was opened.
 
-        A month after the last interest (after the opening before the first
-        one); in a shorter month, its last day. The day is kept from the
-        opening, so an account opened on the 31st is paid on Feb 28 and then
-        on Mar 31 again.
+        The first such day after the last interest (after the opening before
+        the first one); in a shorter month, its last day. The day is kept
+        from the opening, so an account opened on the 31st is paid on Feb 28
+        and then on Mar 31 again, and a late run does not shift the calendar:
+        interest paid on Mar 1 for Feb 15 is due again on Mar 15.
         """
         opened_at = self._opened_at[account_id]
         last = self._interest_paid_at.get(account_id, opened_at)
-        return next_month_day(last.date(), opened_at.day)
+        return next_monthly_date(last.date(), opened_at.day)
 
     def apply_monthly_interest(self, account_id: str) -> Decimal:
         """Credit a month of interest to a savings account and return the credited amount.
@@ -523,13 +524,13 @@ class Bank:
         Interest is the only money the bank creates itself rather than
         receives, so it is recorded as a movement without a transaction, goes
         to the audit log as ``interest_credited`` and is reviewed as a large
-        amount. A
-        zero interest (a zero rate or balance) still settles the month but
-        leaves no movement and no event.
+        amount. A zero interest (a zero rate or balance) still settles the
+        month but leaves no movement and no event.
         """
         account = self.get_account(account_id)
         if not isinstance(account, SavingsAccount):
             raise InvalidOperationError(f"Account {account_id} is not a savings account; it earns no interest.")
+        account.ensure_operational()  # the account's own rule comes before the calendar
         due = self._next_interest_date(account_id)
         if self.now().date() < due:
             raise InvalidOperationError(f"Interest on account {account_id} is paid once a month; next on {due}.")

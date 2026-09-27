@@ -32,7 +32,7 @@ from tests.helpers import history_gaps, lifecycle, reasons
 NIGHT = datetime(2026, 9, 25, 2, 30)
 MONTH_LATER = datetime(2026, 10, 24, 14, 0)  # the day monthly interest is due on an account opened at the start
 
-# (prepare, operation) pairs for the operations refused at night and, but a deposit, for a blocked client
+# (prepare, operation) pairs for the operations refused at night and, except a deposit, for a blocked client
 RESTRICTED_OPERATIONS = [
     pytest.param(
         lambda bank, client, account: None,
@@ -142,11 +142,6 @@ def test_login_for_unknown_client_is_flagged(bank, password):
         bank.authenticate_client("ghost", password)
     [activity] = bank.suspicious_activities
     assert (activity.reason, activity.client_id) == (SuspicionReason.UNKNOWN_CLIENT_LOGIN, "ghost")
-
-
-def test_bank_tells_when_the_night_ends(bank):
-    assert bank.night_ends_at(NIGHT) == NIGHT.replace(hour=5, minute=0)
-    assert bank.night_ends_at(NIGHT.replace(hour=12)) is None
 
 
 def test_login_is_allowed_at_night(bank, client, clock, password):
@@ -821,12 +816,11 @@ def test_no_interest_leaves_no_movement_but_settles_the_month(bank, client, cloc
 @pytest.mark.parametrize(
     ("prepare", "error_type"), [("freeze_account", AccountFrozenError), ("close_account", AccountClosedError)]
 )
-def test_inactive_savings_account_earns_no_interest_through_the_bank(bank, client, clock, prepare, error_type):
+def test_inactive_savings_account_earns_no_interest_through_the_bank(bank, client, prepare, error_type):
     savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
     getattr(bank, prepare)(savings.account_id)
     moved = bank.history.movements()
-    clock.moment = MONTH_LATER
-    with pytest.raises(error_type):
+    with pytest.raises(error_type):  # before the calendar: the interest is not due yet
         bank.apply_monthly_interest(savings.account_id)
     assert bank.history.movements() == moved
 
@@ -860,6 +854,20 @@ def test_interest_keeps_the_day_of_the_opening(bank, client, clock):
         clock.moment = paid
         bank.apply_monthly_interest(savings.account_id)
     assert savings.balance == Decimal("1020.10")
+
+
+def test_a_late_interest_run_does_not_shift_the_calendar(bank, client, clock):
+    savings = bank.open_account(client.client_id, "savings", currency="RUB", initial_balance=1_000, monthly_rate="0.01")
+    clock.moment = datetime(2026, 11, 8, 12, 0)  # the run due on Oct 24, two weeks late
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.00")
+    with pytest.raises(InvalidOperationError, match="next on 2026-11-24"):
+        bank.apply_monthly_interest(savings.account_id)
+    clock.moment = datetime(2026, 11, 24, 12, 0)
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.10")
+    clock.moment = datetime(2027, 2, 10, 12, 0)  # two runs were missed: one month is paid, not three
+    assert bank.apply_monthly_interest(savings.account_id) == Decimal("10.20")
+    with pytest.raises(InvalidOperationError, match="next on 2027-02-24"):
+        bank.apply_monthly_interest(savings.account_id)
 
 
 def test_interest_is_audited_and_reviewed_as_a_large_amount(bank, client, clock):

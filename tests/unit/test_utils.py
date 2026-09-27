@@ -8,7 +8,7 @@ from exceptions import InvalidOperationError
 from models import AccountStatus, Currency, TransactionPriority
 from utils import (
     ManualClock,
-    next_month_day,
+    next_monthly_date,
     resolve_identifier,
     to_enum,
     to_money,
@@ -154,14 +154,17 @@ def test_manual_clock_returns_the_moment_it_was_set_to():
 
 
 @pytest.mark.parametrize(
-    ("start", "day", "expected"),
+    ("after", "day", "expected"),
     [
         (date(2026, 1, 15), 15, date(2026, 2, 15)),
         (date(2026, 1, 31), 31, date(2026, 2, 28)),  # a shorter month: its last day
         (date(2028, 1, 31), 31, date(2028, 2, 29)),  # a leap year
         (date(2026, 2, 28), 31, date(2026, 3, 31)),  # the day comes back in a longer month
         (date(2026, 12, 15), 15, date(2027, 1, 15)),
+        (date(2026, 3, 1), 15, date(2026, 3, 15)),  # the day is still ahead in the same month
+        (date(2026, 3, 2), 31, date(2026, 3, 31)),
+        (date(2026, 3, 14), 15, date(2026, 3, 15)),
     ],
 )
-def test_next_month_day(start, day, expected):
-    assert next_month_day(start, day) == expected
+def test_next_monthly_date(after, day, expected):
+    assert next_monthly_date(after, day) == expected

@@ -125,9 +125,11 @@ def to_positive_decimal(value: object, *, field: str) -> Decimal:
     return number
 
 
-def next_month_day(start: date, day: int) -> date:
-    """Day ``day`` of the month after the month of ``start``; the last day when that month is shorter."""
-    year, month = (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
+def next_monthly_date(after: date, day: int) -> date:
+    """The first day ``day`` of a month that comes after ``after``; the last day of a month too short for it."""
+    year, month = after.year, after.month
+    if date(year, month, min(day, calendar.monthrange(year, month)[1])) <= after:
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return date(year, month, min(day, calendar.monthrange(year, month)[1]))
 
 

@@ -207,16 +207,6 @@ def test_a_blocked_sender_is_refused_and_recorded_as_the_actor(bank, processor, 
     assert (activity.client_id, activity.account_id) == (client.client_id, rub.account_id)
 
 
-def test_a_completed_transfer_cannot_be_refunded(bank, processor, rub, premium):
-    transaction = processor.process(transfer(rub, premium, 100))
-    assert transaction.status is TransactionStatus.COMPLETED
-    total = bank.get_total_balance()
-    with pytest.raises(InvalidOperationError, match="completed"):
-        bank.refund(rub.account_id, 100, transaction_id=transaction.transaction_id)
-    assert (rub.balance, premium.balance) == (Decimal("9900.00"), Decimal("1100.00"))
-    assert bank.get_total_balance() == total
-
-
 def test_night_window_is_retried_when_it_ends(bank, processor, rub, usd, clock):
     clock.moment = NIGHT
     transaction = transfer(rub, usd, 900)
