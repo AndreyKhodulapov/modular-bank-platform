@@ -38,7 +38,9 @@ def test_new_transaction_is_pending_with_normalised_fields():
     ],
 )
 def test_each_type_accepts_its_parties(transaction_type, sender_id, recipient_id, initiator_id, internal_recipient_id):
-    transaction = Transaction(transaction_type, 10, "RUB", sender_id=sender_id, recipient_id=recipient_id)
+    transaction = Transaction(
+        transaction_type, 10, "RUB", sender_id=sender_id, recipient_id=recipient_id, created_at=CREATED
+    )
     assert (transaction.sender_id, transaction.recipient_id) == (sender_id, recipient_id)
     assert (transaction.initiator_id, transaction.internal_recipient_id) == (initiator_id, internal_recipient_id)
 
@@ -55,17 +57,23 @@ def test_each_type_accepts_its_parties(transaction_type, sender_id, recipient_id
         ("refund", {"recipient_id": "A-1"}),
         ("transfer", {"sender_id": "A-1", "recipient_id": "A-2", "priority": "asap"}),
         ("transfer", {"sender_id": "A-1", "recipient_id": "A-2", "scheduled_at": "tomorrow"}),
+        ("transfer", {"sender_id": "A-1", "recipient_id": "A-2", "created_at": None}),
     ],
 )
 def test_rejects_invalid_parameters(transaction_type, params):
     with pytest.raises(InvalidOperationError):
-        Transaction(transaction_type, 10, "RUB", **params)
+        Transaction(transaction_type, 10, "RUB", **{"created_at": CREATED, **params})
 
 
 @pytest.mark.parametrize(("amount", "currency"), [(0, "RUB"), (-5, "RUB"), ("ten", "RUB"), (10, "GBP")])
 def test_rejects_invalid_amount_or_currency(amount, currency):
     with pytest.raises(InvalidOperationError):
-        Transaction("deposit", amount, currency, recipient_id="A-1")
+        Transaction("deposit", amount, currency, recipient_id="A-1", created_at=CREATED)
+
+
+def test_the_creation_moment_is_given_not_taken_from_the_wall_clock():
+    with pytest.raises(TypeError, match="created_at"):
+        Transaction("deposit", 10, "RUB", recipient_id="A-1")
 
 
 def test_complete_records_amounts_and_finish_time():

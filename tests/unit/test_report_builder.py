@@ -78,7 +78,11 @@ def test_client_report_shows_accounts_transactions_statement_and_risk(clock, par
 def test_transfer_between_own_accounts_is_internal(bank, client, builder, processor, queue):
     first = bank.open_account(client.client_id, currency="RUB", initial_balance=500)
     second = bank.open_account(client.client_id, currency="RUB")
-    queue.add(Transaction("transfer", 100, "RUB", sender_id=first.account_id, recipient_id=second.account_id))
+    queue.add(
+        Transaction(
+            "transfer", 100, "RUB", sender_id=first.account_id, recipient_id=second.account_id, created_at=bank.now()
+        )
+    )
     processor.process_queue(queue)
     (row,) = rows(builder.client_report(client.client_id), "transactions")
     assert (row["direction"], row["counterparty"]) == ("internal", second.account_id)
@@ -88,9 +92,13 @@ def test_client_chart_orders_the_statuses_as_the_bank_does(bank, client, builder
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=500)
     frozen = bank.open_account(client.client_id, currency="RUB")
     bank.freeze_account(frozen.account_id)
-    queue.add(Transaction("transfer", 100, "RUB", sender_id=account.account_id, recipient_id=frozen.account_id))
+    queue.add(
+        Transaction(
+            "transfer", 100, "RUB", sender_id=account.account_id, recipient_id=frozen.account_id, created_at=bank.now()
+        )
+    )
     processor.process_queue(queue)  # the first transaction fails
-    queue.add(Transaction("withdrawal", 100, "RUB", sender_id=account.account_id))
+    queue.add(Transaction("withdrawal", 100, "RUB", sender_id=account.account_id, created_at=bank.now()))
     processor.process_queue(queue)
     statuses = builder.client_report(client.client_id).charts[1]
     assert (statuses.labels, statuses.values) == (("completed", "failed"), (1, 1))

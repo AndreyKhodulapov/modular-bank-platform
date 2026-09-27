@@ -27,7 +27,9 @@ class Transaction:
         PENDING -> CANCELLED
 
     ``scheduled_at`` delays execution until that moment; ``None`` means as
-    soon as possible.
+    soon as possible. ``created_at`` is required: a transaction has no clock,
+    so whoever creates it gives the moment by the bank's clock (or the
+    queue's), instead of the model guessing it from the wall clock.
     """
 
     # which parties each transaction type needs: (sender, recipient)
@@ -58,7 +60,7 @@ class Transaction:
         recipient_id: str | None = None,
         priority: TransactionPriority | str = TransactionPriority.NORMAL,
         scheduled_at: datetime | None = None,
-        created_at: datetime | None = None,
+        created_at: datetime,
         transaction_id: str | None = None,
     ) -> None:
         self._transaction_id = resolve_identifier(transaction_id, field="transaction_id")
@@ -68,7 +70,7 @@ class Transaction:
         self._priority = to_enum(TransactionPriority, priority, field="priority")
         self._sender_id, self._recipient_id = self._validate_parties(self._type, sender_id, recipient_id)
 
-        self._created_at = self._validate_moment(created_at if created_at is not None else datetime.now(), "created_at")
+        self._created_at = self._validate_moment(created_at, "created_at")
         self._scheduled_at = None if scheduled_at is None else self._validate_moment(scheduled_at, "scheduled_at")
         self._updated_at = self._created_at
         self._finished_at: datetime | None = None

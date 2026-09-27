@@ -358,10 +358,9 @@ movement in the history.
   share the bank's clock and audit log
   (`TransactionQueue(clock=bank.now, audit_log=bank.audit_log)`): delays
   and retries are then measured by the same time, and the queue's events
-  go to the bank's journal. Without them the queue uses the wall clock (as
-  does `Transaction` for a `created_at` that is not passed in) and records
-  nothing. The programs pass both; the tests pass the clock and add the
-  journal where they check it.
+  go to the bank's journal. Without them the queue uses the wall clock and
+  records nothing. The programs pass both; the tests pass the clock and add
+  the journal where they check it.
 - `FeePolicy` - the tariff: external transfers pay 1% of the amount, at
   least 50 and at most 5 000 RUB (converted into the sender's currency);
   everything else is free. Pass another policy to change the tariff.
