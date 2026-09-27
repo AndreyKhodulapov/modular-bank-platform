@@ -730,11 +730,12 @@ def test_invest_and_divest_follow_the_rules_of_a_client_operation(bank, client, 
 
 
 @pytest.mark.parametrize("operation", ["invest", "divest"])
-def test_invalid_amount_is_refused_before_the_client_checks(bank, client, clock, operation):
+@pytest.mark.parametrize(("asset_type", "amount"), [("bonds", -5), ("gold", 10)])
+def test_invalid_input_is_refused_before_the_client_checks(bank, client, clock, operation, asset_type, amount):
     investment = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=1_000)
     clock.moment = NIGHT
     with pytest.raises(InvalidOperationError):
-        getattr(bank, operation)(investment.account_id, "bonds", -5)
+        getattr(bank, operation)(investment.account_id, asset_type, amount)
     assert bank.suspicious_activities == []  # an input error, as for a deposit, not a night attempt
 
 

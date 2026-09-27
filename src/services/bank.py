@@ -18,6 +18,7 @@ from models.account import BankAccount
 from models.client import Client
 from models.enums import AccountStatus, AssetType, Currency
 from models.investment_account import InvestmentAccount
+from models.portfolio import Portfolio
 from models.premium_account import PremiumAccount
 from models.savings_account import SavingsAccount
 from models.transaction import Transaction
@@ -457,21 +458,13 @@ class Bank:
     def invest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move free cash of an investment account into ``asset_type``; return the new cash balance."""
         return self._rebalance(
-            "invest",
-            MovementKind.INVESTMENT,
-            account_id,
-            amount,
-            lambda account, value: account.invest(asset_type, value),
+            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount.invest
         )
 
     def divest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
         """Move money from ``asset_type`` back to free cash of an investment account; return the new cash balance."""
         return self._rebalance(
-            "divest",
-            MovementKind.DIVESTMENT,
-            account_id,
-            amount,
-            lambda account, value: account.divest(asset_type, value),
+            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount.divest
         )
 
     def _rebalance(
@@ -479,8 +472,9 @@ class Bank:
         action: str,
         kind: MovementKind,
         account_id: str,
+        asset_type: AssetType | str,
         amount: object,
-        operation: Callable[[InvestmentAccount, Decimal], Decimal],
+        operation: Callable[[InvestmentAccount, AssetType, Decimal], Decimal],
     ) -> Decimal:
         """Move money between the cash and the portfolio of an investment account.
 
@@ -493,11 +487,12 @@ class Bank:
         account = self.get_account(account_id)
         if not isinstance(account, InvestmentAccount):
             raise InvalidOperationError(f"Account {account_id} is not an investment account; it has no portfolio.")
-        # the amount first, as in _move_money: an invalid one is an input error, not a suspicious attempt
+        # the input first, as in _move_money: an invalid one is an input error, not a suspicious attempt
+        asset = Portfolio.resolve_asset_type(asset_type)
         value = to_money(amount, require="positive")
         self._guard(action, account.owner, account)
         before = account.balance
-        balance = self._run_on_account(action, account, lambda: operation(account, value))
+        balance = self._run_on_account(action, account, lambda: operation(account, asset, value))
         self._record_movement(kind, account, before)
         return balance
 

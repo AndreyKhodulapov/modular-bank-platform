@@ -330,11 +330,25 @@ def test_transaction_id_from_the_history_fails_before_money_moves(bank, processo
     again = transfer(rub, usd, 900, transaction_id="T-1")
     processor.process(again)
     assert (again.status, again.attempts) == (TransactionStatus.FAILED, 1)
-    assert again.failure_reason == "InvalidOperationError: Transaction T-1 is already in the history."
+    assert again.failure_reason == "InvalidOperationError: Transaction id T-1 is already used by another transaction."
     assert (processor.errors[-1].error_type, processor.errors[-1].will_retry) == ("InvalidOperationError", False)
     assert (rub.balance, usd.balance) == (Decimal("9100.00"), Decimal("110.00"))
     assert bank.history.transactions() == [first]  # the history keeps the first transaction under the id
     assert bank.history.movements() == moved
+
+
+def test_id_of_a_transaction_waiting_for_a_retry_cannot_be_reused(bank, processor, rub, usd):
+    waiting = transfer(rub, usd, 10_500, transaction_id="T-1")
+    processor.process(waiting)  # not enough money: it waits for a retry, so the history has no T-1 yet
+    other = transfer(rub, usd, 900, transaction_id="T-1")
+    processor.process(other)
+    assert (waiting.status, other.status) == (TransactionStatus.PENDING, TransactionStatus.FAILED)
+    assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
+    assert bank.history.transactions() == []  # the failed one does not take the id in the history
+    bank.deposit(rub.account_id, 1_000)
+    processor.process(waiting)  # the retry of the first transaction under the id goes through
+    assert waiting.status is TransactionStatus.COMPLETED
+    assert bank.history.transactions() == [waiting]
 
 
 def test_transaction_id_from_the_history_does_not_hold_up_the_queue(bank, processor, queue, rub, usd):

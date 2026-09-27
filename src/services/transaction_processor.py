@@ -110,6 +110,7 @@ class TransactionProcessor:
         self._retry_delay = retry_delay
         self._errors: list[TransactionErrorRecord] = []
         self._collected_fees = Decimal("0.00")
+        self._attempted: dict[str, Transaction] = {}  # transaction_id -> the first transaction attempted under it
 
     @property
     def errors(self) -> list[TransactionErrorRecord]:
@@ -148,10 +149,12 @@ class TransactionProcessor:
     def process(self, transaction: Transaction) -> Transaction:
         """Make one attempt; the transaction ends completed, failed or pending for a retry.
 
-        A transaction whose id is already in the history fails before any
-        money moves, without a retry: the history keeps the first transaction
-        under that id and cannot record a second one. It is a failure like
-        any other - logged, audited, and a queue run goes on past it.
+        An id is used once. A transaction whose id belongs to another one -
+        attempted here before (it may still wait for a retry) or already in
+        the history - fails before any money moves, without a retry. It stays
+        out of the history, which keeps the first transaction under that id;
+        otherwise it is a failure like any other - logged, audited, and a
+        queue run goes on past it.
         """
         transaction.start(self._bank.now())
         _logger.debug(
@@ -164,14 +167,18 @@ class TransactionProcessor:
                 }
             },
         )
+        first = self._attempted.setdefault(transaction.transaction_id, transaction)
+        reused = first is not transaction or self._bank.history.has_transaction(transaction.transaction_id)
         try:
-            if self._bank.history.has_transaction(transaction.transaction_id):
-                raise InvalidOperationError(f"Transaction {transaction.transaction_id} is already in the history.")
+            if reused:
+                raise InvalidOperationError(
+                    f"Transaction id {transaction.transaction_id} is already used by another transaction."
+                )
             fee, debited, credited = self._execute(transaction)
         except BankError as error:
-            self._handle_failure(transaction, error)
+            self._handle_failure(transaction, error, record_in_history=not reused)
         except Exception as error:
-            self._handle_failure(transaction, error)
+            self._handle_failure(transaction, error, record_in_history=not reused)
             raise
         else:
             transaction.complete(self._bank.now(), fee=fee, debited_amount=debited, credited_amount=credited)
@@ -258,7 +265,7 @@ class TransactionProcessor:
             )
         return value
 
-    def _handle_failure(self, transaction: Transaction, error: Exception) -> None:
+    def _handle_failure(self, transaction: Transaction, error: Exception, *, record_in_history: bool) -> None:
         now = self._bank.now()
         will_retry = isinstance(error, self.RETRYABLE_ERRORS) and transaction.attempts < self._max_attempts
         self._errors.append(
@@ -277,9 +284,8 @@ class TransactionProcessor:
             transaction.retry(reason, now, now + delay)
         else:
             transaction.fail(reason, now)
-            # before the audit write: a failing write must not keep a finished transaction out of the history;
-            # a reused id stays out, the history already holds the first transaction under it
-            if not self._bank.history.has_transaction(transaction.transaction_id):
+            # before the audit write: a failing write must not keep a finished transaction out of the history
+            if record_in_history:
                 self._bank.history.record_transaction(transaction)
         # logged after the status change: a failing audit write must not leave the transaction in PROCESSING
         client_id, account_id = self._initiator(transaction)
