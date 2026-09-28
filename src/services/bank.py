@@ -319,14 +319,17 @@ class Bank:
         return self._security.resolve_session(session)
 
     def logout(self, session: ClientSession) -> None:
-        """Close a valid session; it is checked like any other use of it."""
+        """Close an open session; an expired one is closed as well and marked ``expired`` in the audit log."""
         client = self._security.close_session(session)
+        details: dict[str, object] = {"session_id": session.session_id}
+        if session.is_expired(self.now()):
+            details["expired"] = True
         self._record(
             AuditCategory.CLIENT,
             ClientEvent.LOGGED_OUT,
             "client logged out",
             client_id=client.client_id,
-            details={"session_id": session.session_id},
+            details=details,
         )
 
     def unblock_client(self, client_id: str) -> Client:
@@ -334,6 +337,8 @@ class Bank:
         # only a real unblock is a night-restricted action; an active client gets the model's error
         if client.is_blocked:
             self._security.ensure_daytime("unblock_client", client_id=client_id)
+            # a client blocked past the guard may still have sessions in the store; they end with the block
+            self._security.close_client_sessions(client_id)
         client.unblock()
         self._record(AuditCategory.CLIENT, ClientEvent.UNBLOCKED, "client unblocked", client_id=client_id)
         return client

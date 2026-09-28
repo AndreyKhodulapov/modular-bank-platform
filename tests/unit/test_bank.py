@@ -168,12 +168,25 @@ def test_logged_out_session_is_refused(bank, client, password):
     assert bank.resolve_session(other) is client  # a new login is another session
 
 
-def test_expired_session_is_flagged_and_not_logged_out(bank, client, clock, password):
+def test_logging_out_late_closes_the_session_quietly(bank, client, clock, password):
+    session = bank.authenticate_client(client.client_id, password)
+    clock.moment = session.expires_at
+    bank.logout(session)
+    assert reasons(bank) == []
+    logged_out = bank.audit_log.filter(event="client_logged_out")[-1]
+    assert dict(logged_out.details) == {"session_id": session.session_id, "expired": True}
+    with pytest.raises(InvalidSessionError) as info:
+        bank.resolve_session(session)
+    assert not isinstance(info.value, SessionExpiredError)
+
+
+def test_using_an_expired_session_is_flagged_with_its_id(bank, client, clock, password):
     session = bank.authenticate_client(client.client_id, password)
     clock.moment = session.expires_at
     with pytest.raises(SessionExpiredError):
-        bank.logout(session)
-    assert reasons(bank) == [SuspicionReason.EXPIRED_SESSION]
+        bank.resolve_session(session)
+    [event] = bank.audit_log.filter(event="expired_session")
+    assert (event.client_id, dict(event.details)) == (client.client_id, {"session_id": session.session_id})
     assert "client_logged_out" not in lifecycle(bank)
 
 
@@ -199,6 +212,15 @@ def test_unblock_client_restores_access(bank, client, password):
     assert bank.resolve_session(bank.authenticate_client(client.client_id, password)) is client
     with pytest.raises(InvalidSessionError):
         bank.resolve_session(before)  # blocking ended it; unblocking does not bring it back
+
+
+def test_unblock_ends_the_sessions_of_a_client_blocked_past_the_guard(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    client.block()  # the model is blocked directly, and the session is not used before the unblock
+    bank.unblock_client(client.client_id)
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(session)
+    assert bank.resolve_session(bank.authenticate_client(client.client_id, password)) is client
 
 
 @pytest.mark.parametrize(

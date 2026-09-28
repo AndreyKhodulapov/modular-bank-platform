@@ -187,6 +187,36 @@ class SecurityGuard:
         expired session is closed, recorded as suspicious and refused with
         ``SessionExpiredError``; using it again finds it unknown.
         """
+        client = self._open_session_client(session)
+        if session.is_expired(self.now()):
+            self._sessions.remove(session.session_id)
+            self.flag(
+                SuspicionReason.EXPIRED_SESSION,
+                f"session used after it expired at {session.expires_at:%H:%M}",
+                client_id=client.client_id,
+                actor=session,
+            )
+            raise SessionExpiredError(session.session_id, session.expires_at)
+        return client
+
+    def close_session(self, session: ClientSession) -> Client:
+        """Close an open session and return its client.
+
+        An expired session is closed too, quietly: logging out late (a tab
+        left open) is not a suspicious use of it. An unknown or closed
+        session, or one of a blocked client, is refused as by
+        ``resolve_session()``.
+        """
+        client = self._open_session_client(session)
+        self._sessions.remove(session.session_id)
+        return client
+
+    def close_client_sessions(self, client_id: str) -> int:
+        """Close every session of the client and return how many were open."""
+        return self._sessions.remove_client(client_id)
+
+    def _open_session_client(self, session: ClientSession) -> Client:
+        """The client of a session in the store, expired or not; a blocked client's sessions are closed and refused."""
         if not isinstance(session, ClientSession):
             raise InvalidOperationError("session must be a ClientSession instance.")
         client = self._sessions.find(session)
@@ -195,20 +225,6 @@ class SecurityGuard:
         if client.is_blocked:
             self._sessions.remove_client(client.client_id)
             raise InvalidSessionError(session.session_id)
-        if session.is_expired(self.now()):
-            self._sessions.remove(session.session_id)
-            self.flag(
-                SuspicionReason.EXPIRED_SESSION,
-                f"session used after it expired at {session.expires_at:%H:%M}",
-                client_id=client.client_id,
-            )
-            raise SessionExpiredError(session.session_id, session.expires_at)
-        return client
-
-    def close_session(self, session: ClientSession) -> Client:
-        """Close a session the way any use of it is checked; return its client."""
-        client = self.resolve_session(session)
-        self._sessions.remove(session.session_id)
         return client
 
     def review_amount(

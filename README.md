@@ -348,7 +348,9 @@ through it; the bank's own API stays open to the back office.
   token and recognises a session exactly as it was issued.
 - A session ends with `Bank.logout(session)`, when it expires (its use is
   then recorded as `expired_session`), or when the client is blocked;
-  unblocking does not bring it back, the client logs in again.
+  unblocking does not bring it back, the client logs in again. Logging out
+  after the session expired is not suspicious: it is closed all the same
+  and `client_logged_out` says `expired`.
 - `ClientPortal(bank)` - what a logged-in client does: `accounts()`,
   `open_account()`, `close_account()`, `freeze_account()`,
   `unfreeze_account()`, `deposit()`, `withdraw()`, `invest()`, `divest()`,
@@ -497,7 +499,7 @@ for movement in bank.history.movements(account.account_id):
   | Writer | Category | Events | Level |
   | --- | --- | --- | --- |
   | `SecurityGuard` | `security` | every suspicious activity (named after `SuspicionReason`) | `WARNING`; a blocked client `CRITICAL` |
-  | `Bank` | `client` | `client_registered`, `client_logged_in`, `client_logged_out` (with `details.session_id`), `client_unblocked` | `INFO` |
+  | `Bank` | `client` | `client_registered`, `client_logged_in`, `client_logged_out` (with `details.session_id`; `details.expired` for a late logout), `client_unblocked` | `INFO` |
   | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed`, `interest_credited` | `INFO` |
   | `Bank.screen()` | `risk` | `risk_assessed`, `operation_blocked` | `INFO` / `WARNING` for a medium risk / `CRITICAL` |
   | `TransactionQueue` | `transaction` | `transaction_queued`, `transaction_cancelled` | `INFO` |

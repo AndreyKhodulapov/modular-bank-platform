@@ -217,6 +217,8 @@ def test_session_works_until_it_expires(guard, owner, password, clock):
     assert (info.value.session_id, info.value.expired_at) == (session.session_id, session.expires_at)
     [activity] = guard.suspicious_activities
     assert (activity.reason, activity.client_id) == (SuspicionReason.EXPIRED_SESSION, owner.client_id)
+    [event] = guard.audit_log.filter(event="expired_session")
+    assert dict(event.details) == {"session_id": session.session_id}
 
 
 def test_expired_session_is_closed_once_used(guard, owner, password, clock):
@@ -272,6 +274,25 @@ def test_client_blocked_past_the_guard_loses_the_sessions(guard, owner, password
     owner.unblock()
     with pytest.raises(InvalidSessionError):
         guard.resolve_session(session)
+
+
+def test_expired_session_closes_quietly(guard, owner, password, clock):
+    session = guard.authenticate(owner, password)
+    clock.moment = session.expires_at
+    assert guard.close_session(session) is owner
+    assert guard.suspicious_activities == []
+    with pytest.raises(InvalidSessionError) as info:
+        guard.resolve_session(session)
+    assert not isinstance(info.value, SessionExpiredError)
+
+
+def test_close_client_sessions_ends_every_session_of_the_client(guard, owner, password):
+    sessions = [guard.authenticate(owner, password) for _ in range(2)]
+    assert guard.close_client_sessions(owner.client_id) == 2
+    assert guard.close_client_sessions(owner.client_id) == 0
+    for session in sessions:
+        with pytest.raises(InvalidSessionError):
+            guard.resolve_session(session)
 
 
 def test_closed_session_is_refused(guard, owner, password):
