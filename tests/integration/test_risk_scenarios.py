@@ -56,14 +56,14 @@ def run(queue, processor, clock, moment, *transactions):
     return processor.process_queue(queue)
 
 
-def make(kind, amount, currency, sender=None, recipient=None):
+def make(kind, amount, currency, sender=None, recipient=None, at=NOON):
     return Transaction(
         kind,
         amount,
         currency,
         sender_id=sender.account_id if sender is not None else None,
         recipient_id=recipient if isinstance(recipient, str) or recipient is None else recipient.account_id,
-        created_at=NOON,
+        created_at=at,
     )
 
 
@@ -81,30 +81,33 @@ def test_ordinary_and_suspicious_transactions(world, tmp_path):
     ]
     report = run(queue, processor, clock, NOON, *ordinary)
     assert report.completed == ordinary
-    repeat = make("transfer", 3_000, "RUB", maria, alina_rub)
-    run(queue, processor, clock, NOON.replace(minute=5), repeat)
+    repeat = make("transfer", 3_000, "RUB", maria, alina_rub, at=NOON.replace(minute=5))
+    run(queue, processor, clock, repeat.created_at, repeat)
     assert repeat.status is TransactionStatus.COMPLETED
 
     # suspicious: a large amount to a brand-new account, then a very large one abroad
-    large = make("transfer", 6_000, "USD", oleg, fresh)  # 540 000 RUB: large 40 + new account 20
-    huge = make("external_transfer", 25_000, "USD", oleg, "CY17-0020-0128-0000-0012-0052-7600")  # 70 + 20
-    run(queue, processor, clock, NOON.replace(hour=13), large, huge)
+    afternoon = NOON.replace(hour=13)
+    large = make("transfer", 6_000, "USD", oleg, fresh, at=afternoon)  # 540 000 RUB: large 40 + new account 20
+    huge = make("external_transfer", 25_000, "USD", oleg, "CY17-0020-0128-0000-0012-0052-7600", at=afternoon)  # 70 + 20
+    run(queue, processor, clock, afternoon, large, huge)
     assert (large.status, huge.status) == (TransactionStatus.COMPLETED, TransactionStatus.FAILED)
 
-    # six quick transfers to the new account: the fifth and the sixth add the frequency factor
-    rapid = [make("transfer", 1_000, "KZT", alina_kzt, fresh) for _ in range(6)]
+    # six quick transfers to the new account, all sent within a minute: the fifth and the sixth add the frequency factor
+    rapid = [make("transfer", 1_000, "KZT", alina_kzt, fresh, at=NOON.replace(hour=14)) for _ in range(6)]
     run(queue, processor, clock, NOON.replace(hour=14), *rapid)
     assert all(transaction.status is TransactionStatus.COMPLETED for transaction in rapid)
 
     # late evening: a small transfer to a known recipient passes, a large one to the new account is refused
-    evening = make("transfer", 1_000, "RUB", maria, alina_rub)
-    late_large = make("transfer", 7_000, "USD", oleg, fresh)  # large 40 + new 20 + night 20
-    run(queue, processor, clock, NOON.replace(hour=23, minute=30), evening, late_large)
+    late = NOON.replace(hour=23, minute=30)
+    evening = make("transfer", 1_000, "RUB", maria, alina_rub, at=late)
+    late_large = make("transfer", 7_000, "USD", oleg, fresh, at=late)  # large 40 + new 20 + night 20
+    run(queue, processor, clock, late, evening, late_large)
     assert (evening.status, late_large.status) == (TransactionStatus.COMPLETED, TransactionStatus.FAILED)
 
     # the hard night ban comes before risk scoring: refused, retried later, not assessed
-    night = make("transfer", 1_000, "RUB", maria, alina_rub)
-    run(queue, processor, clock, datetime(2026, 9, 25, 2, 0), night)
+    deep_night = datetime(2026, 9, 25, 2, 0)
+    night = make("transfer", 1_000, "RUB", maria, alina_rub, at=deep_night)
+    run(queue, processor, clock, deep_night, night)
     assert night.status is TransactionStatus.PENDING
 
     levels = {item.transaction_id: item.level for item in bank.risk_analyzer.assessments}

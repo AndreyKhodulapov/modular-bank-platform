@@ -30,6 +30,12 @@ class Transaction:
     soon as possible. ``created_at`` is required: a transaction has no clock,
     so whoever creates it gives the moment by the bank's clock (or the
     queue's), instead of the model guessing it from the wall clock.
+    ``requested_at`` is the moment the client asked for - ``scheduled_at``
+    if given, else ``created_at`` - fixed at creation: a retry moves
+    ``scheduled_at``, never ``requested_at``, so rules about when the client
+    acted are not moved by what the bank did later. A schedule cannot be
+    earlier than the creation, so ``requested_at`` is never earlier than the
+    moment whoever built the transaction stamped on it.
     """
 
     # which parties each transaction type needs: (sender, recipient)
@@ -72,6 +78,9 @@ class Transaction:
 
         self._created_at = self._validate_moment(created_at, "created_at")
         self._scheduled_at = None if scheduled_at is None else self._validate_moment(scheduled_at, "scheduled_at")
+        if self._scheduled_at is not None and self._scheduled_at < self._created_at:
+            raise InvalidOperationError("scheduled_at cannot be earlier than created_at.")
+        self._requested_at = self._created_at if self._scheduled_at is None else self._scheduled_at
         self._updated_at = self._created_at
         self._finished_at: datetime | None = None
 
@@ -184,6 +193,11 @@ class Transaction:
         return self._scheduled_at
 
     @property
+    def requested_at(self) -> datetime:
+        """When the client wanted the money to move: ``scheduled_at`` as given, else ``created_at``; never changes."""
+        return self._requested_at
+
+    @property
     def updated_at(self) -> datetime:
         return self._updated_at
 
@@ -262,6 +276,7 @@ class Transaction:
             "credited_amount": optional(self._credited_amount),
             "created_at": optional(self._created_at),
             "scheduled_at": optional(self._scheduled_at),
+            "requested_at": optional(self._requested_at),
             "updated_at": optional(self._updated_at),
             "finished_at": optional(self._finished_at),
         }

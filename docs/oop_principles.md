@@ -209,7 +209,15 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **Suspicious actions are recorded, not only refused.** Failed logins,
   blocking, attempts by a blocked client, night attempts, operations on
   frozen or closed accounts and amounts of at least 500 000 RUB go to an
-  append-only log.
+  append-only log. An event names who acted: a credit refused by the
+  night window or by a frozen or closed account is recorded on the
+  account alone, because the owner did not send that money, and a risk
+  profile built from the log must not get worse from what others do to a
+  client. A credit the owner makes through their own session is theirs.
+  Transaction and risk events answer a different question - whose money
+  moved - and name the account's owner, a deposit's recipient included:
+  money arriving on an account is part of that account's risk picture even
+  when someone else sent it.
 
 ## Client sessions
 
@@ -222,8 +230,9 @@ amounts and enum members are values: two equal amounts are interchangeable.
   an optional `actor=`. The portal adds the question the bank does not ask:
   who acts.
 - **Why the bank does not demand a session itself.** Much of what it does is
-  not a client acting now. A client submits a transaction through the
-  portal, while the processor runs it later on the bank's behalf, after a
+  not a client acting now. A client asks for a transaction through the
+  portal, which builds and queues it, while the processor runs it later on
+  the bank's behalf, after a
   retry or the end of the night window, when the session may be long over;
   interest, refunds and reports have no client at all. Checking the session
   at submission and executing as the bank is how the rights and the work are
@@ -236,6 +245,16 @@ amounts and enum members are values: two equal amounts are interchangeable.
   dictionaries, amounts and history records. An account object in the
   client's hands would be a way around the bank: its `deposit()` and
   `withdraw()` are public and know nothing of sessions.
+- **The client channel creates no money.** The models have no notion of
+  where money comes from: `Bank.deposit()` and an opening balance simply
+  add to a balance, which is right for the back office (cash over the
+  counter) and wrong for a session, where it would let a client credit
+  themselves. So the portal has no `deposit()`, opens accounts empty and
+  accepts only transactions that debit the client's own account. An
+  overdraft and an interest rate are money the bank promises, so the
+  portal refuses those terms too: a premium account with an overdraft or a
+  savings account with a rate is the bank's to open. The trust boundary is
+  the portal, not the bank.
 - **One answer for someone else's and a missing account.** Both are
   `AccountNotFoundError`, so trying ids through the portal does not reveal
   which of them exist.
@@ -432,9 +451,24 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   goes through, `medium` goes through but is logged as a warning for a
   review, `high` is refused. A blocked transaction fails without retry:
   trying it again would get the same score.
+- **The client's moment, not the bank's.** The night and frequency rules
+  read `Transaction.requested_at` - the moment the client created the
+  transaction, or the moment they scheduled it for - while the amount and
+  recipient rules and the assessment itself use the moment of the attempt.
+  The bank retries a transaction refused by the night ban at 05:00, inside
+  the analyzer's wider night, and runs a night's worth of held-back
+  transactions in one go; scoring those moments would add a night factor
+  and a frequency factor the client never earned and could turn a
+  `medium` request into a blocked one. `requested_at` is fixed when the
+  transaction is made and a retry does not move it; a schedule earlier
+  than the creation is refused, or the client's schedule would set the
+  moment the portal's stamp is meant to fix. The model has no
+  clock, so whoever builds the transaction gives the moment: the programs
+  and the client portal stamp it from the bank's clock, which is why the
+  portal builds the transaction itself instead of accepting one.
 - **State for behavioural rules.** Frequency and "new recipient" depend on
   history, so the analyzer keeps a small `RiskHistory`: when each
-  transaction was first seen (a retry does not count as a new operation)
+  transaction was requested (a retry does not count as a new operation)
   and which sender -> recipient pairs already completed a transfer. The
   bank remembers when each account was opened, so the models stay free of
   clocks.

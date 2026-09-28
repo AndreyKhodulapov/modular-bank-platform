@@ -31,6 +31,7 @@ from services import (
 )
 from tests.helpers import history_gaps, lifecycle, reasons
 
+NOW = datetime(2026, 9, 24, 14, 0)
 NIGHT = datetime(2026, 9, 25, 2, 30)
 MONTH_LATER = datetime(2026, 10, 24, 14, 0)  # the day monthly interest is due on an account opened at the start
 
@@ -448,6 +449,18 @@ def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operati
     [activity] = bank.suspicious_activities
     assert activity.reason is SuspicionReason.INACTIVE_ACCOUNT_OPERATION
     assert activity.account_id == account.account_id
+    # a credit is someone else's attempt, so the owner is not named; every other operation is the owner's
+    assert activity.client_id == (None if operation == "deposit" else client.client_id)
+
+
+def test_a_credit_through_the_owners_session_is_the_owners_attempt(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    account = bank.open_account(client.client_id, currency="RUB")
+    bank.freeze_account(account.account_id)
+    with pytest.raises(AccountFrozenError):
+        bank.deposit(account.account_id, 10, actor=session)
+    [activity] = bank.suspicious_activities
+    assert (activity.client_id, activity.account_id) == (client.client_id, account.account_id)
 
 
 def test_an_operation_through_a_session_names_it_in_every_event(bank, client, password):
@@ -713,8 +726,12 @@ def test_ensure_operational_flags_a_frozen_account(bank, client):
     account = bank.open_account(client.client_id, currency="RUB")
     bank.freeze_account(account.account_id)
     with pytest.raises(AccountFrozenError):
-        bank.ensure_operational("transfer", account.account_id)
-    assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]
+        bank.ensure_operational("withdraw", account.account_id)
+    with pytest.raises(AccountFrozenError):
+        bank.ensure_operational("deposit", account.account_id, incoming=True)
+    assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION] * 2
+    # the debit is the owner's attempt; the credit is somebody else's and names the account alone
+    assert [activity.client_id for activity in bank.suspicious_activities] == [client.client_id, None]
 
 
 def test_now_and_converter_come_from_the_collaborators(bank, clock):
@@ -736,8 +753,8 @@ def pair(bank, client, clock):
     return sender, recipient
 
 
-def transfer(sender, recipient, amount, kind="transfer") -> Transaction:
-    return Transaction(kind, amount, "RUB", sender_id=sender.account_id, recipient_id=recipient, created_at=NIGHT)
+def transfer(sender, recipient, amount, kind="transfer", created_at=NOW) -> Transaction:
+    return Transaction(kind, amount, "RUB", sender_id=sender.account_id, recipient_id=recipient, created_at=created_at)
 
 
 def test_bank_remembers_when_an_account_was_opened(bank, client, clock):
@@ -775,7 +792,7 @@ def test_screen_medium_risk_is_a_warning_and_goes_on(bank, pair):
 def test_screen_refuses_high_risk(bank, pair, clock):
     sender, recipient = pair
     clock.moment = clock.moment.replace(hour=23)
-    transaction = transfer(sender, recipient.account_id, 500_000)
+    transaction = transfer(sender, recipient.account_id, 500_000, created_at=clock.moment)
     with pytest.raises(RiskBlockedError) as info:
         bank.screen(transaction)
     assert (info.value.score, info.value.factors) == (80, ("large_amount", "new_recipient", "night_operation"))

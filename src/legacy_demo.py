@@ -549,11 +549,14 @@ def run_audit_and_risk(audit_path: Path) -> list[AbstractAccount]:
             f"rapid #{number}", "transfer", 1_000, "KZT", sender_id=alina_kzt.account_id, recipient_id=fresh.account_id
         )
     process_at(datetime(2026, 9, 24, 14, 0))
+    # the clock moves before the clients act: risk control looks at when a transaction was created
+    late_evening = clock.moment = datetime(2026, 9, 24, 23, 30)
     enqueue("evening", "transfer", 1_000, "RUB", sender_id=maria_rub.account_id, recipient_id=alina_rub.account_id)
     enqueue("late large", "transfer", 7_000, "USD", sender_id=oleg_usd.account_id, recipient_id=fresh.account_id)
-    process_at(datetime(2026, 9, 24, 23, 30))
+    process_at(late_evening)
+    deep_night = clock.moment = datetime(2026, 9, 25, 2, 0)
     enqueue("night", "transfer", 1_000, "RUB", sender_id=maria_rub.account_id, recipient_id=alina_rub.account_id)
-    process_at(datetime(2026, 9, 25, 2, 0))
+    process_at(deep_night)
     process_at(datetime(2026, 9, 25, 6, 0))
     for account in accounts:
         print(f"  {account}")

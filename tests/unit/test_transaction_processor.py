@@ -18,6 +18,7 @@ from services import (
     FeePolicy,
     MovementKind,
     RiskAnalyzer,
+    RiskLevel,
     SuspicionReason,
     TransactionProcessor,
     TransactionQueue,
@@ -46,14 +47,14 @@ def premium(bank, client):
     )
 
 
-def transfer(sender, recipient, amount, currency="RUB", **params) -> Transaction:
+def transfer(sender, recipient, amount, currency="RUB", created_at=NOW, **params) -> Transaction:
     return Transaction(
         "transfer",
         amount,
         currency,
         sender_id=sender.account_id,
         recipient_id=recipient.account_id,
-        created_at=NOW,
+        created_at=created_at,
         **params,
     )
 
@@ -127,7 +128,9 @@ def test_regular_account_cannot_go_negative(processor, rub, usd, make):
 
 
 @pytest.mark.parametrize("frozen_side", ["sender", "recipient"])
-def test_frozen_account_fails_without_retry(bank, processor, rub, usd, frozen_side):
+def test_frozen_account_fails_without_retry(bank, processor, client, rub, make_client, frozen_side):
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    usd = bank.open_account(boris.client_id, currency="USD", initial_balance=100)
     frozen = rub if frozen_side == "sender" else usd
     bank.freeze_account(frozen.account_id)
     transaction = transfer(rub, usd, 100)
@@ -135,6 +138,12 @@ def test_frozen_account_fails_without_retry(bank, processor, rub, usd, frozen_si
     assert transaction.status is TransactionStatus.FAILED
     assert transaction.failure_reason.startswith("AccountFrozenError")
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
+    # the sender acted: a frozen sender is their attempt, a frozen recipient is nobody's but names the account
+    [activity] = bank.suspicious_activities
+    assert (activity.client_id, activity.account_id) == (
+        client.client_id if frozen_side == "sender" else None,
+        frozen.account_id,
+    )
 
 
 def test_closed_or_unknown_account_fails(bank, processor, rub, usd):
@@ -221,6 +230,27 @@ def test_night_window_is_retried_when_it_ends(bank, processor, rub, usd, clock):
         (1, "OperationTimeRestrictedError", True)
     ]
     assert bank.history.transactions() == [transaction]
+
+
+def test_a_retry_after_the_night_window_is_scored_by_when_the_client_acted(bank, processor, client, clock):
+    """The bank retries at 05:00, inside the analyzer's night (22:00-06:00): that moment is the bank's choice."""
+    rich = bank.open_account(client.client_id, currency="RUB", initial_balance=900_000)
+    fresh = bank.open_account(client.client_id, currency="RUB")
+    for created_at, expected in ((NIGHT.replace(hour=1), RiskLevel.HIGH), (NOW.replace(hour=21), RiskLevel.MEDIUM)):
+        transaction = transfer(rich, fresh, 500_000, created_at=created_at)  # large 40 + new recipient 20
+        clock.moment = NIGHT
+        processor.process(transaction)
+        assert transaction.status is TransactionStatus.PENDING  # the hard night ban, not scored yet
+        clock.moment = transaction.scheduled_at
+        processor.process(transaction)
+        assessments = bank.risk_analyzer.assessments
+        [assessment] = [item for item in assessments if item.transaction_id == transaction.transaction_id]
+        assert (assessment.moment, assessment.level) == (DAWN, expected)
+        assert ("night_operation" in assessment.rules) is (expected is RiskLevel.HIGH)  # created at 01:00, not at 21:00
+    assert [transaction.status for transaction in bank.history.transactions()] == [
+        TransactionStatus.FAILED,
+        TransactionStatus.COMPLETED,
+    ]
 
 
 def test_night_transfer_completes_at_the_first_run_after_the_window(bank, processor, queue, rub, usd, clock):
@@ -447,7 +477,7 @@ def test_high_risk_transaction_fails_at_once_without_moving_money(bank, processo
     rich = bank.open_account(client.client_id, currency="RUB", initial_balance=900_000)
     fresh = bank.open_account(client.client_id, currency="RUB")
     clock.moment = NOW.replace(hour=23)
-    transaction = transfer(rich, fresh, 600_000)  # large 40 + new account 20 + late evening 20
+    transaction = transfer(rich, fresh, 600_000, created_at=clock.moment)  # large 40 + new 20 + late evening 20
     processor.process(transaction)
     assert transaction.status is TransactionStatus.FAILED
     assert transaction.failure_reason.startswith(RiskBlockedError.__name__)
