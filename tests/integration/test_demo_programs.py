@@ -47,6 +47,7 @@ def test_legacy_demo_runs_without_errors(tmp_path):
     assert "STAGE 3: Bank System" in completed.stdout
     assert "[rejected] register a 16-year-old client: InvalidOperationError" in completed.stdout
     assert "[rejected] Oleg, wrong password #3: ClientBlockedError" in completed.stdout
+    assert re.search(r"Maria logs in: opened session \w{8} of client \w{8}, valid until 09-24 14:30", completed.stdout)
     assert "[rejected] withdraw 5_000 KZT: OperationTimeRestrictedError" in completed.stdout
     assert "(min_balance does not hold money back): payout 300000.00" in completed.stdout
     assert "total balance: 1502100.00 RUB" in completed.stdout
@@ -118,11 +119,11 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "through the bank: The bank sets status of a new account itself." in output
     assert "by the model itself: An account cannot be created closed" in output
     # the client view: a session, snapshots of the accounts, cash taken by hand, someone else's account refused
-    assert "Logged in: session " in output
-    assert ", valid until 09-25 10:30" in output
+    assert re.search(r"Logged in: session \w{8} of client \w{8}, valid until 09-25 10:30", output)
     assert "PremiumAccount | ****" in output
     assert "| active | -1511.00 USD | overdraft 3000.00 | fee 2.00" in output
-    assert "Takes 1_000 EUR in cash from the investment account: cash 11000.00 EUR" in output
+    assert "Takes 1_000 EUR in cash from InvestmentAccount ****" in output
+    assert ": balance 11000.00 EUR" in output
     assert "Tries Maria's account with the same session: refused, AccountNotFoundError: Account" in output
     assert "Maria's balance stays 1107001.00 RUB" in output
     # the statement shows the balance and the total value: a portfolio move changes the first only

@@ -41,6 +41,11 @@ def test_session_is_immutable(session):
 def test_token_is_not_shown(session):
     assert session.token not in repr(session)
     assert session.session_id in repr(session)
+    assert session.token not in str(session)
+
+
+def test_session_prints_as_a_line(session, owner):
+    assert str(session) == f"session {session.session_id[:8]} of client {owner.client_id[:8]}, valid until 09-24 14:30"
 
 
 @pytest.mark.parametrize(

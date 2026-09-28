@@ -40,6 +40,11 @@ class ClientSession:
     def is_expired(self, now: datetime) -> bool:
         return now >= self.expires_at
 
+    def __str__(self) -> str:
+        return (
+            f"session {self.session_id[:8]} of client {self.client_id[:8]}, valid until {self.expires_at:%m-%d %H:%M}"
+        )
+
 
 def session_details(actor: ClientSession | None) -> dict[str, str]:
     """The audit details that name the session an action came through; none for the bank's own actions."""

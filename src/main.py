@@ -48,6 +48,7 @@ from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from exceptions import (
@@ -428,6 +429,8 @@ def describe_account(info: dict[str, Any]) -> str:
     line += f" | {info['balance']} {info['currency']}"
     if "overdraft_limit" in info:
         line += f" | overdraft {info['overdraft_limit']} | fee {info['withdrawal_fee']}"
+    if "min_balance" in info:
+        line += f" | min {info['min_balance']} | {Decimal(info['monthly_rate']):.2%}/month"
     if "total_value" in info:
         line += f" | invested {info['invested_total']} | total {info['total_value']}"
     return line
@@ -435,25 +438,30 @@ def describe_account(info: dict[str, Any]) -> str:
 
 def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
     """The client logs in and acts through the portal; the suspicious operations are the bank's view of them."""
-    bank, client, accounts = demo.bank, demo.clients[key], demo.accounts
+    bank, client = demo.bank, demo.clients[key]
     print_section(4, f"Client view: {client.full_name}")
     session = bank.authenticate_client(client.client_id, demo.passwords[key])
     portal = ClientPortal(bank)
-    print(f"  Logged in: session {session.session_id[:8]}, valid until {session.expires_at:%m-%d %H:%M}")
+    print(f"  Logged in: {session}")
 
     snapshots = portal.accounts(session)
     print("\n  Accounts:")
     for info in snapshots:
         print(f"    {describe_account(info)}")
 
-    cash = portal.withdraw(session, accounts[f"{key}_invest"].account_id, 1_000)
-    print(f"\n  Takes 1_000 EUR in cash from the investment account: cash {cash} EUR")
-    someone_else = accounts["maria_rub"]
+    source = next(info for info in snapshots if info["status"] == "active" and Decimal(info["balance"]) >= 1_000)
+    cash = portal.withdraw(session, source["account_id"], 1_000)
+    print(
+        f"\n  Takes 1_000 {source['currency']} in cash from {source['account_type']} ****{source['account_id'][-4:]}: "
+        f"balance {cash} {source['currency']}"
+    )
+    someone_else = next(account for account in demo.accounts.values() if account.owner != client)
+    name = someone_else.owner.first_name
     try:
         portal.withdraw(session, someone_else.account_id, 1_000)
     except AccountNotFoundError as error:
-        print(f"  Tries Maria's account with the same session: refused, {type(error).__name__}: {error}")
-    print(f"  Maria's balance stays {someone_else.balance} {someone_else.currency.value}")
+        print(f"  Tries {name}'s account with the same session: refused, {type(error).__name__}: {error}")
+    print(f"  {name}'s balance stays {someone_else.balance} {someone_else.currency.value}")
 
     for info in snapshots:
         print(f"\n  Statement of {info['account_type']} {info['account_id'][:8]}:")
