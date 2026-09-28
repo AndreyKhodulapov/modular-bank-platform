@@ -152,6 +152,15 @@ def test_invalid_moment_leaves_the_state_untouched():
     assert (transaction.status, transaction.scheduled_at) == (TransactionStatus.PROCESSING, None)
 
 
+def test_requested_at_is_the_clients_moment_and_a_retry_does_not_move_it():
+    assert make_transfer().requested_at == CREATED
+    scheduled = make_transfer(scheduled_at=LATER)
+    assert scheduled.requested_at == LATER
+    scheduled.start(LATER)
+    scheduled.retry("night window", LATER, LATER + timedelta(hours=5))
+    assert (scheduled.scheduled_at, scheduled.requested_at) == (LATER + timedelta(hours=5), LATER)
+
+
 def test_to_dict_and_str():
     transaction = make_transfer(scheduled_at=LATER, priority="High")
     assert transaction.priority is TransactionPriority.HIGH
@@ -160,5 +169,6 @@ def test_to_dict_and_str():
     assert info["amount"] == "100.01"
     assert info["priority"] == "high"
     assert info["scheduled_at"] == LATER.isoformat()
+    assert info["requested_at"] == LATER.isoformat()
     assert info["finished_at"] is None
     assert "transfer" in str(transaction) and "pending" in str(transaction)

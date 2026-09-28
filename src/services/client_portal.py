@@ -1,16 +1,18 @@
 """The client portal: what a logged-in client does with their own accounts, through a session."""
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from exceptions import AccountNotFoundError, InvalidOperationError
 from models.client import Client
-from models.enums import AssetType
+from models.enums import AssetType, TransactionPriority, TransactionType
 from models.transaction import Transaction
 from services.bank import Bank
 from services.session import ClientSession
 from services.transaction_history import BalanceMovement
 from services.transaction_queue import TransactionQueue
+from utils import to_enum
 
 
 class ClientPortal:
@@ -34,8 +36,12 @@ class ClientPortal:
     comes in through the bank (``Bank.deposit()``, an account the bank opens
     with money), not through a client's session. So there is no ``deposit``
     here, an account opens empty, and a transaction submitted here must debit
-    one of the client's accounts. It only enters the queue: the processor
-    runs it later on the bank's behalf, when the session may be long gone.
+    one of the client's accounts. The portal builds the transaction itself
+    from what the client asks for, stamping ``created_at`` by the bank's
+    clock and giving it its id, so the moments risk control scores are the
+    bank's record of when the client acted, not the client's word. The
+    transaction only enters the queue: the processor runs it later on the
+    bank's behalf, when the session may be long gone.
     """
 
     # the portal passes these to the bank itself: the client and the session come from the session,
@@ -91,24 +97,44 @@ class ClientPortal:
         self._owner_of(session, account_id)
         return self._bank.divest(account_id, asset_type, amount, actor=session)
 
-    def submit(self, session: ClientSession, transaction: Transaction, queue: TransactionQueue) -> Transaction:
-        """Queue a transaction that debits one of the client's accounts.
+    def submit(
+        self,
+        session: ClientSession,
+        queue: TransactionQueue,
+        transaction_type: TransactionType | str,
+        amount: object,
+        currency: object,
+        *,
+        sender_id: str,
+        recipient_id: str | None = None,
+        priority: TransactionPriority | str = TransactionPriority.NORMAL,
+        scheduled_at: datetime | None = None,
+    ) -> Transaction:
+        """Build a transaction that debits ``sender_id``, one of the client's accounts, and queue it.
 
-        The sender must be the client's account; the recipient of a transfer
-        may be anyone's. A deposit has no sender and is not the client's to
-        submit: it is the bank's credit.
+        The recipient of a transfer may be anyone's account. A deposit has
+        no sender and is not the client's to submit: it is the bank's
+        credit. ``created_at`` is the bank's clock now; the id is new.
         """
         client = self._client(session)
-        if not isinstance(transaction, Transaction):
-            raise InvalidOperationError("transaction must be a Transaction instance.")
         if not isinstance(queue, TransactionQueue):
             raise InvalidOperationError("queue must be a TransactionQueue instance.")
-        if transaction.sender_id is None:
-            raise InvalidOperationError(
-                f"A {transaction.transaction_type.value} credits an account; the bank makes it, not the client."
-            )
-        if transaction.sender_id not in client.account_ids:
-            raise AccountNotFoundError(transaction.sender_id)
+        kind = to_enum(TransactionType, transaction_type, field="transaction type")
+        needs_sender, _ = Transaction.PARTIES[kind]
+        if not needs_sender:
+            raise InvalidOperationError(f"A {kind.value} credits an account; the bank makes it, not the client.")
+        if sender_id not in client.account_ids:
+            raise AccountNotFoundError(sender_id)
+        transaction = Transaction(
+            kind,
+            amount,
+            currency,
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            priority=priority,
+            scheduled_at=scheduled_at,
+            created_at=self._bank.now(),
+        )
         return queue.add(transaction, actor=session)
 
     def statement(self, session: ClientSession, account_id: str) -> list[BalanceMovement]:

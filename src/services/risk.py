@@ -76,28 +76,30 @@ class RiskAssessment:
 class RiskHistory:
     """What the analyzer remembers between assessments.
 
-    - when each transaction was first assessed, per client: a retry of the
-      same transaction is not a new operation for the frequency rule;
+    - when each assessed transaction was requested, per client
+      (``Transaction.requested_at``): the client's moment, so a retry the
+      bank scheduled is neither a new operation nor a later one for the
+      frequency rule;
     - which sender -> recipient pairs already completed a transfer.
     """
 
     def __init__(self) -> None:
-        self._first_seen: dict[str, tuple[str, datetime]] = {}
+        self._requested: dict[str, tuple[str, datetime]] = {}
         self._known_pairs: set[tuple[str, str]] = set()
 
-    def remember(self, transaction_id: str, client_id: str, moment: datetime) -> None:
-        self._first_seen.setdefault(transaction_id, (client_id, moment))
+    def remember(self, transaction_id: str, client_id: str, requested_at: datetime) -> None:
+        self._requested.setdefault(transaction_id, (client_id, requested_at))
 
     def count_recent(self, client_id: str, since: datetime, until: datetime, *, current: str | None = None) -> int:
-        """Distinct transactions of the client first seen in ``(since, until]``.
+        """Distinct transactions of the client requested in ``(since, until]``.
 
-        ``current`` is always counted, even when a retry of it was first seen
-        before ``since``.
+        ``current`` is always counted, even when it was requested before
+        ``since``.
         """
         others = sum(
             1
-            for transaction_id, (owner, first_seen) in self._first_seen.items()
-            if transaction_id != current and owner == client_id and since < first_seen <= until
+            for transaction_id, (owner, requested_at) in self._requested.items()
+            if transaction_id != current and owner == client_id and since < requested_at <= until
         )
         return others + (1 if current is not None else 0)
 
@@ -157,7 +159,13 @@ class LargeAmountRule(RiskRule):
 
 
 class HighFrequencyRule(RiskRule):
-    """Many transactions of one client in a short window; the ``threshold``-th one fires, the current one included."""
+    """Many transactions of one client in a short window; the ``threshold``-th one fires, the current one included.
+
+    The window ends at the moment the current transaction was requested and
+    counts the client's transactions requested within it: a batch the bank
+    holds back (the night window) and runs in one go is still spread over
+    the moments the client sent it.
+    """
 
     name = "high_frequency"
 
@@ -171,10 +179,11 @@ class HighFrequencyRule(RiskRule):
         self.window = window
 
     def evaluate(self, context: RiskContext, history: RiskHistory) -> RiskFactor | None:
+        requested_at = context.transaction.requested_at
         count = history.count_recent(
             context.client_id,
-            context.moment - self.window,
-            context.moment,
+            requested_at - self.window,
+            requested_at,
             current=context.transaction.transaction_id,
         )
         if count < self.threshold:
@@ -208,14 +217,15 @@ class NewRecipientRule(RiskRule):
 
 
 class NightOperationRule(RiskRule):
-    """A transaction created late in the evening or at night; the window may cross midnight.
+    """A transaction requested late in the evening or at night; the window may cross midnight.
 
     It is wider than the bank's hard ban (00:00-05:00): at its edges an
     operation is still allowed, but looks riskier. The rule looks at
-    ``created_at``, the moment the client acted, not at the moment of the
-    assessment: the bank retries a transaction refused in the night window
-    when the window ends, and a retry the bank scheduled must not make the
-    client look worse than the submission did.
+    ``requested_at`` - when the client created the transaction, or the
+    moment they scheduled it for - not at the moment of the assessment: the
+    bank retries a transaction refused in the night window when the window
+    ends, and a retry the bank scheduled must not make the client look
+    worse than their request did.
     """
 
     name = "night_operation"
@@ -233,10 +243,10 @@ class NightOperationRule(RiskRule):
         return moment >= self.start or moment < self.end
 
     def evaluate(self, context: RiskContext, history: RiskHistory) -> RiskFactor | None:
-        created_at = context.transaction.created_at
-        if not self._is_night(created_at.time()):
+        requested_at = context.transaction.requested_at
+        if not self._is_night(requested_at.time()):
             return None
-        return RiskFactor(self.name, self.score, f"created at {created_at:%H:%M}")
+        return RiskFactor(self.name, self.score, f"requested at {requested_at:%H:%M}")
 
 
 def default_rules() -> list[RiskRule]:
@@ -295,7 +305,7 @@ class RiskAnalyzer:
     def assess(self, context: RiskContext) -> RiskAssessment:
         transaction = context.transaction
         # remembered before the rules run, so the frequency rule counts the current transaction
-        self._history.remember(transaction.transaction_id, context.client_id, context.moment)
+        self._history.remember(transaction.transaction_id, context.client_id, transaction.requested_at)
         factors = tuple(factor for rule in self._rules if (factor := rule.evaluate(context, self._history)) is not None)
         score = sum(factor.score for factor in factors)
         assessment = RiskAssessment(

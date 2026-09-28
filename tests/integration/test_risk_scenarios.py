@@ -81,18 +81,19 @@ def test_ordinary_and_suspicious_transactions(world, tmp_path):
     ]
     report = run(queue, processor, clock, NOON, *ordinary)
     assert report.completed == ordinary
-    repeat = make("transfer", 3_000, "RUB", maria, alina_rub)
-    run(queue, processor, clock, NOON.replace(minute=5), repeat)
+    repeat = make("transfer", 3_000, "RUB", maria, alina_rub, at=NOON.replace(minute=5))
+    run(queue, processor, clock, repeat.created_at, repeat)
     assert repeat.status is TransactionStatus.COMPLETED
 
     # suspicious: a large amount to a brand-new account, then a very large one abroad
-    large = make("transfer", 6_000, "USD", oleg, fresh)  # 540 000 RUB: large 40 + new account 20
-    huge = make("external_transfer", 25_000, "USD", oleg, "CY17-0020-0128-0000-0012-0052-7600")  # 70 + 20
-    run(queue, processor, clock, NOON.replace(hour=13), large, huge)
+    afternoon = NOON.replace(hour=13)
+    large = make("transfer", 6_000, "USD", oleg, fresh, at=afternoon)  # 540 000 RUB: large 40 + new account 20
+    huge = make("external_transfer", 25_000, "USD", oleg, "CY17-0020-0128-0000-0012-0052-7600", at=afternoon)  # 70 + 20
+    run(queue, processor, clock, afternoon, large, huge)
     assert (large.status, huge.status) == (TransactionStatus.COMPLETED, TransactionStatus.FAILED)
 
-    # six quick transfers to the new account: the fifth and the sixth add the frequency factor
-    rapid = [make("transfer", 1_000, "KZT", alina_kzt, fresh) for _ in range(6)]
+    # six quick transfers to the new account, all sent within a minute: the fifth and the sixth add the frequency factor
+    rapid = [make("transfer", 1_000, "KZT", alina_kzt, fresh, at=NOON.replace(hour=14)) for _ in range(6)]
     run(queue, processor, clock, NOON.replace(hour=14), *rapid)
     assert all(transaction.status is TransactionStatus.COMPLETED for transaction in rapid)
 

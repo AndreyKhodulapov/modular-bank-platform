@@ -214,6 +214,10 @@ amounts and enum members are values: two equal amounts are interchangeable.
   account alone, because the owner did not send that money, and a risk
   profile built from the log must not get worse from what others do to a
   client. A credit the owner makes through their own session is theirs.
+  Transaction and risk events answer a different question - whose money
+  moved - and name the account's owner, a deposit's recipient included:
+  money arriving on an account is part of that account's risk picture even
+  when someone else sent it.
 
 ## Client sessions
 
@@ -226,8 +230,9 @@ amounts and enum members are values: two equal amounts are interchangeable.
   an optional `actor=`. The portal adds the question the bank does not ask:
   who acts.
 - **Why the bank does not demand a session itself.** Much of what it does is
-  not a client acting now. A client submits a transaction through the
-  portal, while the processor runs it later on the bank's behalf, after a
+  not a client acting now. A client asks for a transaction through the
+  portal, which builds and queues it, while the processor runs it later on
+  the bank's behalf, after a
   retry or the end of the night window, when the session may be long over;
   interest, refunds and reports have no client at all. Checking the session
   at submission and executing as the bank is how the rights and the work are
@@ -443,18 +448,22 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   goes through, `medium` goes through but is logged as a warning for a
   review, `high` is refused. A blocked transaction fails without retry:
   trying it again would get the same score.
-- **The client's moment, not the bank's.** The night rule reads
-  `created_at`, when the client made the transaction, while the other
-  rules and the assessment itself use the moment of the attempt. The bank
-  retries a transaction refused by the night ban at 05:00, inside the
-  analyzer's wider night; scoring that moment would add a night factor the
-  client never earned and could turn a `medium` submission into a blocked
-  one. `created_at` is given by whoever creates the transaction (there is
-  no clock in the model), so a client channel that trusts its input trusts
-  that moment too; here the programs stamp it from the bank's clock.
+- **The client's moment, not the bank's.** The night and frequency rules
+  read `Transaction.requested_at` - the moment the client created the
+  transaction, or the moment they scheduled it for - while the amount and
+  recipient rules and the assessment itself use the moment of the attempt.
+  The bank retries a transaction refused by the night ban at 05:00, inside
+  the analyzer's wider night, and runs a night's worth of held-back
+  transactions in one go; scoring those moments would add a night factor
+  and a frequency factor the client never earned and could turn a
+  `medium` request into a blocked one. `requested_at` is fixed when the
+  transaction is made and a retry does not move it. The model has no
+  clock, so whoever builds the transaction gives the moment: the programs
+  and the client portal stamp it from the bank's clock, which is why the
+  portal builds the transaction itself instead of accepting one.
 - **State for behavioural rules.** Frequency and "new recipient" depend on
   history, so the analyzer keeps a small `RiskHistory`: when each
-  transaction was first seen (a retry does not count as a new operation)
+  transaction was requested (a retry does not count as a new operation)
   and which sender -> recipient pairs already completed a transfer. The
   bank remembers when each account was opened, so the models stay free of
   clocks.

@@ -118,7 +118,7 @@ through it; the bank's own API stays open to the back office.
   is refused as `InvalidSessionError`).
 - `ClientPortal(bank)` - what a logged-in client does: `accounts()`,
   `open_account()`, `close_account()`, `freeze_account()`, `withdraw()`,
-  `invest()`, `divest()`, `submit()` (a transaction to the queue),
+  `invest()`, `divest()`, `submit()` (builds a transaction and queues it),
   `statement()` and `transactions()`. Each method resolves the session to
   its client first (`InvalidSessionError`, `SessionExpiredError`), then
   checks that the account is the client's: someone else's account is
@@ -132,6 +132,11 @@ through it; the bank's own API stays open to the back office.
   through the bank itself (`Bank.deposit()`, an account the bank opens with
   money), and a client moves it between accounts by transfers. A savings
   account with a `min_balance` is therefore opened by the bank.
+- The portal builds a transaction itself: `submit(session, queue, type,
+  amount, currency, sender_id=..., recipient_id=..., priority=...,
+  scheduled_at=...)` stamps `created_at` by the bank's clock and gives it a
+  new id, so risk control scores the moment the bank saw the request, not
+  a moment the client wrote in.
 - The portal hands out snapshots (`get_account_info()`), amounts and history
   records, never the account objects, whose money methods would move money
   past the bank and the session.
@@ -167,6 +172,8 @@ portal.accounts(session)  # InvalidSessionError
   `withdrawal`, `transfer`, `external_transfer`), amount, currency, fee,
   sender and recipient, priority, status, failure reason, attempts, the
   amounts actually debited and credited, and the timestamps `created_at`,
+  `requested_at` (`scheduled_at` as the client gave it, else `created_at`;
+  a retry never moves it),
   `scheduled_at`, `updated_at`, `finished_at`. The status follows a strict
   state machine:
 
@@ -301,9 +308,9 @@ for movement in bank.history.movements(account.account_id):
   | Rule | Fires when | Score |
   | --- | --- | --- |
   | `large_amount` | the amount is at least 500 000 RUB / at least 2 000 000 RUB | 40 / 70 |
-  | `high_frequency` | the client's 5th transaction within 10 minutes (a retry is not a new transaction) | 30 |
+  | `high_frequency` | the client's 5th transaction requested within 10 minutes (by `requested_at`; a retry is not a new transaction) | 30 |
   | `new_recipient` | a transfer to an account opened less than 7 days ago, or to a recipient the sender has never paid before (the client's own accounts included) | 20 |
-  | `night_operation` | the transaction was created between 22:00 and 06:00 (by `created_at`, not by when the bank runs or retries it) | 20 |
+  | `night_operation` | the transaction was requested between 22:00 and 06:00 (`requested_at`: the moment it was created, or the moment the client scheduled it for; not the moment the bank runs or retries it) | 20 |
 
   Levels: `low` below 40, `medium` from 40, `high` from 70.
 - Blocking: before any money moves, the processor calls

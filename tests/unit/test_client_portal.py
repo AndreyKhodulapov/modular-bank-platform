@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -138,12 +138,14 @@ def test_an_unknown_account_gets_the_same_answer(portal, session, operation):
         operation(portal, session, "ACC-404")
 
 
-def test_submit_queues_a_transfer_from_the_clients_account(portal, session, own, foreign, bank, clock):
+def test_submit_builds_the_transfer_from_the_clients_account_and_queues_it(portal, session, own, foreign, bank, clock):
     queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
-    transfer = Transaction(
-        "transfer", 300, "RUB", sender_id=own.account_id, recipient_id=foreign.account_id, created_at=clock()
-    )
-    assert portal.submit(session, transfer, queue) is transfer
+    clock.moment += timedelta(minutes=10)  # the bank's clock now, whatever the client says
+    own_id, foreign_id = own.account_id, foreign.account_id
+    transfer = portal.submit(session, queue, "transfer", 300, "RUB", sender_id=own_id, recipient_id=foreign_id)
+    assert (transfer.sender_id, transfer.recipient_id, transfer.amount) == (own_id, foreign_id, 300)
+    assert (transfer.created_at, transfer.requested_at, transfer.priority.name) == (clock(), clock(), "NORMAL")
+    assert queue.get(transfer.transaction_id) is transfer
     assert session_ids(bank, "transaction_queued") == [session.session_id]
 
     TransactionProcessor(bank).process_queue(queue)  # later, by the bank itself
@@ -152,28 +154,36 @@ def test_submit_queues_a_transfer_from_the_clients_account(portal, session, own,
     assert "session_id" not in bank.audit_log.filter(event="transaction_completed")[0].details
 
 
-def test_submit_refuses_a_transfer_from_another_account(portal, session, own, foreign, queue, clock):
-    transaction = Transaction(
-        "transfer", 10, "RUB", sender_id=foreign.account_id, recipient_id=own.account_id, created_at=clock()
+def test_submit_keeps_the_clients_priority_and_schedule(portal, session, own, queue, clock):
+    tomorrow = clock() + timedelta(days=1)
+    withdrawal = portal.submit(
+        session, queue, "withdrawal", 10, "RUB", sender_id=own.account_id, priority="urgent", scheduled_at=tomorrow
     )
+    assert (withdrawal.priority.name, withdrawal.scheduled_at) == ("URGENT", tomorrow)
+    assert withdrawal.requested_at == tomorrow
+    assert queue.pending() == [withdrawal]
+
+
+def test_submit_refuses_a_transfer_from_another_account(portal, session, own, foreign, queue):
     with pytest.raises(AccountNotFoundError):
-        portal.submit(session, transaction, queue)
+        portal.submit(session, queue, "transfer", 10, "RUB", sender_id=foreign.account_id, recipient_id=own.account_id)
     assert len(queue) == 0
 
 
-def test_submit_refuses_a_deposit_even_to_the_clients_own_account(portal, session, own, queue, clock):
-    transaction = Transaction("deposit", 10, "RUB", recipient_id=own.account_id, created_at=clock())
+def test_submit_refuses_a_deposit_even_to_the_clients_own_account(portal, session, own, queue):
     with pytest.raises(InvalidOperationError, match="the bank makes it"):
-        portal.submit(session, transaction, queue)
+        portal.submit(session, queue, "deposit", 10, "RUB", sender_id=own.account_id)
     assert len(queue) == 0
 
 
-def test_submit_rejects_what_is_not_a_transaction_or_a_queue(portal, session, own, queue, clock):
-    with pytest.raises(InvalidOperationError):
-        portal.submit(session, "transfer", queue)
-    transaction = Transaction("withdrawal", 10, "RUB", sender_id=own.account_id, created_at=clock())
+def test_submit_rejects_bad_input_before_the_queue_sees_it(portal, session, own, queue):
     with pytest.raises(InvalidOperationError, match="queue"):
-        portal.submit(session, transaction, [])
+        portal.submit(session, [], "withdrawal", 10, "RUB", sender_id=own.account_id)
+    with pytest.raises(InvalidOperationError, match="transaction type"):
+        portal.submit(session, queue, "refund", 10, "RUB", sender_id=own.account_id)
+    with pytest.raises(InvalidOperationError):
+        portal.submit(session, queue, "withdrawal", -10, "RUB", sender_id=own.account_id)
+    assert len(queue) == 0
 
 
 def test_transactions_show_the_clients_only(portal, session, own, foreign, bank, clock):
