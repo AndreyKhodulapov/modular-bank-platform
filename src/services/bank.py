@@ -183,7 +183,7 @@ class Bank:
         the account alone, unless the client made it through their session.
         """
         account_id = account.account_id if account is not None else None
-        attempted_by = client.client_id if not incoming or actor is not None else None
+        attempted_by = self._attempted_by(client, incoming=incoming, actor=actor)
         self._security.ensure_daytime(action, client_id=attempted_by, account_id=account_id, actor=actor)
         if not incoming and client.is_blocked:
             self._security.flag(
@@ -194,6 +194,16 @@ class Bank:
                 actor=actor,
             )
             raise ClientBlockedError(client.client_id)
+
+    @staticmethod
+    def _attempted_by(client: Client, *, incoming: bool, actor: ClientSession | None) -> str | None:
+        """Whose attempt a refused operation is: the client's, unless someone else sent them money.
+
+        An ``incoming`` credit is not the account owner's doing, so it is
+        recorded on the account alone; one the owner made through their own
+        session is theirs.
+        """
+        return client.client_id if not incoming or actor is not None else None
 
     @staticmethod
     def _check_actor(actor: ClientSession | None, client: Client) -> None:
@@ -405,9 +415,7 @@ class Bank:
     ) -> T:
         """Run ``operation`` and record it as suspicious when the account turns out frozen or closed.
 
-        As in ``_guard``, an ``incoming`` credit is someone else's attempt:
-        it is recorded on the account alone, not on its owner, unless the
-        owner made it through their own session.
+        The attempt is attributed as in ``_guard`` (``_attempted_by``).
         """
         try:
             return operation()
@@ -415,7 +423,7 @@ class Bank:
             self._security.flag(
                 SuspicionReason.INACTIVE_ACCOUNT_OPERATION,
                 f"{action} on a {account.status.value} account",
-                client_id=account.owner.client_id if not incoming or actor is not None else None,
+                client_id=self._attempted_by(account.owner, incoming=incoming, actor=actor),
                 account_id=account.account_id,
                 actor=actor,
             )
