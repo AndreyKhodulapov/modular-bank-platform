@@ -21,8 +21,11 @@ Sections:
    attempt to open an account that is already closed.
 3. Logging - totals of the audit log and the life cycle of a few
    transactions as the journal holds it.
-4. Client view - a client logs in and sees their accounts, a statement,
-   their transactions and the suspicious operations.
+4. Client view - a client logs in and acts through the client portal:
+   sees their accounts, takes cash, is refused someone else's account,
+   reads the statements and their transactions, then logs out; the bank
+   shows their suspicious operations and the events the audit log
+   recorded under the session.
 5. Reports - the bank report (totals, balances, transactions, top clients,
    the total balance over the day) and the risk report (assessments,
    suspicious operations, clients by risk, failures), as text.
@@ -45,8 +48,15 @@ from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError
+from exceptions import (
+    AccountNotFoundError,
+    AuthenticationError,
+    ClientBlockedError,
+    InvalidOperationError,
+    InvalidSessionError,
+)
 from logging_setup import configure_logging
 from models import BankAccount, Client, Transaction
 from reporting import Report, ReportBuilder
@@ -56,6 +66,7 @@ from services import (
     AuditLog,
     AuditReport,
     Bank,
+    ClientPortal,
     RiskEvent,
     SecurityGuard,
     TransactionEvent,
@@ -411,25 +422,47 @@ def show_logging(demo: DemoBank, simulation: Simulation) -> None:
             print(f"    {event}")
 
 
+def describe_account(info: dict[str, Any]) -> str:
+    """One line of an account snapshot, the way the client sees their own account."""
+    line = f"{info['account_type']} | ****{info['account_id'][-4:]} | {info['status']}"
+    line += f" | {info['balance']} {info['currency']}"
+    if "overdraft_limit" in info:
+        line += f" | overdraft {info['overdraft_limit']} | fee {info['withdrawal_fee']}"
+    if "total_value" in info:
+        line += f" | invested {info['invested_total']} | total {info['total_value']}"
+    return line
+
+
 def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
-    bank, client = demo.bank, demo.clients[key]
+    """The client logs in and acts through the portal; the suspicious operations are the bank's view of them."""
+    bank, client, accounts = demo.bank, demo.clients[key], demo.accounts
     print_section(4, f"Client view: {client.full_name}")
-    bank.authenticate_client(client.client_id, demo.passwords[key])
-    print("  Logged in")
+    session = bank.authenticate_client(client.client_id, demo.passwords[key])
+    portal = ClientPortal(bank)
+    print(f"  Logged in: session {session.session_id[:8]}, valid until {session.expires_at:%m-%d %H:%M}")
 
-    accounts = bank.search_accounts(client_id=client.client_id)
+    snapshots = portal.accounts(session)
     print("\n  Accounts:")
-    for account in accounts:
-        print(f"    {account}")
+    for info in snapshots:
+        print(f"    {describe_account(info)}")
 
-    for account in accounts:
-        print(f"\n  Statement of {account.account_type} {account.account_id[:8]}:")
-        for movement in bank.history.movements(account.account_id):
+    cash = portal.withdraw(session, accounts[f"{key}_invest"].account_id, 1_000)
+    print(f"\n  Takes 1_000 EUR in cash from the investment account: cash {cash} EUR")
+    someone_else = accounts["maria_rub"]
+    try:
+        portal.withdraw(session, someone_else.account_id, 1_000)
+    except AccountNotFoundError as error:
+        print(f"  Tries Maria's account with the same session: refused, {type(error).__name__}: {error}")
+    print(f"  Maria's balance stays {someone_else.balance} {someone_else.currency.value}")
+
+    for info in snapshots:
+        print(f"\n  Statement of {info['account_type']} {info['account_id'][:8]}:")
+        for movement in portal.statement(session, info["account_id"]):
             total = f"total {movement.total_value_after:>12}"
             print(f"    {movement}  {total}  {simulation.label(movement.transaction_id)}".rstrip())
 
     print("\n  Transactions:")
-    for transaction in bank.history.transactions(account_ids=[account.account_id for account in accounts]):
+    for transaction in portal.transactions(session):
         reason = f" - {transaction.failure_reason}" if transaction.failure_reason else ""
         print(
             f"    {transaction.finished_at:%m-%d %H:%M} {simulation.label(transaction.transaction_id):<24} "
@@ -437,12 +470,22 @@ def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
             f"{transaction.amount} {transaction.currency.value}{reason}"
         )
 
-    print("\n  Suspicious operations:")
+    print("\n  Suspicious operations, as the bank's audit log holds them:")
     for event in bank.audit_log.filter(client_id=client.client_id, min_level=AuditLevel.WARNING):
         if event.category in (AuditCategory.SECURITY, AuditCategory.RISK):
             print(f"    {event}")
     print()
     print_block(AuditReport(bank.audit_log, bank.risk_analyzer).client_risk_profile(client.client_id))
+
+    bank.logout(session)
+    try:
+        portal.accounts(session)
+    except InvalidSessionError as error:
+        print(f"\n  Logged out; the session is refused now: {type(error).__name__}: {error}")
+    events = [event for event in bank.audit_log if event.details.get("session_id") == session.session_id]
+    print(f"  The audit log names the session in {len(events)} events:")
+    for event in events:
+        print(f"    {event}")
 
 
 def show_reports(builder: ReportBuilder, since: datetime) -> list[Report]:

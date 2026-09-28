@@ -45,9 +45,14 @@ every run prints the same story:
    and by the model).
 3. **Logging** - the events of the audit log by name, and the life cycle
    of six transactions as the journal holds it.
-4. **Client view** - Oleg logs in and sees his accounts, a statement of
-   each (the balance movements, with the balance and the total value after
-   each), his transactions, his suspicious operations and his risk profile.
+4. **Client view** - Oleg logs in and acts through the client portal with
+   his session (see [Client sessions](#client-sessions)): he sees his
+   accounts, takes 1 000 EUR in cash, is refused Maria's account as one
+   that is not found, reads a statement of each account (the balance
+   movements, with the balance and the total value after each) and his
+   transactions. The bank shows his suspicious operations and his risk
+   profile. He logs out, the session is refused from then on, and the
+   program lists the audit events that name the session.
 5. **Reports** - the bank report (totals, balances by currency and account
    type, transactions by status and type, the top three clients, the total
    balance from the start of the day) and the risk report (assessments by
@@ -329,6 +334,52 @@ recorded as suspicious. The account types keep the rules (the rate, the
 portfolio), the bank owns the operations: `_apply_monthly_interest()`,
 `_invest()`, `_divest()` and `_refund()` of the models are internal, called
 by the bank only.
+
+### Client sessions
+
+A login opens a session, and a client acts on their own accounts only
+through it; the bank's own API stays open to the back office.
+
+- `Bank.authenticate_client(client_id, password)` returns a
+  `ClientSession` (`session_id`, `client_id`, `issued_at`, `expires_at` and
+  a secret `token`). It lives 30 minutes by the bank's clock, counted from
+  the login and never extended. Each login opens a new session and keeps
+  the others, one per device. `SecurityGuard` keeps only a hash of the
+  token and recognises a session exactly as it was issued.
+- A session ends with `Bank.logout(session)`, when it expires (its use is
+  then recorded as `expired_session`), or when the client is blocked;
+  unblocking does not bring it back, the client logs in again.
+- `ClientPortal(bank)` - what a logged-in client does: `accounts()`,
+  `open_account()`, `close_account()`, `freeze_account()`,
+  `unfreeze_account()`, `deposit()`, `withdraw()`, `invest()`, `divest()`,
+  `submit()` (a transaction to the queue), `statement()` and
+  `transactions()`. Each method resolves the session to its client first
+  (`InvalidSessionError`, `SessionExpiredError`), then checks that the
+  account is the client's: someone else's account is reported as
+  `AccountNotFoundError`, the same as a missing one, so the portal does not
+  confirm other clients' account numbers. A transaction is accepted when its
+  initiating account is the client's; the recipient of a transfer may be
+  anyone's.
+- The portal hands out snapshots (`get_account_info()`), amounts and history
+  records, never the account objects, whose money methods would move money
+  past the bank and the session.
+- The bank's rules do not change: the night window, a frozen account and
+  the amount review apply to a client with a session as to anyone. The bank
+  checks only that a session given as `actor=` belongs to the account's
+  owner, and names it in the audit log (see [Audit and Risk](#audit-and-risk)).
+- What stays with the back office: `Bank` itself takes no session. The
+  processor runs a submitted transaction later, on the bank's behalf, when
+  the session may be over; monthly interest, refunds and the reports are
+  the bank's own work.
+
+```python
+session = bank.authenticate_client(client.client_id, "secret-2026")
+portal = ClientPortal(bank)
+portal.withdraw(session, account_id, 1_000)  # the client's own account
+portal.withdraw(session, maria_account_id, 1_000)  # AccountNotFoundError
+bank.logout(session)
+portal.accounts(session)  # InvalidSessionError
+```
 
 ### Transactions
 

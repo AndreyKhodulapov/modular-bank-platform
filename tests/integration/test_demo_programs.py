@@ -117,15 +117,23 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "Maria's balance stayed 1107001.00 RUB (was 1107001.00)" in output
     assert "through the bank: The bank sets status of a new account itself." in output
     assert "by the model itself: An account cannot be created closed" in output
-    # the client view and the reports
-    assert "PremiumAccount | Sokolov Oleg | ****" in output
-    assert "| active | -1511.00 USD" in output
+    # the client view: a session, snapshots of the accounts, cash taken by hand, someone else's account refused
+    assert "Logged in: session " in output
+    assert ", valid until 09-25 10:30" in output
+    assert "PremiumAccount | ****" in output
+    assert "| active | -1511.00 USD | overdraft 3000.00 | fee 2.00" in output
+    assert "Takes 1_000 EUR in cash from the investment account: cash 11000.00 EUR" in output
+    assert "Tries Maria's account with the same session: refused, AccountNotFoundError: Account" in output
+    assert "Maria's balance stays 1107001.00 RUB" in output
     # the statement shows the balance and the total value: a portfolio move changes the first only
     assert "investment     -5000.00     11000.00 EUR  total     16000.00" in output
     assert "divestment     +1000.00     12000.00 EUR  total     16000.00" in output
+    assert "withdrawal     -1000.00     11000.00 EUR  total     15000.00" in output
+    assert "Logged out; the session is refused now: InvalidSessionError: Session" in output
+    assert "The audit log names the session in 2 events:" in output
     bank_report = output.split("= 5. Reports =")[1].split("  Risk report")[0]
     assert "open_accounts           11" in bank_report  # the closed CNY account is not counted
-    assert "total_balance           4331411.00" in bank_report  # the interest of the last round included
+    assert "total_balance           4231411.00" in bank_report  # the interest and the client's cash included
     assert "transactions            41" in bank_report  # the salary sent twice is a failed one
     assert "failure_rate_percent    22.5" in bank_report
     assert "tariff_fees             450.00" in bank_report
@@ -135,7 +143,7 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "CNY" not in bank_report
     # the balance history starts at the beginning of the day, before the salaries
     assert "2026-09-24 00:00     3940000.00\n    2026-09-24 09:00     4352971.00" in bank_report
-    assert "2026-09-25 10:00     4331411.00" in bank_report  # the interest; the portfolio move changes no value
+    assert "2026-09-25 10:00     4231411.00" in bank_report  # the interest and the cash; a portfolio move adds 0
     risk_report = output.split("  Risk report")[1].split("= 6. Export =")[0]
     assert "suspicious            7" in risk_report
     assert "blocked_by_risk       2" in risk_report
@@ -154,6 +162,10 @@ def test_main_program_writes_both_logs(main_run):
     # the log is counted in section 3, before the client view logs in
     assert names.count("client_logged_in") == 1
     assert f"The audit log holds {names.index('client_logged_in')} events of this run" in completed.stdout
+    # the client view logs in and out under one session, which both events name
+    session_events = [event for event in events if event["event"] in ("client_logged_in", "client_logged_out")]
+    assert [event["event"] for event in session_events] == ["client_logged_in", "client_logged_out"]
+    assert len({event["details"]["session_id"] for event in session_events}) == 1
     assert names.count("transaction_queued") >= 40  # a retry comes back through the queue
     assert names.count("transaction_cancelled") == 1
     assert names.count("operation_blocked") == 2
@@ -186,7 +198,7 @@ def test_main_program_exports_the_reports_and_charts(main_run):
 
     stamp = stamps.pop()
     bank = json.loads((folder / f"{stamp}_bank.json").read_text(encoding="utf-8"))
-    assert bank["sections"]["summary"]["total_balance"] == "4331411.00"
+    assert bank["sections"]["summary"]["total_balance"] == "4231411.00"
     assert [row["currency"] for row in bank["sections"]["balance_by_currency"]] == ["EUR", "KZT", "RUB", "USD"]
     client = json.loads((folder / f"{stamp}_client.json").read_text(encoding="utf-8"))
     assert client["title"] == "Client report: Sokolov Oleg"
