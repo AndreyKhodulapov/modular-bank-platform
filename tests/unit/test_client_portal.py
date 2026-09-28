@@ -5,6 +5,7 @@ import pytest
 
 from exceptions import (
     AccountNotFoundError,
+    InsufficientFundsError,
     InvalidOperationError,
     InvalidSessionError,
     OperationTimeRestrictedError,
@@ -50,18 +51,27 @@ def test_accounts_are_the_clients_own_as_snapshots(portal, session, own, foreign
     assert not any(isinstance(account, BankAccount) for account in accounts)
 
 
-def test_open_account_is_the_clients_empty_and_names_the_session(portal, session, client, bank):
-    opened = portal.open_account(session, "premium", currency="RUB", overdraft_limit=100)
+def test_open_account_is_the_clients_empty_without_terms_and_names_the_session(portal, session, client, bank):
+    opened = portal.open_account(session, "premium", currency="RUB")
     assert opened["account_id"] in client.account_ids
-    assert (opened["account_type"], opened["balance"]) == ("PremiumAccount", "0.00")
+    assert (opened["account_type"], opened["balance"], opened["overdraft_limit"]) == ("PremiumAccount", "0.00", "0.00")
     assert session_ids(bank, "account_opened") == [session.session_id]
+    with pytest.raises(InsufficientFundsError):  # no overdraft to draw on
+        portal.withdraw(session, opened["account_id"], 1)
 
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("actor", "someone-else"), ("client_id", "someone-else"), ("initial_balance", 500)],
+    [
+        ("actor", "someone-else"),
+        ("client_id", "someone-else"),
+        ("initial_balance", 500),
+        ("overdraft_limit", 1_000_000),
+        ("withdrawal_fee", 0),
+        ("monthly_rate", 1),
+    ],
 )
-def test_open_account_refuses_the_names_the_portal_sets(portal, session, client, name, value):
+def test_open_account_refuses_the_balance_and_the_terms_the_bank_sets(portal, session, client, name, value):
     with pytest.raises(InvalidOperationError, match=name):
         portal.open_account(session, currency="RUB", **{name: value})
     assert len(client.account_ids) == 0

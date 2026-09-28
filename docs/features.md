@@ -130,8 +130,11 @@ through it; the bank's own API stays open to the back office.
   opened through it is empty (`initial_balance` is refused) and a `deposit`
   transaction is not accepted: money the bank does not hold yet comes in
   through the bank itself (`Bank.deposit()`, an account the bank opens with
-  money), and a client moves it between accounts by transfers. A savings
-  account with a `min_balance` is therefore opened by the bank.
+  money), and a client moves it between accounts by transfers. The terms
+  of an account are refused as well (`overdraft_limit`, `withdrawal_fee`,
+  `monthly_rate`): an overdraft and interest are money the bank promises.
+  A premium account with an overdraft, a savings account with interest or
+  with a `min_balance` is therefore opened by the bank.
 - The portal builds a transaction itself: `submit(session, queue, type,
   amount, currency, sender_id=..., recipient_id=..., priority=...,
   scheduled_at=...)` stamps `created_at` by the bank's clock and gives it a

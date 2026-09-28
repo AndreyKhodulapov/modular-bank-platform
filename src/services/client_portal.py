@@ -35,7 +35,9 @@ class ClientPortal:
     The portal never credits an account: money the bank does not hold yet
     comes in through the bank (``Bank.deposit()``, an account the bank opens
     with money), not through a client's session. So there is no ``deposit``
-    here, an account opens empty, and a transaction submitted here must debit
+    here, an account opens empty and on the bank's terms (an overdraft, a
+    withdrawal fee and an interest rate are money the bank promises, so the
+    client does not set them), and a transaction submitted here must debit
     one of the client's accounts. The portal builds the transaction itself
     from what the client asks for, stamping ``created_at`` by the bank's
     clock and giving it its id, so the moments risk control scores are the
@@ -44,9 +46,10 @@ class ClientPortal:
     bank's behalf, when the session may be long gone.
     """
 
-    # the portal passes these to the bank itself: the client and the session come from the session,
-    # and a new account opens empty
-    RESERVED_PARAMS = frozenset({"client_id", "actor", "initial_balance"})
+    # the client and the session come from the session; the balance and the terms of a new account are the bank's
+    RESERVED_PARAMS = frozenset(
+        {"client_id", "actor", "initial_balance", "overdraft_limit", "withdrawal_fee", "monthly_rate"}
+    )
 
     def __init__(self, bank: Bank) -> None:
         if not isinstance(bank, Bank):
@@ -68,11 +71,15 @@ class ClientPortal:
         return [account.get_account_info() for account in self._bank.search_accounts(client_id=client.client_id)]
 
     def open_account(self, session: ClientSession, account_type: str = "basic", **params: object) -> dict[str, Any]:
-        """Open an empty account of ``account_type`` for the client; money comes to it by a deposit or a transfer."""
+        """Open an empty account of ``account_type`` for the client; money comes to it by a deposit or a transfer.
+
+        The bank's terms (``overdraft_limit``, ``withdrawal_fee``, ``monthly_rate``)
+        are refused: an account with them is the bank's to open.
+        """
         client = self._client(session)
         reserved = sorted(self.RESERVED_PARAMS & params.keys())
         if reserved:
-            raise InvalidOperationError(f"The portal sets {', '.join(reserved)} of a new account itself.")
+            raise InvalidOperationError(f"A client does not set {', '.join(reserved)} of a new account.")
         account = self._bank.open_account(client.client_id, account_type, actor=session, **params)
         return account.get_account_info()
 

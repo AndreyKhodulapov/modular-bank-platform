@@ -250,8 +250,11 @@ amounts and enum members are values: two equal amounts are interchangeable.
   add to a balance, which is right for the back office (cash over the
   counter) and wrong for a session, where it would let a client credit
   themselves. So the portal has no `deposit()`, opens accounts empty and
-  accepts only transactions that debit the client's own account. The trust
-  boundary is the portal, not the bank.
+  accepts only transactions that debit the client's own account. An
+  overdraft and an interest rate are money the bank promises, so the
+  portal refuses those terms too: a premium account with an overdraft or a
+  savings account with a rate is the bank's to open. The trust boundary is
+  the portal, not the bank.
 - **One answer for someone else's and a missing account.** Both are
   `AccountNotFoundError`, so trying ids through the portal does not reveal
   which of them exist.
