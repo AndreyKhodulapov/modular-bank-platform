@@ -236,6 +236,13 @@ amounts and enum members are values: two equal amounts are interchangeable.
   dictionaries, amounts and history records. An account object in the
   client's hands would be a way around the bank: its `deposit()` and
   `withdraw()` are public and know nothing of sessions.
+- **The client channel creates no money.** The models have no notion of
+  where money comes from: `Bank.deposit()` and an opening balance simply
+  add to a balance, which is right for the back office (cash over the
+  counter) and wrong for a session, where it would let a client credit
+  themselves. So the portal has no `deposit()`, opens accounts empty and
+  accepts only transactions that debit the client's own account. The trust
+  boundary is the portal, not the bank.
 - **One answer for someone else's and a missing account.** Both are
   `AccountNotFoundError`, so trying ids through the portal does not reveal
   which of them exist.

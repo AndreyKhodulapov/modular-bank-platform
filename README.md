@@ -355,16 +355,21 @@ through it; the bank's own API stays open to the back office.
   (one used after it expired was already closed by that use, so the logout
   is refused as `InvalidSessionError`).
 - `ClientPortal(bank)` - what a logged-in client does: `accounts()`,
-  `open_account()`, `close_account()`, `freeze_account()`, `deposit()`,
-  `withdraw()`, `invest()`, `divest()`, `submit()` (a transaction to the
-  queue), `statement()` and `transactions()`. Each method resolves the
-  session to its client first
-  (`InvalidSessionError`, `SessionExpiredError`), then checks that the
-  account is the client's: someone else's account is reported as
-  `AccountNotFoundError`, the same as a missing one, so the portal does not
-  confirm other clients' account numbers. A transaction is accepted when its
-  initiating account is the client's; the recipient of a transfer may be
-  anyone's.
+  `open_account()`, `close_account()`, `freeze_account()`, `withdraw()`,
+  `invest()`, `divest()`, `submit()` (a transaction to the queue),
+  `statement()` and `transactions()`. Each method resolves the session to
+  its client first (`InvalidSessionError`, `SessionExpiredError`), then
+  checks that the account is the client's: someone else's account is
+  reported as `AccountNotFoundError`, the same as a missing one, so the
+  portal does not confirm other clients' account numbers. A transaction is
+  accepted when its sender is the client's account; the recipient of a
+  transfer may be anyone's.
+- The portal never credits an account. It has no `deposit()`, an account
+  opened through it is empty (`initial_balance` is refused) and a `deposit`
+  transaction is not accepted: money the bank does not hold yet comes in
+  through the bank itself (`Bank.deposit()`, an account the bank opens with
+  money), and a client moves it between accounts by transfers. A savings
+  account with a `min_balance` is therefore opened by the bank.
 - The portal hands out snapshots (`get_account_info()`), amounts and history
   records, never the account objects, whose money methods would move money
   past the bank and the session.

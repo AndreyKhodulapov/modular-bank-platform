@@ -50,35 +50,38 @@ def test_accounts_are_the_clients_own_as_snapshots(portal, session, own, foreign
     assert not any(isinstance(account, BankAccount) for account in accounts)
 
 
-def test_open_account_is_the_clients_and_names_the_session(portal, session, client, bank):
-    opened = portal.open_account(session, "savings", currency="RUB", initial_balance=500, min_balance=100)
+def test_open_account_is_the_clients_empty_and_names_the_session(portal, session, client, bank):
+    opened = portal.open_account(session, "premium", currency="RUB", overdraft_limit=100)
     assert opened["account_id"] in client.account_ids
-    assert opened["account_type"] == "SavingsAccount"
+    assert (opened["account_type"], opened["balance"]) == ("PremiumAccount", "0.00")
     assert session_ids(bank, "account_opened") == [session.session_id]
 
 
-@pytest.mark.parametrize("name", ["actor", "client_id"])
-def test_open_account_refuses_the_names_the_portal_sets(portal, session, client, name):
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("actor", "someone-else"), ("client_id", "someone-else"), ("initial_balance", 500)],
+)
+def test_open_account_refuses_the_names_the_portal_sets(portal, session, client, name, value):
     with pytest.raises(InvalidOperationError, match=name):
-        portal.open_account(session, currency="RUB", **{name: "someone-else"})
+        portal.open_account(session, currency="RUB", **{name: value})
     assert len(client.account_ids) == 0
 
 
-def test_deposit_and_withdraw_move_the_clients_money(portal, session, own):
-    assert portal.deposit(session, own.account_id, 500) == Decimal("1500.00")
-    assert portal.withdraw(session, own.account_id, 200) == Decimal("1300.00")
+def test_the_portal_does_not_credit_an_account():
+    assert not hasattr(ClientPortal, "deposit")
+
+
+def test_withdraw_moves_the_clients_money(portal, session, own):
+    assert portal.withdraw(session, own.account_id, 200) == Decimal("800.00")
     statement = portal.statement(session, own.account_id)
-    assert [movement.kind for movement in statement] == [
-        MovementKind.OPENING,
-        MovementKind.DEPOSIT,
-        MovementKind.WITHDRAWAL,
-    ]
-    assert [movement.session_id for movement in statement] == [None, session.session_id, session.session_id]
+    assert [movement.kind for movement in statement] == [MovementKind.OPENING, MovementKind.WITHDRAWAL]
+    assert [movement.session_id for movement in statement] == [None, session.session_id]
 
 
-def test_large_amount_names_the_session(portal, session, own, bank):
-    portal.deposit(session, own.account_id, 600_000)
-    assert session_ids(bank, "large_operation") == [session.session_id]
+def test_large_amount_names_the_session(portal, session, bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=600_000)
+    portal.withdraw(session, account.account_id, 600_000)
+    assert session_ids(bank, "large_operation") == [None, session.session_id]  # the opening, then the withdrawal
 
 
 def test_invest_and_divest_on_the_clients_investment_account(portal, session, bank, client):
@@ -112,7 +115,6 @@ def test_operation_refused_by_the_bank_names_the_session(portal, own, bank, clie
 FOREIGN_OPERATIONS = [
     pytest.param(lambda portal, session, account_id: portal.close_account(session, account_id), id="close"),
     pytest.param(lambda portal, session, account_id: portal.freeze_account(session, account_id), id="freeze"),
-    pytest.param(lambda portal, session, account_id: portal.deposit(session, account_id, 10), id="deposit"),
     pytest.param(lambda portal, session, account_id: portal.withdraw(session, account_id, 10), id="withdraw"),
     pytest.param(lambda portal, session, account_id: portal.invest(session, account_id, "bonds", 10), id="invest"),
     pytest.param(lambda portal, session, account_id: portal.divest(session, account_id, "bonds", 10), id="divest"),
@@ -150,16 +152,18 @@ def test_submit_queues_a_transfer_from_the_clients_account(portal, session, own,
     assert "session_id" not in bank.audit_log.filter(event="transaction_completed")[0].details
 
 
-@pytest.mark.parametrize(
-    ("kind", "parties"),
-    [
-        pytest.param("transfer", lambda own, foreign: {"sender_id": foreign, "recipient_id": own}, id="from foreign"),
-        pytest.param("deposit", lambda own, foreign: {"recipient_id": foreign}, id="deposit to foreign"),
-    ],
-)
-def test_submit_refuses_a_transaction_of_another_account(portal, session, own, foreign, queue, clock, kind, parties):
-    transaction = Transaction(kind, 10, "RUB", created_at=clock(), **parties(own.account_id, foreign.account_id))
+def test_submit_refuses_a_transfer_from_another_account(portal, session, own, foreign, queue, clock):
+    transaction = Transaction(
+        "transfer", 10, "RUB", sender_id=foreign.account_id, recipient_id=own.account_id, created_at=clock()
+    )
     with pytest.raises(AccountNotFoundError):
+        portal.submit(session, transaction, queue)
+    assert len(queue) == 0
+
+
+def test_submit_refuses_a_deposit_even_to_the_clients_own_account(portal, session, own, queue, clock):
+    transaction = Transaction("deposit", 10, "RUB", recipient_id=own.account_id, created_at=clock())
+    with pytest.raises(InvalidOperationError, match="the bank makes it"):
         portal.submit(session, transaction, queue)
     assert len(queue) == 0
 
@@ -167,8 +171,8 @@ def test_submit_refuses_a_transaction_of_another_account(portal, session, own, f
 def test_submit_rejects_what_is_not_a_transaction_or_a_queue(portal, session, own, queue, clock):
     with pytest.raises(InvalidOperationError):
         portal.submit(session, "transfer", queue)
-    transaction = Transaction("deposit", 10, "RUB", recipient_id=own.account_id, created_at=clock())
-    with pytest.raises(InvalidOperationError):
+    transaction = Transaction("withdrawal", 10, "RUB", sender_id=own.account_id, created_at=clock())
+    with pytest.raises(InvalidOperationError, match="queue"):
         portal.submit(session, transaction, [])
 
 

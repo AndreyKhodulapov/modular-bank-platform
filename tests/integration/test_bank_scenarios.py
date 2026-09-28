@@ -146,7 +146,7 @@ def test_two_clients_act_through_their_sessions_and_the_bank_runs_the_rest(bank,
 
     anna_rub = portal.open_account(anna_session, currency="RUB")["account_id"]
     boris_rub = portal.open_account(boris_session, currency="RUB")["account_id"]
-    portal.deposit(anna_session, anna_rub, 5_000)
+    bank.deposit(anna_rub, 5_000)  # the portal credits nothing: Anna brings the cash to the bank
     # Boris knows Anna's number: he may send money to it, not take money from it
     with pytest.raises(AccountNotFoundError):
         portal.withdraw(boris_session, anna_rub, 1_000)

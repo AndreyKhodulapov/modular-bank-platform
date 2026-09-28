@@ -30,12 +30,17 @@ class ClientPortal:
     money methods of an account model are public, and handing one out would
     let a client move money past the bank and the session.
 
-    A transaction submitted here only enters the queue: the processor runs
-    it later on the bank's behalf, when the session may be long gone.
+    The portal never credits an account: money the bank does not hold yet
+    comes in through the bank (``Bank.deposit()``, an account the bank opens
+    with money), not through a client's session. So there is no ``deposit``
+    here, an account opens empty, and a transaction submitted here must debit
+    one of the client's accounts. It only enters the queue: the processor
+    runs it later on the bank's behalf, when the session may be long gone.
     """
 
-    # the portal passes these to the bank itself: the client and the session come from the session
-    RESERVED_PARAMS = frozenset({"client_id", "actor"})
+    # the portal passes these to the bank itself: the client and the session come from the session,
+    # and a new account opens empty
+    RESERVED_PARAMS = frozenset({"client_id", "actor", "initial_balance"})
 
     def __init__(self, bank: Bank) -> None:
         if not isinstance(bank, Bank):
@@ -57,6 +62,7 @@ class ClientPortal:
         return [account.get_account_info() for account in self._bank.search_accounts(client_id=client.client_id)]
 
     def open_account(self, session: ClientSession, account_type: str = "basic", **params: object) -> dict[str, Any]:
+        """Open an empty account of ``account_type`` for the client; money comes to it by a deposit or a transfer."""
         client = self._client(session)
         reserved = sorted(self.RESERVED_PARAMS & params.keys())
         if reserved:
@@ -73,10 +79,6 @@ class ClientPortal:
         self._owner_of(session, account_id)
         return self._bank.freeze_account(account_id, actor=session).get_account_info()
 
-    def deposit(self, session: ClientSession, account_id: str, amount: object) -> Decimal:
-        self._owner_of(session, account_id)
-        return self._bank.deposit(account_id, amount, actor=session)
-
     def withdraw(self, session: ClientSession, account_id: str, amount: object) -> Decimal:
         self._owner_of(session, account_id)
         return self._bank.withdraw(account_id, amount, actor=session)
@@ -90,18 +92,23 @@ class ClientPortal:
         return self._bank.divest(account_id, asset_type, amount, actor=session)
 
     def submit(self, session: ClientSession, transaction: Transaction, queue: TransactionQueue) -> Transaction:
-        """Queue a transaction on behalf of one of the client's accounts.
+        """Queue a transaction that debits one of the client's accounts.
 
-        The initiating account (the sender, or the recipient of a deposit)
-        must be the client's; the recipient of a transfer may be anyone's.
+        The sender must be the client's account; the recipient of a transfer
+        may be anyone's. A deposit has no sender and is not the client's to
+        submit: it is the bank's credit.
         """
         client = self._client(session)
         if not isinstance(transaction, Transaction):
             raise InvalidOperationError("transaction must be a Transaction instance.")
         if not isinstance(queue, TransactionQueue):
             raise InvalidOperationError("queue must be a TransactionQueue instance.")
-        if transaction.initiator_id not in client.account_ids:
-            raise AccountNotFoundError(transaction.initiator_id)
+        if transaction.sender_id is None:
+            raise InvalidOperationError(
+                f"A {transaction.transaction_type.value} credits an account; the bank makes it, not the client."
+            )
+        if transaction.sender_id not in client.account_ids:
+            raise AccountNotFoundError(transaction.sender_id)
         return queue.add(transaction, actor=session)
 
     def statement(self, session: ClientSession, account_id: str) -> list[BalanceMovement]:
