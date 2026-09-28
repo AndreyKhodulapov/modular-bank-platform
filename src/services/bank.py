@@ -269,7 +269,7 @@ class Bank:
             balance_after=account.balance,
             total_value_after=account.total_value,
             transaction_id=transaction_id,
-            session_id=session_details(actor).get("session_id"),
+            session_id=actor.session_id if actor is not None else None,
         )
 
     def _review_amount(
@@ -499,12 +499,24 @@ class Bank:
         self._record_account(AccountEvent.FROZEN, account, "account frozen", actor=actor)
         return account
 
-    def unfreeze_account(self, account_id: str, *, actor: ClientSession | None = None) -> BankAccount:
+    def unfreeze_account(self, account_id: str) -> BankAccount:
+        """Lift a freeze; the bank's decision, so it takes no client session.
+
+        A client may freeze their own account through their session, but
+        the account does not remember who froze it: letting a client lift a
+        freeze would let them lift one the bank imposed. Like unblocking, it
+        gives access back, so the night window applies. The attempt is the
+        bank's, not the client's: a night one is recorded on the account
+        alone, a blocked owner does not stop it, and a refusal by the
+        account's own rule (closed, not frozen) is not recorded as
+        suspicious, as with ``apply_monthly_interest()``.
+        """
         account = self.get_account(account_id)
-        self._check_actor(actor, account.owner)
-        self._guard("unfreeze_account", account.owner, account, actor=actor)
-        self._run_on_account("unfreeze_account", account, account.unfreeze, actor)
-        self._record_account(AccountEvent.UNFROZEN, account, "account unfrozen", actor=actor)
+        # only a real unfreeze is a night-restricted action; any other account gets the model's error
+        if account.status is AccountStatus.FROZEN:
+            self._security.ensure_daytime("unfreeze_account", account_id=account_id)
+        account.unfreeze()
+        self._record_account(AccountEvent.UNFROZEN, account, "account unfrozen")
         return account
 
     def deposit(

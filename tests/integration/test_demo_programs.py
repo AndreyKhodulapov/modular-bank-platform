@@ -120,11 +120,12 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "by the model itself: An account cannot be created closed" in output
     # the client view: a session, snapshots of the accounts, cash taken by hand, someone else's account refused
     assert re.search(r"Logged in: session \w{8} of client \w{8}, valid until 09-25 10:30", output)
-    assert "PremiumAccount | ****" in output
+    assert re.search(r"PremiumAccount \| \w{8} \| active \| -1511\.00 USD", output)
     assert "| active | -1511.00 USD | overdraft 3000.00 | fee 2.00" in output
-    assert "Takes 1_000 EUR in cash from InvestmentAccount ****" in output
-    assert ": balance 11000.00 EUR" in output
-    assert "Tries Maria's account with the same session: refused, AccountNotFoundError: Account" in output
+    cash = re.search(r"Takes 1_000 EUR in cash from InvestmentAccount (\w{8}): balance 11000\.00 EUR", output)
+    assert cash, "the line of the cash taken by hand is missing"
+    assert f"Statement of InvestmentAccount {cash.group(1)}:" in output  # the same account, the same short id
+    assert re.search(r"Tries Maria's account \w{8} with the same session: AccountNotFoundError\n", output)
     assert "Maria's balance stays 1107001.00 RUB" in output
     # the statement shows the balance and the total value: a portfolio move changes the first only
     assert "investment     -5000.00     11000.00 EUR  total     16000.00" in output

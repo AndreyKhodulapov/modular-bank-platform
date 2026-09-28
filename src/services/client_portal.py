@@ -73,10 +73,6 @@ class ClientPortal:
         self._owner_of(session, account_id)
         return self._bank.freeze_account(account_id, actor=session).get_account_info()
 
-    def unfreeze_account(self, session: ClientSession, account_id: str) -> dict[str, Any]:
-        self._owner_of(session, account_id)
-        return self._bank.unfreeze_account(account_id, actor=session).get_account_info()
-
     def deposit(self, session: ClientSession, account_id: str, amount: object) -> Decimal:
         self._owner_of(session, account_id)
         return self._bank.deposit(account_id, amount, actor=session)

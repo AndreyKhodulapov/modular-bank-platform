@@ -92,12 +92,17 @@ def test_invest_and_divest_on_the_clients_investment_account(portal, session, ba
     assert portal.divest(session, account.account_id, "bonds", 100) == Decimal("700.00")
 
 
-def test_freeze_unfreeze_and_close_name_the_session(portal, session, own, bank):
+def test_freeze_and_close_name_the_session(portal, session, own, bank):
     assert portal.freeze_account(session, own.account_id)["status"] == "frozen"
-    assert portal.unfreeze_account(session, own.account_id)["status"] == "active"
+    bank.unfreeze_account(own.account_id)  # lifting a freeze is the bank's decision
     assert portal.close_account(session, own.account_id) == Decimal("1000.00")
-    for event in ("account_frozen", "account_unfrozen", "account_closed"):
+    for event in ("account_frozen", "account_closed"):
         assert session_ids(bank, event) == [session.session_id]
+    assert session_ids(bank, "account_unfrozen") == [None]
+
+
+def test_a_client_cannot_lift_a_freeze():
+    assert not hasattr(ClientPortal, "unfreeze_account")
 
 
 def test_operation_refused_by_the_bank_names_the_session(portal, own, bank, client, password, clock):
@@ -112,7 +117,6 @@ def test_operation_refused_by_the_bank_names_the_session(portal, own, bank, clie
 FOREIGN_OPERATIONS = [
     pytest.param(lambda portal, session, account_id: portal.close_account(session, account_id), id="close"),
     pytest.param(lambda portal, session, account_id: portal.freeze_account(session, account_id), id="freeze"),
-    pytest.param(lambda portal, session, account_id: portal.unfreeze_account(session, account_id), id="unfreeze"),
     pytest.param(lambda portal, session, account_id: portal.deposit(session, account_id, 10), id="deposit"),
     pytest.param(lambda portal, session, account_id: portal.withdraw(session, account_id, 10), id="withdraw"),
     pytest.param(lambda portal, session, account_id: portal.invest(session, account_id, "bonds", 10), id="invest"),

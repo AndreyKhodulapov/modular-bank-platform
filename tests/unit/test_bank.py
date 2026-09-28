@@ -34,7 +34,8 @@ from tests.helpers import history_gaps, lifecycle, reasons
 NIGHT = datetime(2026, 9, 25, 2, 30)
 MONTH_LATER = datetime(2026, 10, 24, 14, 0)  # the day monthly interest is due on an account opened at the start
 
-# (prepare, operation) pairs for the operations refused at night and, except a deposit, for a blocked client
+# (prepare, operation) pairs for the operations refused at night and, except a deposit and an unfreeze, for a blocked
+# client
 RESTRICTED_OPERATIONS = [
     pytest.param(
         lambda bank, client, account: None,
@@ -342,7 +343,8 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepa
 
 
 @pytest.mark.parametrize(
-    ("prepare", "operation"), [operation for operation in RESTRICTED_OPERATIONS if operation.id != "deposit"]
+    ("prepare", "operation"),
+    [operation for operation in RESTRICTED_OPERATIONS if operation.id not in ("deposit", "unfreeze_account")],
 )
 def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
@@ -355,6 +357,47 @@ def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, pr
     assert (lifecycle(bank), bank.history.movements()) == (recorded, moved)
     assert (account.status, account.balance) == (status, Decimal("100.00"))
     assert client.account_ids == [account.account_id]
+
+
+def test_the_bank_unfreezes_the_account_of_a_blocked_client(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    bank.freeze_account(account.account_id)
+    client.block()
+    bank.unfreeze_account(account.account_id)  # the bank acts, so it is no attempt of the blocked client
+    assert account.status is AccountStatus.ACTIVE
+    assert reasons(bank) == []
+    with pytest.raises(ClientBlockedError):
+        bank.withdraw(account.account_id, 10)  # the client still cannot move the money
+
+
+def test_a_night_unfreeze_is_recorded_on_the_account_not_on_the_client(bank, client, clock):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    bank.freeze_account(account.account_id)
+    clock.moment = NIGHT
+    with pytest.raises(OperationTimeRestrictedError):
+        bank.unfreeze_account(account.account_id)
+    [activity] = bank.suspicious_activities
+    assert (activity.reason, activity.client_id, activity.account_id) == (
+        SuspicionReason.NIGHT_OPERATION,
+        None,
+        account.account_id,
+    )
+    assert account.status is AccountStatus.FROZEN
+
+
+@pytest.mark.parametrize(
+    ("prepare", "error_type"),
+    [("close_account", AccountClosedError), (None, InvalidOperationError)],
+    ids=["closed", "not_frozen"],
+)
+def test_an_unfreeze_the_account_refuses_is_not_suspicious(bank, client, prepare, error_type):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=0)
+    if prepare:
+        getattr(bank, prepare)(account.account_id)
+    recorded = lifecycle(bank)
+    with pytest.raises(error_type):
+        bank.unfreeze_account(account.account_id)
+    assert (reasons(bank), lifecycle(bank)) == ([], recorded)
 
 
 def test_blocked_client_still_receives_deposits(bank, client):
@@ -392,7 +435,6 @@ def test_deposit_and_withdraw(bank, client):
         ("close_account", "withdraw", AccountClosedError),
         ("close_account", "close_account", AccountClosedError),
         ("close_account", "freeze_account", AccountClosedError),
-        ("close_account", "unfreeze_account", AccountClosedError),
     ],
 )
 def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operation, error_type):
@@ -412,7 +454,7 @@ def test_an_operation_through_a_session_names_it_in_every_event(bank, client, pa
     session = bank.authenticate_client(client.client_id, password)
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=600_000, actor=session)
     bank.freeze_account(account.account_id, actor=session)
-    bank.unfreeze_account(account.account_id, actor=session)
+    bank.unfreeze_account(account.account_id)  # the bank's decision, never a client's
     bank.close_account(account.account_id, actor=session)
     events = [event for event in bank.audit_log if event.account_id == account.account_id]
     assert [event.event for event in events] == [
@@ -423,7 +465,14 @@ def test_an_operation_through_a_session_names_it_in_every_event(bank, client, pa
         "account_closed",
         "large_operation",
     ]
-    assert {event.details["session_id"] for event in events} == {session.session_id}
+    assert [event.details.get("session_id") for event in events] == [
+        session.session_id,
+        session.session_id,
+        session.session_id,
+        None,
+        session.session_id,
+        session.session_id,
+    ]
     # the money of the opening and the payout is traced to the session in the history too
     movements = bank.history.movements(account.account_id)
     assert [movement.kind for movement in movements] == [MovementKind.OPENING, MovementKind.PAYOUT]
@@ -480,7 +529,6 @@ def test_a_refusal_names_the_session_it_came_through(bank, client, password, clo
 ACTOR_OPERATIONS = [
     pytest.param(lambda bank, account, actor: bank.close_account(account.account_id, actor=actor), id="close"),
     pytest.param(lambda bank, account, actor: bank.freeze_account(account.account_id, actor=actor), id="freeze"),
-    pytest.param(lambda bank, account, actor: bank.unfreeze_account(account.account_id, actor=actor), id="unfreeze"),
     pytest.param(lambda bank, account, actor: bank.deposit(account.account_id, 10, actor=actor), id="deposit"),
     pytest.param(lambda bank, account, actor: bank.withdraw(account.account_id, 10, actor=actor), id="withdraw"),
     pytest.param(lambda bank, account, actor: bank.invest(account.account_id, "bonds", 10, actor=actor), id="invest"),

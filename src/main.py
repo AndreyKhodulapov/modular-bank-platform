@@ -425,7 +425,7 @@ def show_logging(demo: DemoBank, simulation: Simulation) -> None:
 
 def describe_account(info: dict[str, Any]) -> str:
     """One line of an account snapshot, the way the client sees their own account."""
-    line = f"{info['account_type']} | ****{info['account_id'][-4:]} | {info['status']}"
+    line = f"{info['account_type']} | {info['account_id'][:8]} | {info['status']}"
     line += f" | {info['balance']} {info['currency']}"
     if "overdraft_limit" in info:
         line += f" | overdraft {info['overdraft_limit']} | fee {info['withdrawal_fee']}"
@@ -452,7 +452,7 @@ def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
     source = next(info for info in snapshots if info["status"] == "active" and Decimal(info["balance"]) >= 1_000)
     cash = portal.withdraw(session, source["account_id"], 1_000)
     print(
-        f"\n  Takes 1_000 {source['currency']} in cash from {source['account_type']} ****{source['account_id'][-4:]}: "
+        f"\n  Takes 1_000 {source['currency']} in cash from {source['account_type']} {source['account_id'][:8]}: "
         f"balance {cash} {source['currency']}"
     )
     someone_else = next(account for account in demo.accounts.values() if account.owner != client)
@@ -460,7 +460,7 @@ def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
     try:
         portal.withdraw(session, someone_else.account_id, 1_000)
     except AccountNotFoundError as error:
-        print(f"  Tries {name}'s account with the same session: refused, {type(error).__name__}: {error}")
+        print(f"  Tries {name}'s account {someone_else.account_id[:8]} with the same session: {type(error).__name__}")
     print(f"  {name}'s balance stays {someone_else.balance} {someone_else.currency.value}")
 
     for info in snapshots:

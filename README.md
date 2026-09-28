@@ -319,7 +319,7 @@ Security rules applied by the bank:
 | Rule | Behaviour |
 | --- | --- |
 | Login lockout | 3 wrong passwords in a row block the client and end their sessions; `unblock_client()` restores access, the client logs in again |
-| Blocked client | cannot open, close or unfreeze accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
+| Blocked client | cannot open or close accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw, invest, divest and unblock are refused; login, freeze, monthly interest and queries are allowed |
 | Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more, use of an expired session; kept in the audit log as `security` events |
 
@@ -355,10 +355,10 @@ through it; the bank's own API stays open to the back office.
   (one used after it expired was already closed by that use, so the logout
   is refused as `InvalidSessionError`).
 - `ClientPortal(bank)` - what a logged-in client does: `accounts()`,
-  `open_account()`, `close_account()`, `freeze_account()`,
-  `unfreeze_account()`, `deposit()`, `withdraw()`, `invest()`, `divest()`,
-  `submit()` (a transaction to the queue), `statement()` and
-  `transactions()`. Each method resolves the session to its client first
+  `open_account()`, `close_account()`, `freeze_account()`, `deposit()`,
+  `withdraw()`, `invest()`, `divest()`, `submit()` (a transaction to the
+  queue), `statement()` and `transactions()`. Each method resolves the
+  session to its client first
   (`InvalidSessionError`, `SessionExpiredError`), then checks that the
   account is the client's: someone else's account is reported as
   `AccountNotFoundError`, the same as a missing one, so the portal does not
@@ -373,10 +373,17 @@ through it; the bank's own API stays open to the back office.
   checks only that a session given as `actor=` belongs to the account's
   owner, and names it in the audit log (see [Audit and Risk](#audit-and-risk))
   and in the balance movements of the history (`session_id`).
-- What stays with the back office: `Bank` itself takes no session. The
+- What stays with the back office: `Bank` does not require a session
+  (`actor=` is optional, for the calls made on a client's behalf). The
   processor runs a submitted transaction later, on the bank's behalf, when
   the session may be over; monthly interest, refunds and the reports are
-  the bank's own work.
+  the bank's own work. Lifting a freeze is the bank's decision too: a
+  client may freeze their own account, but `unfreeze_account()` takes no
+  session, since the account does not remember who froze it and a client
+  could otherwise lift a freeze the bank imposed. The night window applies
+  to it, as to unblocking; a night attempt is recorded on the account, not
+  on the client, a blocked owner does not stop it, and a refusal by the
+  account (closed, not frozen) is not recorded as suspicious.
 
 ```python
 session = bank.authenticate_client(client.client_id, "secret-2026")
