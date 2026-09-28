@@ -79,12 +79,6 @@ class SessionStore:
     def __init__(self) -> None:
         self._sessions: dict[str, _StoredSession] = {}
 
-    def __len__(self) -> int:
-        return len(self._sessions)
-
-    def __contains__(self, session_id: object) -> bool:
-        return session_id in self._sessions
-
     def add(self, session: ClientSession, client: Client) -> None:
         if session.client_id != client.client_id:
             raise InvalidOperationError(f"Session {session.session_id} belongs to another client.")

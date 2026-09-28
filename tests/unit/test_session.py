@@ -63,7 +63,6 @@ def test_store_keeps_the_hash_of_the_token_only(store, session):
 
 
 def test_store_finds_the_client_of_a_session_as_issued(store, session, owner):
-    assert session.session_id in store
     assert store.find(session) is owner
 
 
@@ -107,4 +106,4 @@ def test_remove_client_closes_only_their_sessions(store, session, owner, make_cl
     store.add(others, boris)
     assert store.remove_client(owner.client_id) == 2
     assert (store.find(session), store.find(second), store.find(others)) == (None, None, boris)
-    assert len(store) == 1
+    assert store.remove_client(boris.client_id) == 1

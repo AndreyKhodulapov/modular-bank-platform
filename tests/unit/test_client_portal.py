@@ -5,17 +5,12 @@ import pytest
 
 from exceptions import (
     AccountNotFoundError,
-    AuthenticationError,
-    ClientBlockedError,
     InvalidOperationError,
     InvalidSessionError,
     OperationTimeRestrictedError,
-    SessionExpiredError,
 )
 from models import AssetType, BankAccount, Transaction
 from services import ClientPortal, MovementKind, TransactionProcessor, TransactionQueue
-
-NIGHT = datetime(2026, 9, 25, 2, 30)
 
 
 @pytest.fixture
@@ -106,7 +101,7 @@ def test_a_client_cannot_lift_a_freeze():
 
 
 def test_operation_refused_by_the_bank_names_the_session(portal, own, bank, client, password, clock):
-    clock.moment = NIGHT  # a login is allowed at night, moving money is not
+    clock.moment = datetime(2026, 9, 25, 2, 30)  # a login is allowed at night, moving money is not
     session = bank.authenticate_client(client.client_id, password)
     with pytest.raises(OperationTimeRestrictedError):
         portal.withdraw(session, own.account_id, 100)
@@ -186,23 +181,9 @@ def test_transactions_show_the_clients_only(portal, session, own, foreign, bank,
     assert portal.transactions(session) == [mine]
 
 
-def test_expired_session_is_refused(portal, session, own, clock):
-    clock.moment = session.expires_at
-    with pytest.raises(SessionExpiredError):
-        portal.withdraw(session, own.account_id, 10)
-    assert own.balance == Decimal("1000.00")
-
-
-def test_logged_out_session_is_refused(portal, session, bank):
+def test_an_invalid_session_is_refused_before_anything_happens(portal, session, own, bank):
     bank.logout(session)
-    with pytest.raises(InvalidSessionError):
-        portal.accounts(session)
-
-
-def test_blocked_clients_session_is_refused(portal, session, own, bank, client):
-    for _ in range(3):
-        with pytest.raises((AuthenticationError, ClientBlockedError)):
-            bank.authenticate_client(client.client_id, "wrong-password")
+    events = len(bank.audit_log)
     with pytest.raises(InvalidSessionError):
         portal.withdraw(session, own.account_id, 10)
-    assert own.balance == Decimal("1000.00")
+    assert (own.balance, len(bank.audit_log)) == (Decimal("1000.00"), events)

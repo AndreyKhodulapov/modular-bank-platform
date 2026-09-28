@@ -251,6 +251,7 @@ class Bank:
         account: BankAccount,
         before: Decimal,
         transaction_id: str | None = None,
+        *,
         actor: ClientSession | None = None,
     ) -> None:
         """Record the change of ``account``'s balance since ``before``; no change, no movement.
@@ -273,7 +274,7 @@ class Bank:
         )
 
     def _review_amount(
-        self, action: str, account: BankAccount, amount: Decimal, actor: ClientSession | None = None
+        self, action: str, account: BankAccount, amount: Decimal, *, actor: ClientSession | None = None
     ) -> None:
         self._security.review_amount(
             self._converter.to_base(amount, account.currency),
@@ -389,11 +390,11 @@ class Bank:
             currency=account.currency,
             initial_balance=account.total_value,
         )
-        self._review_amount("open_account", account, account.total_value, actor)
+        self._review_amount("open_account", account, account.total_value, actor=actor)
         return account
 
     def _run_on_account[T](
-        self, action: str, account: BankAccount, operation: Callable[[], T], actor: ClientSession | None = None
+        self, action: str, account: BankAccount, operation: Callable[[], T], *, actor: ClientSession | None = None
     ) -> T:
         """Run ``operation`` and record it as suspicious when the account turns out frozen or closed."""
         try:
@@ -414,7 +415,7 @@ class Bank:
         self._check_actor(actor, account.owner)
         self._guard("close_account", account.owner, account, actor=actor)
         before = account.balance
-        payout = self._run_on_account("close_account", account, account.close, actor)
+        payout = self._run_on_account("close_account", account, account.close, actor=actor)
         self._record_movement(MovementKind.PAYOUT, account, before, actor=actor)
         self._record_account(
             AccountEvent.CLOSED,
@@ -424,7 +425,7 @@ class Bank:
             payout=payout,
             currency=account.currency,
         )
-        self._review_amount("close_account", account, payout, actor)
+        self._review_amount("close_account", account, payout, actor=actor)
         return payout
 
     def ensure_operational(self, action: str, account_id: str) -> BankAccount:
@@ -495,7 +496,7 @@ class Bank:
         """Freeze an active account; allowed at any time, since freezing only protects money."""
         account = self.get_account(account_id)
         self._check_actor(actor, account.owner)
-        self._run_on_account("freeze_account", account, account.freeze, actor)
+        self._run_on_account("freeze_account", account, account.freeze, actor=actor)
         self._record_account(AccountEvent.FROZEN, account, "account frozen", actor=actor)
         return account
 
@@ -621,10 +622,10 @@ class Bank:
         value = to_money(amount, require="positive")
         self._guard(action, account.owner, account, incoming=incoming, actor=actor)
         before = account.balance
-        balance = self._run_on_account(action, account, lambda: operation(value), actor)
+        balance = self._run_on_account(action, account, lambda: operation(value), actor=actor)
         # the actual change, so the premium account's own fee is part of a withdrawal
-        self._record_movement(kind, account, before, transaction_id, actor)
-        self._review_amount(action, account, abs(balance - before), actor)
+        self._record_movement(kind, account, before, transaction_id, actor=actor)
+        self._review_amount(action, account, abs(balance - before), actor=actor)
         return balance
 
     def _next_interest_date(self, account_id: str) -> date:
@@ -686,7 +687,7 @@ class Bank:
     ) -> Decimal:
         """Move free cash of an investment account into ``asset_type``; return the new cash balance."""
         return self._rebalance(
-            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount._invest, actor
+            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount._invest, actor=actor
         )
 
     def divest(
@@ -694,7 +695,7 @@ class Bank:
     ) -> Decimal:
         """Move money from ``asset_type`` back to free cash of an investment account; return the new cash balance."""
         return self._rebalance(
-            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount._divest, actor
+            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount._divest, actor=actor
         )
 
     def _rebalance(
@@ -705,6 +706,7 @@ class Bank:
         asset_type: AssetType | str,
         amount: object,
         operation: Callable[[InvestmentAccount, AssetType, Decimal], Decimal],
+        *,
         actor: ClientSession | None = None,
     ) -> Decimal:
         """Move money between the cash and the portfolio of an investment account.
@@ -724,7 +726,7 @@ class Bank:
         value = to_money(amount, require="positive")
         self._guard(action, account.owner, account, actor=actor)
         before = account.balance
-        balance = self._run_on_account(action, account, lambda: operation(account, asset, value), actor)
+        balance = self._run_on_account(action, account, lambda: operation(account, asset, value), actor=actor)
         self._record_movement(kind, account, before, actor=actor)
         return balance
 
