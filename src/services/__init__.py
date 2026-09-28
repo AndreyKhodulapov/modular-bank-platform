@@ -16,6 +16,7 @@ from services.audit_log import (
 from services.audit_report import AuditReport, ClientRiskProfile, ErrorStatistics, SuspiciousOperationsReport
 from services.bank import Bank
 from services.bank_report import BalanceSummary, BankReport, ClientRanking, TransactionStatistics
+from services.client_portal import ClientPortal
 from services.currency import CurrencyConverter
 from services.fees import FeePolicy
 from services.risk import (
@@ -52,6 +53,7 @@ __all__ = [
     "Bank",
     "BankReport",
     "ClientEvent",
+    "ClientPortal",
     "ClientRanking",
     "ClientRiskProfile",
     "ClientSession",

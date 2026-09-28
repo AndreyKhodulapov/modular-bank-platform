@@ -19,7 +19,7 @@ from exceptions import (
 )
 from models.client import Client
 from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog
-from services.session import ClientSession, SessionStore
+from services.session import ClientSession, SessionStore, session_details
 
 
 class SuspicionReason(Enum):
@@ -101,7 +101,14 @@ class SecurityGuard:
             return None
         return datetime.combine(moment.date(), self.NIGHT_END, tzinfo=moment.tzinfo)
 
-    def ensure_daytime(self, action: str, *, client_id: str | None = None, account_id: str | None = None) -> None:
+    def ensure_daytime(
+        self,
+        action: str,
+        *,
+        client_id: str | None = None,
+        account_id: str | None = None,
+        actor: ClientSession | None = None,
+    ) -> None:
         """Reject ``action`` and record the attempt when it happens in the night window."""
         moment = self.now()
         if self.night_ends_at(moment) is None:
@@ -112,6 +119,7 @@ class SecurityGuard:
             f"{action} attempted at {moment:%H:%M}",
             client_id=client_id,
             account_id=account_id,
+            actor=actor,
         )
         raise OperationTimeRestrictedError(action, window)
 
@@ -204,7 +212,13 @@ class SecurityGuard:
         return client
 
     def review_amount(
-        self, amount_in_base: Decimal, action: str, *, client_id: str | None = None, account_id: str | None = None
+        self,
+        amount_in_base: Decimal,
+        action: str,
+        *,
+        client_id: str | None = None,
+        account_id: str | None = None,
+        actor: ClientSession | None = None,
     ) -> None:
         """Record ``action`` if its amount reaches the threshold; the operation itself is not stopped."""
         if amount_in_base < self.LARGE_OPERATION_THRESHOLD:
@@ -214,6 +228,7 @@ class SecurityGuard:
             f"{action} of {amount_in_base} in base currency (threshold {self.LARGE_OPERATION_THRESHOLD})",
             client_id=client_id,
             account_id=account_id,
+            actor=actor,
         )
 
     def flag(
@@ -223,7 +238,9 @@ class SecurityGuard:
         *,
         client_id: str | None = None,
         account_id: str | None = None,
+        actor: ClientSession | None = None,
     ) -> SuspiciousActivity:
+        """Record a suspicious activity; ``actor`` is the client session it was attempted through, if any."""
         level = AuditLevel.CRITICAL if reason in self.CRITICAL_REASONS else AuditLevel.WARNING
         event = self._audit_log.record(
             level,
@@ -233,6 +250,7 @@ class SecurityGuard:
             timestamp=self.now(),
             client_id=client_id,
             account_id=account_id,
+            details=session_details(actor),
         )
         return self._to_activity(event)
 

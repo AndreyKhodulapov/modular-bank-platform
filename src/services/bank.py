@@ -25,7 +25,7 @@ from services.audit_log import AccountEvent, AuditCategory, AuditLevel, AuditLog
 from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
-from services.session import ClientSession
+from services.session import ClientSession, session_details
 from services.transaction_history import MovementKind, TransactionHistory
 from utils import next_monthly_date, to_enum, to_money
 
@@ -56,7 +56,13 @@ class Bank:
       transaction history as a ``BalanceMovement`` with the actual change
       (fees included), the balance and the total value after it; the
       operations of the account types (``apply_monthly_interest``,
-      ``invest``, ``divest``) go through the bank for that reason.
+      ``invest``, ``divest``) go through the bank for that reason;
+    - a client operation may name the ``actor``: the session of the owner it
+      came through. The bank does not check the session - whoever calls it
+      on a client's behalf does (``ClientPortal``) - but records its id in
+      ``details.session_id`` of every audit event of the operation, and
+      refuses a session of another client, so the log never says one
+      client acted on another one's account.
 
     Protective actions (``freeze_account``), logins and read-only queries are
     allowed at any time. Totals and the ranking are expressed in the
@@ -159,7 +165,13 @@ class Bank:
         return account_class
 
     def _guard(
-        self, action: str, client: Client, account: BankAccount | None = None, *, incoming: bool = False
+        self,
+        action: str,
+        client: Client,
+        account: BankAccount | None = None,
+        *,
+        incoming: bool = False,
+        actor: ClientSession | None = None,
     ) -> None:
         """Run the checks shared by every restricted operation: night window, then client status.
 
@@ -167,18 +179,30 @@ class Bank:
         a client by guessing their password, so blocking stops what the
         client does, not the money sent to them, and someone else's credit
         is not recorded as the client's attempt: a night one is recorded on
-        the account alone.
+        the account alone, unless the client made it through their session.
         """
         account_id = account.account_id if account is not None else None
-        self._security.ensure_daytime(action, client_id=None if incoming else client.client_id, account_id=account_id)
+        attempted_by = client.client_id if not incoming or actor is not None else None
+        self._security.ensure_daytime(action, client_id=attempted_by, account_id=account_id, actor=actor)
         if not incoming and client.is_blocked:
             self._security.flag(
                 SuspicionReason.BLOCKED_CLIENT_ACTIVITY,
                 f"{action} attempted by a blocked client",
                 client_id=client.client_id,
                 account_id=account_id,
+                actor=actor,
             )
             raise ClientBlockedError(client.client_id)
+
+    @staticmethod
+    def _check_actor(actor: ClientSession | None, client: Client) -> None:
+        """Refuse a session that is not the client's own; the audit log must not mix up who did what."""
+        if actor is None:
+            return
+        if not isinstance(actor, ClientSession):
+            raise InvalidOperationError("actor must be a ClientSession instance.")
+        if actor.client_id != client.client_id:
+            raise InvalidOperationError(f"Session {actor.session_id} belongs to another client.")
 
     def _record(
         self,
@@ -189,6 +213,7 @@ class Bank:
         client_id: str,
         account_id: str | None = None,
         details: dict[str, object] | None = None,
+        actor: ClientSession | None = None,
     ) -> None:
         self.audit_log.record(
             AuditLevel.INFO,
@@ -198,10 +223,18 @@ class Bank:
             timestamp=self.now(),
             client_id=client_id,
             account_id=account_id,
-            details=details,
+            details=(details or {}) | session_details(actor),
         )
 
-    def _record_account(self, event: AccountEvent, account: BankAccount, message: str, **details: object) -> None:
+    def _record_account(
+        self,
+        event: AccountEvent,
+        account: BankAccount,
+        message: str,
+        *,
+        actor: ClientSession | None = None,
+        **details: object,
+    ) -> None:
         self._record(
             AuditCategory.ACCOUNT,
             event,
@@ -209,6 +242,7 @@ class Bank:
             client_id=account.owner.client_id,
             account_id=account.account_id,
             details=details,
+            actor=actor,
         )
 
     def _record_movement(
@@ -229,12 +263,15 @@ class Bank:
             transaction_id=transaction_id,
         )
 
-    def _review_amount(self, action: str, account: BankAccount, amount: Decimal) -> None:
+    def _review_amount(
+        self, action: str, account: BankAccount, amount: Decimal, actor: ClientSession | None = None
+    ) -> None:
         self._security.review_amount(
             self._converter.to_base(amount, account.currency),
             action,
             client_id=account.owner.client_id,
             account_id=account.account_id,
+            actor=actor,
         )
 
     def add_client(self, client: Client, password: str) -> Client:
@@ -301,7 +338,9 @@ class Bank:
         self._record(AuditCategory.CLIENT, ClientEvent.UNBLOCKED, "client unblocked", client_id=client_id)
         return client
 
-    def open_account(self, client_id: str, account_type: str = "basic", **params: object) -> BankAccount:
+    def open_account(
+        self, client_id: str, account_type: str = "basic", *, actor: ClientSession | None = None, **params: object
+    ) -> BankAccount:
         """Open an account of a registered type for the client.
 
         ``params`` are passed to the account constructor (``currency``,
@@ -310,6 +349,7 @@ class Bank:
         account is always active.
         """
         client = self.get_client(client_id)
+        self._check_actor(actor, client)
         account_class = self._resolve_account_class(account_type)
         reserved = sorted(self.RESERVED_ACCOUNT_PARAMS & params.keys())
         if reserved:
@@ -319,7 +359,7 @@ class Bank:
         except TypeError as error:
             # an unknown or missing constructor argument, e.g. min_balance for a basic account
             raise InvalidOperationError(f"Invalid parameters for {account_class.__name__}: {error}.") from error
-        self._guard("open_account", client)
+        self._guard("open_account", client, actor=actor)
         account = account_class(owner=client, **params)
         self._accounts[account.account_id] = account
         self._opened_at[account.account_id] = self.now()
@@ -331,13 +371,16 @@ class Bank:
             account,
             f"{account_class.__name__} opened with {account.total_value} {account.currency.value}",
             account_type=str(account_type).lower(),
+            actor=actor,
             currency=account.currency,
             initial_balance=account.total_value,
         )
-        self._review_amount("open_account", account, account.total_value)
+        self._review_amount("open_account", account, account.total_value, actor)
         return account
 
-    def _run_on_account[T](self, action: str, account: BankAccount, operation: Callable[[], T]) -> T:
+    def _run_on_account[T](
+        self, action: str, account: BankAccount, operation: Callable[[], T], actor: ClientSession | None = None
+    ) -> T:
         """Run ``operation`` and record it as suspicious when the account turns out frozen or closed."""
         try:
             return operation()
@@ -347,24 +390,27 @@ class Bank:
                 f"{action} on a {account.status.value} account",
                 client_id=account.owner.client_id,
                 account_id=account.account_id,
+                actor=actor,
             )
             raise
 
-    def close_account(self, account_id: str) -> Decimal:
+    def close_account(self, account_id: str, *, actor: ClientSession | None = None) -> Decimal:
         """Close an account and return the cash paid out to the client."""
         account = self.get_account(account_id)
-        self._guard("close_account", account.owner, account)
+        self._check_actor(actor, account.owner)
+        self._guard("close_account", account.owner, account, actor=actor)
         before = account.balance
-        payout = self._run_on_account("close_account", account, account.close)
+        payout = self._run_on_account("close_account", account, account.close, actor)
         self._record_movement(MovementKind.PAYOUT, account, before)
         self._record_account(
             AccountEvent.CLOSED,
             account,
             f"account closed, {payout} {account.currency.value} paid out",
+            actor=actor,
             payout=payout,
             currency=account.currency,
         )
-        self._review_amount("close_account", account, payout)
+        self._review_amount("close_account", account, payout, actor)
         return payout
 
     def ensure_operational(self, action: str, account_id: str) -> BankAccount:
@@ -431,21 +477,30 @@ class Bank:
             raise RiskBlockedError(transaction.transaction_id, assessment.score, assessment.rules)
         return assessment
 
-    def freeze_account(self, account_id: str) -> BankAccount:
+    def freeze_account(self, account_id: str, *, actor: ClientSession | None = None) -> BankAccount:
         """Freeze an active account; allowed at any time, since freezing only protects money."""
         account = self.get_account(account_id)
-        self._run_on_account("freeze_account", account, account.freeze)
-        self._record_account(AccountEvent.FROZEN, account, "account frozen")
+        self._check_actor(actor, account.owner)
+        self._run_on_account("freeze_account", account, account.freeze, actor)
+        self._record_account(AccountEvent.FROZEN, account, "account frozen", actor=actor)
         return account
 
-    def unfreeze_account(self, account_id: str) -> BankAccount:
+    def unfreeze_account(self, account_id: str, *, actor: ClientSession | None = None) -> BankAccount:
         account = self.get_account(account_id)
-        self._guard("unfreeze_account", account.owner, account)
-        self._run_on_account("unfreeze_account", account, account.unfreeze)
-        self._record_account(AccountEvent.UNFROZEN, account, "account unfrozen")
+        self._check_actor(actor, account.owner)
+        self._guard("unfreeze_account", account.owner, account, actor=actor)
+        self._run_on_account("unfreeze_account", account, account.unfreeze, actor)
+        self._record_account(AccountEvent.UNFROZEN, account, "account unfrozen", actor=actor)
         return account
 
-    def deposit(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
+    def deposit(
+        self,
+        account_id: str,
+        amount: object,
+        *,
+        transaction_id: str | None = None,
+        actor: ClientSession | None = None,
+    ) -> Decimal:
         """Credit the account and return its new balance; ``transaction_id`` links the movement to a transaction.
 
         A blocked owner still receives money: only the night window, the
@@ -453,13 +508,29 @@ class Bank:
         """
         account = self.get_account(account_id)
         return self._move_money(
-            "deposit", MovementKind.DEPOSIT, account, account.deposit, amount, transaction_id, incoming=True
+            "deposit",
+            MovementKind.DEPOSIT,
+            account,
+            account.deposit,
+            amount,
+            transaction_id,
+            incoming=True,
+            actor=actor,
         )
 
-    def withdraw(self, account_id: str, amount: object, *, transaction_id: str | None = None) -> Decimal:
+    def withdraw(
+        self,
+        account_id: str,
+        amount: object,
+        *,
+        transaction_id: str | None = None,
+        actor: ClientSession | None = None,
+    ) -> Decimal:
         """Debit the account and return its new balance; ``transaction_id`` links the movement to a transaction."""
         account = self.get_account(account_id)
-        return self._move_money("withdraw", MovementKind.WITHDRAWAL, account, account.withdraw, amount, transaction_id)
+        return self._move_money(
+            "withdraw", MovementKind.WITHDRAWAL, account, account.withdraw, amount, transaction_id, actor=actor
+        )
 
     def refund(self, account_id: str, amount: object, *, transaction_id: str) -> Decimal:
         """Put back a debit of the rolled-back transaction ``transaction_id``; return the new balance.
@@ -518,14 +589,16 @@ class Bank:
         transaction_id: str | None,
         *,
         incoming: bool = False,
+        actor: ClientSession | None = None,
     ) -> Decimal:
+        self._check_actor(actor, account.owner)
         value = to_money(amount, require="positive")
-        self._guard(action, account.owner, account, incoming=incoming)
+        self._guard(action, account.owner, account, incoming=incoming, actor=actor)
         before = account.balance
-        balance = self._run_on_account(action, account, lambda: operation(value))
+        balance = self._run_on_account(action, account, lambda: operation(value), actor)
         # the actual change, so the premium account's own fee is part of a withdrawal
         self._record_movement(kind, account, before, transaction_id)
-        self._review_amount(action, account, abs(balance - before))
+        self._review_amount(action, account, abs(balance - before), actor)
         return balance
 
     def _next_interest_date(self, account_id: str) -> date:
@@ -582,16 +655,20 @@ class Bank:
         self._review_amount("apply_monthly_interest", account, interest)
         return interest
 
-    def invest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
+    def invest(
+        self, account_id: str, asset_type: AssetType | str, amount: object, *, actor: ClientSession | None = None
+    ) -> Decimal:
         """Move free cash of an investment account into ``asset_type``; return the new cash balance."""
         return self._rebalance(
-            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount._invest
+            "invest", MovementKind.INVESTMENT, account_id, asset_type, amount, InvestmentAccount._invest, actor
         )
 
-    def divest(self, account_id: str, asset_type: AssetType | str, amount: object) -> Decimal:
+    def divest(
+        self, account_id: str, asset_type: AssetType | str, amount: object, *, actor: ClientSession | None = None
+    ) -> Decimal:
         """Move money from ``asset_type`` back to free cash of an investment account; return the new cash balance."""
         return self._rebalance(
-            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount._divest
+            "divest", MovementKind.DIVESTMENT, account_id, asset_type, amount, InvestmentAccount._divest, actor
         )
 
     def _rebalance(
@@ -602,6 +679,7 @@ class Bank:
         asset_type: AssetType | str,
         amount: object,
         operation: Callable[[InvestmentAccount, AssetType, Decimal], Decimal],
+        actor: ClientSession | None = None,
     ) -> Decimal:
         """Move money between the cash and the portfolio of an investment account.
 
@@ -614,12 +692,13 @@ class Bank:
         account = self.get_account(account_id)
         if not isinstance(account, InvestmentAccount):
             raise InvalidOperationError(f"Account {account_id} is not an investment account; it has no portfolio.")
+        self._check_actor(actor, account.owner)
         # the input first, as in _move_money: an invalid one is an input error, not a suspicious attempt
         asset = to_enum(AssetType, asset_type, field="asset type")
         value = to_money(amount, require="positive")
-        self._guard(action, account.owner, account)
+        self._guard(action, account.owner, account, actor=actor)
         before = account.balance
-        balance = self._run_on_account(action, account, lambda: operation(account, asset, value))
+        balance = self._run_on_account(action, account, lambda: operation(account, asset, value), actor)
         self._record_movement(kind, account, before)
         return balance
 

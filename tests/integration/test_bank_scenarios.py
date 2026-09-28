@@ -7,14 +7,15 @@ import pytest
 
 from exceptions import (
     AccountFrozenError,
+    AccountNotFoundError,
     AuthenticationError,
     ClientBlockedError,
     InvalidSessionError,
     OperationTimeRestrictedError,
     SessionExpiredError,
 )
-from models import AccountStatus
-from services import SuspicionReason
+from models import AccountStatus, Transaction
+from services import ClientPortal, MovementKind, SuspicionReason, TransactionProcessor, TransactionQueue
 from tests.helpers import history_gaps
 
 
@@ -133,3 +134,54 @@ def test_a_session_ends_with_its_time_a_logout_or_a_block(bank, clock, make_clie
         "client_logged_in",
         "client_logged_out",
     ]
+
+
+def test_two_clients_act_through_their_sessions_and_the_bank_runs_the_rest(bank, clock, make_client):
+    portal = ClientPortal(bank)
+    queue = TransactionQueue(clock=bank.now, audit_log=bank.audit_log)
+    anna = bank.add_client(make_client("Anna"), "anna-password")
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    anna_session = bank.authenticate_client(anna.client_id, "anna-password")
+    boris_session = bank.authenticate_client(boris.client_id, "boris-password")
+
+    anna_rub = portal.open_account(anna_session, currency="RUB")["account_id"]
+    boris_rub = portal.open_account(boris_session, currency="RUB")["account_id"]
+    portal.deposit(anna_session, anna_rub, 5_000)
+    # Boris knows Anna's number: he may send money to it, not take money from it
+    with pytest.raises(AccountNotFoundError):
+        portal.withdraw(boris_session, anna_rub, 1_000)
+    with pytest.raises(AccountNotFoundError):
+        portal.submit(
+            boris_session,
+            Transaction("transfer", 1_000, "RUB", sender_id=anna_rub, recipient_id=boris_rub, created_at=clock()),
+            queue,
+        )
+    rent = portal.submit(
+        anna_session,
+        Transaction("transfer", 2_000, "RUB", sender_id=anna_rub, recipient_id=boris_rub, created_at=clock()),
+        queue,
+    )
+
+    # the processor runs the queue later, when both sessions are over
+    clock.moment += timedelta(hours=1)
+    TransactionProcessor(bank).process_queue(queue)
+    anna_again = bank.authenticate_client(anna.client_id, "anna-password")
+    boris_again = bank.authenticate_client(boris.client_id, "boris-password")
+    assert [movement.kind for movement in portal.statement(anna_again, anna_rub)] == [
+        MovementKind.DEPOSIT,
+        MovementKind.WITHDRAWAL,
+    ]
+    assert portal.transactions(boris_again) == portal.transactions(anna_again) == [rent]
+    assert [account["balance"] for account in portal.accounts(boris_again)] == ["2000.00"]
+    assert history_gaps(bank) == {}
+
+    # the log says who acted: each client's own session, then the bank for the execution
+    opened = bank.audit_log.filter(event="account_opened")
+    assert [(event.client_id, event.details["session_id"]) for event in opened] == [
+        (anna.client_id, anna_session.session_id),
+        (boris.client_id, boris_session.session_id),
+    ]
+    queued = bank.audit_log.filter(event="transaction_queued", transaction_id=rent.transaction_id)
+    assert [event.details.get("session_id") for event in queued] == [anna_session.session_id]
+    completed = bank.audit_log.filter(event="transaction_completed", transaction_id=rent.transaction_id)
+    assert [event.details.get("session_id") for event in completed] == [None]

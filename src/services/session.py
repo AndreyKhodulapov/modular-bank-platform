@@ -41,6 +41,15 @@ class ClientSession:
         return now >= self.expires_at
 
 
+def session_details(actor: ClientSession | None) -> dict[str, str]:
+    """The audit details that name the session an action came through; none for the bank's own actions."""
+    if actor is None:
+        return {}
+    if not isinstance(actor, ClientSession):
+        raise InvalidOperationError("actor must be a ClientSession instance.")
+    return {"session_id": actor.session_id}
+
+
 def _digest(token: str) -> bytes:
     # a random token needs no salt: there is no dictionary to guess it from
     return hashlib.sha256(token.encode()).digest()

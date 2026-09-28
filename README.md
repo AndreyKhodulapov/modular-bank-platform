@@ -210,6 +210,7 @@ modular-bank-platform/
 │   │   ├── bank.py         # Bank (facade over clients, accounts, security)
 │   │   ├── security.py     # SecurityGuard, SuspiciousActivity, SuspicionReason
 │   │   ├── session.py      # ClientSession, SessionStore
+│   │   ├── client_portal.py          # ClientPortal: a client's own operations through a session
 │   │   ├── currency.py     # CurrencyConverter, reference rates to RUB
 │   │   ├── fees.py         # FeePolicy
 │   │   ├── transaction_queue.py      # TransactionQueue
@@ -452,7 +453,11 @@ for movement in bank.history.movements(account.account_id):
   | `TransactionProcessor` | `transaction` | `transaction_completed`; `transaction_failed` (`details.will_retry` tells a retry from a final failure) | `INFO`; `ERROR`, an unexpected error `CRITICAL` |
 
   Life-cycle events are recorded once the change is made; a refused change
-  appears only as a `security` event. Transaction events name both parties
+  appears only as a `security` event. An operation a client makes through
+  their session (`ClientPortal`, or a bank method given `actor=`) names it
+  in `details.session_id` of every event it records, `transaction_queued`
+  included; the processor's events have none, since it runs the queue on
+  the bank's behalf. Transaction events name both parties
   in `details` (`sender_id`, `recipient_id`). The queue does not know the
   clients, so its events carry the initiating account without a client id.
   `bank.suspicious_activities` is a view of the `security` events.
