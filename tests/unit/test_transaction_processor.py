@@ -128,7 +128,9 @@ def test_regular_account_cannot_go_negative(processor, rub, usd, make):
 
 
 @pytest.mark.parametrize("frozen_side", ["sender", "recipient"])
-def test_frozen_account_fails_without_retry(bank, processor, rub, usd, frozen_side):
+def test_frozen_account_fails_without_retry(bank, processor, client, rub, make_client, frozen_side):
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    usd = bank.open_account(boris.client_id, currency="USD", initial_balance=100)
     frozen = rub if frozen_side == "sender" else usd
     bank.freeze_account(frozen.account_id)
     transaction = transfer(rub, usd, 100)
@@ -136,6 +138,12 @@ def test_frozen_account_fails_without_retry(bank, processor, rub, usd, frozen_si
     assert transaction.status is TransactionStatus.FAILED
     assert transaction.failure_reason.startswith("AccountFrozenError")
     assert (rub.balance, usd.balance) == (Decimal("10000.00"), Decimal("100.00"))
+    # the sender acted: a frozen sender is their attempt, a frozen recipient is nobody's but names the account
+    [activity] = bank.suspicious_activities
+    assert (activity.client_id, activity.account_id) == (
+        client.client_id if frozen_side == "sender" else None,
+        frozen.account_id,
+    )
 
 
 def test_closed_or_unknown_account_fails(bank, processor, rub, usd):

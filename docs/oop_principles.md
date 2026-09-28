@@ -209,7 +209,11 @@ amounts and enum members are values: two equal amounts are interchangeable.
 - **Suspicious actions are recorded, not only refused.** Failed logins,
   blocking, attempts by a blocked client, night attempts, operations on
   frozen or closed accounts and amounts of at least 500 000 RUB go to an
-  append-only log.
+  append-only log. An event names who acted: a credit refused by the
+  night window or by a frozen or closed account is recorded on the
+  account alone, because the owner did not send that money, and a risk
+  profile built from the log must not get worse from what others do to a
+  client. A credit the owner makes through their own session is theirs.
 
 ## Client sessions
 

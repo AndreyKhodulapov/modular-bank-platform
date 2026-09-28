@@ -42,7 +42,8 @@ class Bank:
     - a blocked client cannot move money out or change their accounts;
       money sent to them still arrives;
     - failed logins, night attempts, operations on frozen or closed accounts
-      and large amounts are recorded as suspicious;
+      and large amounts are recorded as suspicious; a refused credit is
+      recorded on the account alone, since someone else sent the money;
     - ``screen()`` scores a transaction with the risk analyzer before money
       moves and refuses a high-risk one;
     - a successful login opens a ``ClientSession``: ``resolve_session()``
@@ -394,16 +395,27 @@ class Bank:
         return account
 
     def _run_on_account[T](
-        self, action: str, account: BankAccount, operation: Callable[[], T], *, actor: ClientSession | None = None
+        self,
+        action: str,
+        account: BankAccount,
+        operation: Callable[[], T],
+        *,
+        incoming: bool = False,
+        actor: ClientSession | None = None,
     ) -> T:
-        """Run ``operation`` and record it as suspicious when the account turns out frozen or closed."""
+        """Run ``operation`` and record it as suspicious when the account turns out frozen or closed.
+
+        As in ``_guard``, an ``incoming`` credit is someone else's attempt:
+        it is recorded on the account alone, not on its owner, unless the
+        owner made it through their own session.
+        """
         try:
             return operation()
         except (AccountFrozenError, AccountClosedError):
             self._security.flag(
                 SuspicionReason.INACTIVE_ACCOUNT_OPERATION,
                 f"{action} on a {account.status.value} account",
-                client_id=account.owner.client_id,
+                client_id=account.owner.client_id if not incoming or actor is not None else None,
                 account_id=account.account_id,
                 actor=actor,
             )
@@ -428,14 +440,16 @@ class Bank:
         self._review_amount("close_account", account, payout, actor=actor)
         return payout
 
-    def ensure_operational(self, action: str, account_id: str) -> BankAccount:
+    def ensure_operational(self, action: str, account_id: str, *, incoming: bool = False) -> BankAccount:
         """Return the account if it is active; otherwise record the attempt and raise.
 
         Lets a caller check an account before a multi-step operation, e.g. both
-        sides of a transfer before any money moves.
+        sides of a transfer before any money moves. The recipient's side is
+        ``incoming``: a refusal there is recorded on the account, not on its
+        owner, who did not act.
         """
         account = self.get_account(account_id)
-        self._run_on_account(action, account, account.ensure_operational)
+        self._run_on_account(action, account, account.ensure_operational, incoming=incoming)
         return account
 
     def screen(self, transaction: Transaction) -> RiskAssessment:
@@ -622,7 +636,7 @@ class Bank:
         value = to_money(amount, require="positive")
         self._guard(action, account.owner, account, incoming=incoming, actor=actor)
         before = account.balance
-        balance = self._run_on_account(action, account, lambda: operation(value), actor=actor)
+        balance = self._run_on_account(action, account, lambda: operation(value), incoming=incoming, actor=actor)
         # the actual change, so the premium account's own fee is part of a withdrawal
         self._record_movement(kind, account, before, transaction_id, actor=actor)
         self._review_amount(action, account, abs(balance - before), actor=actor)

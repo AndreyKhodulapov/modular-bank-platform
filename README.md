@@ -321,7 +321,7 @@ Security rules applied by the bank:
 | Login lockout | 3 wrong passwords in a row block the client and end their sessions; `unblock_client()` restores access, the client logs in again |
 | Blocked client | cannot open or close accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw, invest, divest and unblock are refused; login, freeze, monthly interest and queries are allowed |
-| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more, use of an expired session; kept in the audit log as `security` events |
+| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more, use of an expired session; kept in the audit log as `security` events. A refused credit (a night one, or one to a frozen or closed account) is recorded on the account, not on its owner, who did not act, unless the owner made it through their session |
 
 `Bank.invest()` and `Bank.divest()` are client operations with the same
 checks as a deposit or a withdrawal. `Bank.apply_monthly_interest()` is the

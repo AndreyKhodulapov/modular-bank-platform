@@ -449,6 +449,18 @@ def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operati
     [activity] = bank.suspicious_activities
     assert activity.reason is SuspicionReason.INACTIVE_ACCOUNT_OPERATION
     assert activity.account_id == account.account_id
+    # a credit is someone else's attempt, so the owner is not named; every other operation is the owner's
+    assert activity.client_id == (None if operation == "deposit" else client.client_id)
+
+
+def test_a_credit_through_the_owners_session_is_the_owners_attempt(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    account = bank.open_account(client.client_id, currency="RUB")
+    bank.freeze_account(account.account_id)
+    with pytest.raises(AccountFrozenError):
+        bank.deposit(account.account_id, 10, actor=session)
+    [activity] = bank.suspicious_activities
+    assert (activity.client_id, activity.account_id) == (client.client_id, account.account_id)
 
 
 def test_an_operation_through_a_session_names_it_in_every_event(bank, client, password):
@@ -714,8 +726,12 @@ def test_ensure_operational_flags_a_frozen_account(bank, client):
     account = bank.open_account(client.client_id, currency="RUB")
     bank.freeze_account(account.account_id)
     with pytest.raises(AccountFrozenError):
-        bank.ensure_operational("transfer", account.account_id)
-    assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]
+        bank.ensure_operational("withdraw", account.account_id)
+    with pytest.raises(AccountFrozenError):
+        bank.ensure_operational("deposit", account.account_id, incoming=True)
+    assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION] * 2
+    # the debit is the owner's attempt; the credit is somebody else's and names the account alone
+    assert [activity.client_id for activity in bank.suspicious_activities] == [client.client_id, None]
 
 
 def test_now_and_converter_come_from_the_collaborators(bank, clock):

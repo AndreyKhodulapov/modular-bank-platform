@@ -89,6 +89,11 @@ def test_ten_transactions_through_the_queue(bank, clock, queue, processor, make_
         (too_big.transaction_id, False),
     ]
     assert reasons(bank) == [SuspicionReason.INACTIVE_ACCOUNT_OPERATION]
+    # Anna sent the money: the frozen recipient's owner, Carl, did nothing and is not named
+    assert (bank.suspicious_activities[0].client_id, bank.suspicious_activities[0].account_id) == (
+        None,
+        carl_rub.account_id,
+    )
 
     # the history: every finished transaction once, in the order they finished; the cancelled one is not there
     finished = [cash, to_boris, salary, abroad, overdraft, to_frozen, exchange, later, too_big]

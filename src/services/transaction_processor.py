@@ -230,7 +230,9 @@ class TransactionProcessor:
         )
         # the recipient of an external transfer is in another bank, nothing to credit here
         recipient_id = transaction.internal_recipient_id
-        recipient = self._bank.ensure_operational("deposit", recipient_id) if recipient_id is not None else None
+        recipient = (
+            self._bank.ensure_operational("deposit", recipient_id, incoming=True) if recipient_id is not None else None
+        )
         converter = self._bank.converter
         # both conversions come before the debit: a credit that rounds away to nothing must not strand it
         debit = self._convert_for(transaction, sender) if sender is not None else None
