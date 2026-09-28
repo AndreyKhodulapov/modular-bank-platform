@@ -66,6 +66,8 @@ class ClientEvent(Enum):
 
     REGISTERED = "client_registered"
     UNBLOCKED = "client_unblocked"
+    LOGGED_IN = "client_logged_in"
+    LOGGED_OUT = "client_logged_out"
 
 
 class RiskEvent(Enum):

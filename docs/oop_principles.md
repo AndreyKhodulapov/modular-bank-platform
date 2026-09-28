@@ -146,6 +146,10 @@ amounts and enum members are values: two equal amounts are interchangeable.
   operation, audit) into one call such as `bank.withdraw(account_id, amount)`.
   `ReportBuilder` is a facade over the reports, the exporters and the chart
   renderer.
+- **Proxy (protection)** - an object in front of another that controls
+  access to it. `ClientPortal` offers the client operations of `Bank` with
+  a session as the first argument, checks the session and the owner of the
+  account, and passes the call on to the bank.
 - **Registry** - a well-known object that stores objects by key so they can be
   found later. `Bank._clients` and `Bank._accounts` store clients and accounts
   by id and back `get_client()`, `get_account()` and `search_accounts()`;
@@ -206,6 +210,41 @@ amounts and enum members are values: two equal amounts are interchangeable.
   blocking, attempts by a blocked client, night attempts, operations on
   frozen or closed accounts and amounts of at least 500 000 RUB go to an
   append-only log.
+
+## Client sessions
+
+- **Authorization is a layer over the facade, not inside it.**
+  `ClientPortal` (`src/services/client_portal.py`) stands in front of
+  `Bank`: it resolves the session to its client, checks that the account is
+  that client's and only then delegates. `Bank` keeps its rules (the night
+  window, the account status, the amount review) and stays the API of the
+  back office: its callers and tests work as before, and all it learned is
+  an optional `actor=`. The portal adds the question the bank does not ask:
+  who acts.
+- **Why the bank does not demand a session itself.** Much of what it does is
+  not a client acting now. A client submits a transaction through the
+  portal, while the processor runs it later on the bank's behalf, after a
+  retry or the end of the night window, when the session may be long over;
+  interest, refunds and reports have no client at all. Checking the session
+  at submission and executing as the bank is how the rights and the work are
+  split. What the bank does check is a session given as `actor=`: it must
+  belong to the account's owner, and it is named in the audit log
+  (`details.session_id`) and in the balance movements of the history
+  (`BalanceMovement.session_id`), so both tell who acted, not only whose
+  account it was.
+- **Snapshots, not objects.** The portal returns `get_account_info()`
+  dictionaries, amounts and history records. An account object in the
+  client's hands would be a way around the bank: its `deposit()` and
+  `withdraw()` are public and know nothing of sessions.
+- **One answer for someone else's and a missing account.** Both are
+  `AccountNotFoundError`, so trying ids through the portal does not reveal
+  which of them exist.
+- **A session is a bearer secret.** `ClientSession` carries a random
+  `token`; `SessionStore` keeps only its SHA-256 hash and compares it with
+  `hmac.compare_digest()`, so a leaked store gives no working session and a
+  session altered in any field is not recognised. The lifetime is absolute
+  (30 minutes by the bank's clock), and blocking a client closes all of
+  their sessions.
 
 ## Transaction processing
 

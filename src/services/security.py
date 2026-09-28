@@ -1,17 +1,25 @@
-"""Security rules of the bank: passwords, login lockout, the night window and suspicious activities."""
+"""Security rules of the bank: passwords, logins and sessions, the night window and suspicious activities."""
 
 import hashlib
 import hmac
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, OperationTimeRestrictedError
+from exceptions import (
+    AuthenticationError,
+    ClientBlockedError,
+    InvalidOperationError,
+    InvalidSessionError,
+    OperationTimeRestrictedError,
+    SessionExpiredError,
+)
 from models.client import Client
 from services.audit_log import AuditCategory, AuditEvent, AuditLevel, AuditLog
+from services.session import ClientSession, SessionStore, session_details
 
 
 class SuspicionReason(Enum):
@@ -24,6 +32,7 @@ class SuspicionReason(Enum):
     NIGHT_OPERATION = "night_operation"
     INACTIVE_ACCOUNT_OPERATION = "inactive_account_operation"
     LARGE_OPERATION = "large_operation"
+    EXPIRED_SESSION = "expired_session"
 
 
 @dataclass(frozen=True)
@@ -49,6 +58,9 @@ class SecurityGuard:
     - stores password hashes (PBKDF2-HMAC-SHA256 with a random salt), never
       the passwords themselves;
     - blocks a client after ``MAX_FAILED_ATTEMPTS`` failed logins in a row;
+    - opens a ``ClientSession`` on a successful login, valid for
+      ``SESSION_TTL`` by its clock; blocking a client closes all of their
+      sessions, and unblocking does not bring them back;
     - forbids restricted operations inside ``[NIGHT_START, NIGHT_END)``;
     - records suspicious activities in the audit log (category
       ``security``; a blocked client is ``CRITICAL``, the rest ``WARNING``).
@@ -59,6 +71,7 @@ class SecurityGuard:
     """
 
     MAX_FAILED_ATTEMPTS = 3
+    SESSION_TTL = timedelta(minutes=30)
     NIGHT_START = time(0, 0)
     NIGHT_END = time(5, 0)
     LARGE_OPERATION_THRESHOLD = Decimal("500000.00")  # in the bank's base currency
@@ -72,6 +85,7 @@ class SecurityGuard:
             raise InvalidOperationError("audit_log must be an AuditLog instance.")
         self._clock = clock
         self._passwords: dict[str, _PasswordHash] = {}
+        self._sessions = SessionStore()
         self._audit_log = audit_log if audit_log is not None else AuditLog()
 
     def now(self) -> datetime:
@@ -87,7 +101,14 @@ class SecurityGuard:
             return None
         return datetime.combine(moment.date(), self.NIGHT_END, tzinfo=moment.tzinfo)
 
-    def ensure_daytime(self, action: str, *, client_id: str | None = None, account_id: str | None = None) -> None:
+    def ensure_daytime(
+        self,
+        action: str,
+        *,
+        client_id: str | None = None,
+        account_id: str | None = None,
+        actor: ClientSession | None = None,
+    ) -> None:
         """Reject ``action`` and record the attempt when it happens in the night window."""
         moment = self.now()
         if self.night_ends_at(moment) is None:
@@ -98,6 +119,7 @@ class SecurityGuard:
             f"{action} attempted at {moment:%H:%M}",
             client_id=client_id,
             account_id=account_id,
+            actor=actor,
         )
         raise OperationTimeRestrictedError(action, window)
 
@@ -118,11 +140,13 @@ class SecurityGuard:
         # constant-time comparison does not reveal how many leading bytes matched
         return hmac.compare_digest(stored.digest, self._hash(password, stored.salt))
 
-    def authenticate(self, client: Client, password: str) -> None:
-        """Check ``password``; the ``MAX_FAILED_ATTEMPTS``-th failure in a row blocks the client.
+    def authenticate(self, client: Client, password: str) -> ClientSession:
+        """Check ``password`` and open a new session; the ``MAX_FAILED_ATTEMPTS``-th failure in a row blocks.
 
         Raises ``ClientBlockedError`` for a blocked client (even with the right
-        password) and ``AuthenticationError`` for a wrong password.
+        password) and ``AuthenticationError`` for a wrong password. A new
+        login does not close the client's other sessions: each device keeps
+        its own until it expires or logs out.
         """
         if not isinstance(password, str):
             raise InvalidOperationError("password must be a string.")
@@ -133,7 +157,9 @@ class SecurityGuard:
 
         if self._password_matches(client_id, password):
             client.reset_failed_logins()
-            return
+            session = ClientSession.issue(client_id, issued_at=self.now(), ttl=self.SESSION_TTL)
+            self._sessions.add(session, client)
+            return session
 
         failures = client.record_failed_login()
         self.flag(
@@ -143,6 +169,7 @@ class SecurityGuard:
         )
         if failures >= self.MAX_FAILED_ATTEMPTS:
             client.block()
+            self._sessions.remove_client(client_id)
             self.flag(
                 SuspicionReason.CLIENT_BLOCKED,
                 f"blocked after {failures} failed login attempts",
@@ -151,8 +178,63 @@ class SecurityGuard:
             raise ClientBlockedError(client_id)
         raise AuthenticationError(client_id, attempts_left=self.MAX_FAILED_ATTEMPTS - failures)
 
+    def resolve_session(self, session: ClientSession) -> Client:
+        """Return the client of an open, unexpired session.
+
+        Raises ``InvalidSessionError`` for a session this guard did not open
+        or has closed, and for any session of a blocked client: the model can
+        be blocked past the guard, and its sessions end all the same. An
+        expired session is closed, recorded as suspicious and refused with
+        ``SessionExpiredError``; using it again finds it unknown.
+        """
+        client = self._open_session_client(session)
+        if session.is_expired(self.now()):
+            self._sessions.remove(session.session_id)
+            self.flag(
+                SuspicionReason.EXPIRED_SESSION,
+                f"session used after it expired at {session.expires_at:%H:%M}",
+                client_id=client.client_id,
+                actor=session,
+            )
+            raise SessionExpiredError(session.session_id, session.expires_at)
+        return client
+
+    def close_session(self, session: ClientSession) -> Client:
+        """Close an open session and return its client.
+
+        An expired session is closed too, quietly: logging out late (a tab
+        left open) is not a suspicious use of it. An unknown or closed
+        session, or one of a blocked client, is refused as by
+        ``resolve_session()``.
+        """
+        client = self._open_session_client(session)
+        self._sessions.remove(session.session_id)
+        return client
+
+    def close_client_sessions(self, client_id: str) -> int:
+        """Close every session of the client and return how many were open."""
+        return self._sessions.remove_client(client_id)
+
+    def _open_session_client(self, session: ClientSession) -> Client:
+        """The client of a session in the store, expired or not; a blocked client's sessions are closed and refused."""
+        if not isinstance(session, ClientSession):
+            raise InvalidOperationError("session must be a ClientSession instance.")
+        client = self._sessions.find(session)
+        if client is None:
+            raise InvalidSessionError(session.session_id)
+        if client.is_blocked:
+            self._sessions.remove_client(client.client_id)
+            raise InvalidSessionError(session.session_id)
+        return client
+
     def review_amount(
-        self, amount_in_base: Decimal, action: str, *, client_id: str | None = None, account_id: str | None = None
+        self,
+        amount_in_base: Decimal,
+        action: str,
+        *,
+        client_id: str | None = None,
+        account_id: str | None = None,
+        actor: ClientSession | None = None,
     ) -> None:
         """Record ``action`` if its amount reaches the threshold; the operation itself is not stopped."""
         if amount_in_base < self.LARGE_OPERATION_THRESHOLD:
@@ -162,6 +244,7 @@ class SecurityGuard:
             f"{action} of {amount_in_base} in base currency (threshold {self.LARGE_OPERATION_THRESHOLD})",
             client_id=client_id,
             account_id=account_id,
+            actor=actor,
         )
 
     def flag(
@@ -171,7 +254,9 @@ class SecurityGuard:
         *,
         client_id: str | None = None,
         account_id: str | None = None,
+        actor: ClientSession | None = None,
     ) -> SuspiciousActivity:
+        """Record a suspicious activity; ``actor`` is the client session it was attempted through, if any."""
         level = AuditLevel.CRITICAL if reason in self.CRITICAL_REASONS else AuditLevel.WARNING
         event = self._audit_log.record(
             level,
@@ -181,6 +266,7 @@ class SecurityGuard:
             timestamp=self.now(),
             client_id=client_id,
             account_id=account_id,
+            details=session_details(actor),
         )
         return self._to_activity(event)
 

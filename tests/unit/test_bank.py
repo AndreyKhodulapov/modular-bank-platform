@@ -12,8 +12,10 @@ from exceptions import (
     ClientNotFoundError,
     InsufficientFundsError,
     InvalidOperationError,
+    InvalidSessionError,
     OperationTimeRestrictedError,
     RiskBlockedError,
+    SessionExpiredError,
 )
 from models import AccountStatus, AssetType, BankAccount, Client, InvestmentAccount, SavingsAccount, Transaction
 from services import (
@@ -32,7 +34,8 @@ from tests.helpers import history_gaps, lifecycle, reasons
 NIGHT = datetime(2026, 9, 25, 2, 30)
 MONTH_LATER = datetime(2026, 10, 24, 14, 0)  # the day monthly interest is due on an account opened at the start
 
-# (prepare, operation) pairs for the operations refused at night and, except a deposit, for a blocked client
+# (prepare, operation) pairs for the operations refused at night and, except a deposit and an unfreeze, for a blocked
+# client
 RESTRICTED_OPERATIONS = [
     pytest.param(
         lambda bank, client, account: None,
@@ -133,8 +136,59 @@ def test_unknown_ids_raise_not_found(bank):
         bank.get_account("nope")
 
 
-def test_authenticate_client_returns_client(bank, client, password):
-    assert bank.authenticate_client(client.client_id, password) is client
+def test_authenticate_client_opens_a_session_of_the_client(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    assert session.client_id == client.client_id
+    assert bank.resolve_session(session) is client
+
+
+def test_login_and_logout_are_recorded_with_the_session_id(bank, client, clock, password):
+    session = bank.authenticate_client(client.client_id, password)
+    clock.moment += timedelta(minutes=5)
+    bank.logout(session)
+    logged_in, logged_out = bank.audit_log.filter(category=AuditCategory.CLIENT)[1:]
+    assert (logged_in.event, logged_in.level, logged_in.client_id) == (
+        "client_logged_in",
+        AuditLevel.INFO,
+        client.client_id,
+    )
+    assert dict(logged_in.details) == {"session_id": session.session_id, "expires_at": session.expires_at.isoformat()}
+    assert (logged_out.event, logged_out.timestamp) == ("client_logged_out", clock.moment)
+    assert dict(logged_out.details) == {"session_id": session.session_id}
+    assert all(session.token not in str(event.to_dict()) for event in bank.audit_log)
+
+
+def test_logged_out_session_is_refused(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    other = bank.authenticate_client(client.client_id, password)
+    bank.logout(session)
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(session)
+    with pytest.raises(InvalidSessionError):
+        bank.logout(session)
+    assert bank.resolve_session(other) is client  # a new login is another session
+
+
+def test_logging_out_late_closes_the_session_quietly(bank, client, clock, password):
+    session = bank.authenticate_client(client.client_id, password)
+    clock.moment = session.expires_at
+    bank.logout(session)
+    assert reasons(bank) == []
+    logged_out = bank.audit_log.filter(event="client_logged_out")[-1]
+    assert dict(logged_out.details) == {"session_id": session.session_id, "expired": True}
+    with pytest.raises(InvalidSessionError) as info:
+        bank.resolve_session(session)
+    assert not isinstance(info.value, SessionExpiredError)
+
+
+def test_using_an_expired_session_is_flagged_with_its_id(bank, client, clock, password):
+    session = bank.authenticate_client(client.client_id, password)
+    clock.moment = session.expires_at
+    with pytest.raises(SessionExpiredError):
+        bank.resolve_session(session)
+    [event] = bank.audit_log.filter(event="expired_session")
+    assert (event.client_id, dict(event.details)) == (client.client_id, {"session_id": session.session_id})
+    assert "client_logged_out" not in lifecycle(bank)
 
 
 def test_login_for_unknown_client_is_flagged(bank, password):
@@ -146,16 +200,28 @@ def test_login_for_unknown_client_is_flagged(bank, password):
 
 def test_login_is_allowed_at_night(bank, client, clock, password):
     clock.moment = NIGHT
-    assert bank.authenticate_client(client.client_id, password) is client
+    assert bank.resolve_session(bank.authenticate_client(client.client_id, password)) is client
 
 
 def test_unblock_client_restores_access(bank, client, password):
+    before = bank.authenticate_client(client.client_id, password)
     for _ in range(3):
         with pytest.raises((AuthenticationError, ClientBlockedError)):
             bank.authenticate_client(client.client_id, "wrong-password")
     bank.unblock_client(client.client_id)
     assert not client.is_blocked
-    assert bank.authenticate_client(client.client_id, password) is client
+    assert bank.resolve_session(bank.authenticate_client(client.client_id, password)) is client
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(before)  # blocking ended it; unblocking does not bring it back
+
+
+def test_unblock_ends_the_sessions_of_a_client_blocked_past_the_guard(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    client.block()  # the model is blocked directly, and the session is not used before the unblock
+    bank.unblock_client(client.client_id)
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(session)
+    assert bank.resolve_session(bank.authenticate_client(client.client_id, password)) is client
 
 
 @pytest.mark.parametrize(
@@ -277,7 +343,8 @@ def test_restricted_operations_are_forbidden_at_night(bank, client, clock, prepa
 
 
 @pytest.mark.parametrize(
-    ("prepare", "operation"), [operation for operation in RESTRICTED_OPERATIONS if operation.id != "deposit"]
+    ("prepare", "operation"),
+    [operation for operation in RESTRICTED_OPERATIONS if operation.id not in ("deposit", "unfreeze_account")],
 )
 def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, prepare, operation):
     account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
@@ -290,6 +357,47 @@ def test_restricted_operations_are_forbidden_for_blocked_client(bank, client, pr
     assert (lifecycle(bank), bank.history.movements()) == (recorded, moved)
     assert (account.status, account.balance) == (status, Decimal("100.00"))
     assert client.account_ids == [account.account_id]
+
+
+def test_the_bank_unfreezes_the_account_of_a_blocked_client(bank, client):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    bank.freeze_account(account.account_id)
+    client.block()
+    bank.unfreeze_account(account.account_id)  # the bank acts, so it is no attempt of the blocked client
+    assert account.status is AccountStatus.ACTIVE
+    assert reasons(bank) == []
+    with pytest.raises(ClientBlockedError):
+        bank.withdraw(account.account_id, 10)  # the client still cannot move the money
+
+
+def test_a_night_unfreeze_is_recorded_on_the_account_not_on_the_client(bank, client, clock):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=100)
+    bank.freeze_account(account.account_id)
+    clock.moment = NIGHT
+    with pytest.raises(OperationTimeRestrictedError):
+        bank.unfreeze_account(account.account_id)
+    [activity] = bank.suspicious_activities
+    assert (activity.reason, activity.client_id, activity.account_id) == (
+        SuspicionReason.NIGHT_OPERATION,
+        None,
+        account.account_id,
+    )
+    assert account.status is AccountStatus.FROZEN
+
+
+@pytest.mark.parametrize(
+    ("prepare", "error_type"),
+    [("close_account", AccountClosedError), (None, InvalidOperationError)],
+    ids=["closed", "not_frozen"],
+)
+def test_an_unfreeze_the_account_refuses_is_not_suspicious(bank, client, prepare, error_type):
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=0)
+    if prepare:
+        getattr(bank, prepare)(account.account_id)
+    recorded = lifecycle(bank)
+    with pytest.raises(error_type):
+        bank.unfreeze_account(account.account_id)
+    assert (reasons(bank), lifecycle(bank)) == ([], recorded)
 
 
 def test_blocked_client_still_receives_deposits(bank, client):
@@ -327,7 +435,6 @@ def test_deposit_and_withdraw(bank, client):
         ("close_account", "withdraw", AccountClosedError),
         ("close_account", "close_account", AccountClosedError),
         ("close_account", "freeze_account", AccountClosedError),
-        ("close_account", "unfreeze_account", AccountClosedError),
     ],
 )
 def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operation, error_type):
@@ -341,6 +448,115 @@ def test_operation_on_inactive_account_is_flagged(bank, client, prepare, operati
     [activity] = bank.suspicious_activities
     assert activity.reason is SuspicionReason.INACTIVE_ACCOUNT_OPERATION
     assert activity.account_id == account.account_id
+
+
+def test_an_operation_through_a_session_names_it_in_every_event(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    account = bank.open_account(client.client_id, currency="RUB", initial_balance=600_000, actor=session)
+    bank.freeze_account(account.account_id, actor=session)
+    bank.unfreeze_account(account.account_id)  # the bank's decision, never a client's
+    bank.close_account(account.account_id, actor=session)
+    events = [event for event in bank.audit_log if event.account_id == account.account_id]
+    assert [event.event for event in events] == [
+        "account_opened",
+        "large_operation",
+        "account_frozen",
+        "account_unfrozen",
+        "account_closed",
+        "large_operation",
+    ]
+    assert [event.details.get("session_id") for event in events] == [
+        session.session_id,
+        session.session_id,
+        session.session_id,
+        None,
+        session.session_id,
+        session.session_id,
+    ]
+    # the money of the opening and the payout is traced to the session in the history too
+    movements = bank.history.movements(account.account_id)
+    assert [movement.kind for movement in movements] == [MovementKind.OPENING, MovementKind.PAYOUT]
+    assert {movement.session_id for movement in movements} == {session.session_id}
+    assert dict(events[0].details) == {
+        "account_type": "basic",
+        "currency": "RUB",
+        "initial_balance": "600000.00",
+        "session_id": session.session_id,
+    }
+
+
+def test_money_moved_through_a_session_is_traced_to_it_and_the_banks_own_is_not(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    account = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
+    bank.deposit(account.account_id, 500, actor=session)
+    bank.withdraw(account.account_id, 200, actor=session)
+    bank.invest(account.account_id, "etf", 300, actor=session)
+    bank.divest(account.account_id, "etf", 100, actor=session)
+    bank.deposit(account.account_id, 50)  # the back office
+    assert [(movement.kind, movement.session_id) for movement in bank.history.movements(account.account_id)] == [
+        (MovementKind.OPENING, None),
+        (MovementKind.DEPOSIT, session.session_id),
+        (MovementKind.WITHDRAWAL, session.session_id),
+        (MovementKind.INVESTMENT, session.session_id),
+        (MovementKind.DIVESTMENT, session.session_id),
+        (MovementKind.DEPOSIT, None),
+    ]
+
+
+def test_a_refusal_names_the_session_it_came_through(bank, client, password, clock):
+    session = bank.authenticate_client(client.client_id, password)
+    account = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=100)
+    bank.freeze_account(account.account_id)
+    with pytest.raises(AccountFrozenError):
+        bank.invest(account.account_id, "bonds", 10, actor=session)
+    client.block()
+    with pytest.raises(ClientBlockedError):
+        bank.withdraw(account.account_id, 10, actor=session)
+    clock.moment = NIGHT
+    with pytest.raises(OperationTimeRestrictedError):
+        bank.deposit(account.account_id, 10, actor=session)
+    flags = bank.audit_log.filter(category=AuditCategory.SECURITY)
+    assert [event.event for event in flags] == [
+        "inactive_account_operation",
+        "blocked_client_activity",
+        "night_operation",
+    ]
+    assert {event.details["session_id"] for event in flags} == {session.session_id}
+    # a deposit made through the owner's session is the owner's attempt, unlike someone else's credit
+    assert flags[-1].client_id == client.client_id
+
+
+ACTOR_OPERATIONS = [
+    pytest.param(lambda bank, account, actor: bank.close_account(account.account_id, actor=actor), id="close"),
+    pytest.param(lambda bank, account, actor: bank.freeze_account(account.account_id, actor=actor), id="freeze"),
+    pytest.param(lambda bank, account, actor: bank.deposit(account.account_id, 10, actor=actor), id="deposit"),
+    pytest.param(lambda bank, account, actor: bank.withdraw(account.account_id, 10, actor=actor), id="withdraw"),
+    pytest.param(lambda bank, account, actor: bank.invest(account.account_id, "bonds", 10, actor=actor), id="invest"),
+    pytest.param(lambda bank, account, actor: bank.divest(account.account_id, "bonds", 10, actor=actor), id="divest"),
+    pytest.param(
+        lambda bank, account, actor: bank.open_account(account.owner.client_id, currency="RUB", actor=actor),
+        id="open_account",
+    ),
+]
+
+
+@pytest.mark.parametrize("operation", ACTOR_OPERATIONS)
+def test_a_session_of_another_client_is_refused(bank, client, make_client, operation):
+    account = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=100)
+    boris = bank.add_client(make_client("Boris"), "boris-password")
+    session = bank.authenticate_client(boris.client_id, "boris-password")
+    events, movements = len(bank.audit_log), bank.history.movements()
+    with pytest.raises(InvalidOperationError, match="belongs to another client"):
+        operation(bank, account, session)
+    assert (account.balance, account.status) == (Decimal("100.00"), AccountStatus.ACTIVE)
+    assert (len(bank.audit_log), bank.history.movements()) == (events, movements)
+
+
+@pytest.mark.parametrize("operation", ACTOR_OPERATIONS)
+def test_an_actor_must_be_a_session(bank, client, operation):
+    account = bank.open_account(client.client_id, "investment", currency="RUB", initial_balance=100)
+    with pytest.raises(InvalidOperationError, match="actor must be a ClientSession"):
+        operation(bank, account, client.client_id)
 
 
 def test_large_amount_is_converted_before_the_check(bank, client):

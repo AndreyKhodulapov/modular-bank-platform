@@ -10,6 +10,7 @@ from exceptions import InvalidOperationError, TransactionNotFoundError
 from models.enums import TransactionStatus
 from models.transaction import Transaction
 from services.audit_log import AuditCategory, AuditLevel, AuditLog, TransactionEvent
+from services.session import ClientSession, session_details
 
 _logger = logging.getLogger("bank.queue")
 
@@ -58,19 +59,24 @@ class TransactionQueue:
         """Number of transactions still waiting in the queue."""
         return len(self._queued)
 
-    def add(self, transaction: Transaction) -> Transaction:
+    def add(self, transaction: Transaction, *, actor: ClientSession | None = None) -> Transaction:
         """Queue a pending transaction; its ``priority`` and ``scheduled_at`` decide the order.
 
         Its id must be new to the queue, unless it is this same transaction
         coming back for a retry: another transaction cannot reuse the id of
         one that has been handed out or finished.
 
+        ``actor`` is the client session the transaction was submitted
+        through; its id goes to ``details.session_id`` of the audit event.
+        Without it the submission is the bank's own.
+
         The audit event is recorded first: if it cannot be written, the
         transaction is not queued and the caller gets the error.
         """
         self._check_queueable(transaction)
+        details = session_details(actor)
         now = self._clock()
-        self._audit_queued(transaction, now)
+        self._audit_queued(transaction, now, details)
         self._enqueue(transaction, now)
         return transaction
 
@@ -116,7 +122,7 @@ class TransactionQueue:
         else:
             heapq.heappush(self._delayed, (transaction.scheduled_at, sequence, transaction.transaction_id))
 
-    def _audit_queued(self, transaction: Transaction, now: datetime) -> None:
+    def _audit_queued(self, transaction: Transaction, now: datetime, details: dict[str, str] | None = None) -> None:
         when = "" if transaction.is_due(now) else f" for {transaction.scheduled_at:%m-%d %H:%M}"
         self._audit(
             TransactionEvent.QUEUED,
@@ -126,6 +132,7 @@ class TransactionQueue:
             priority=transaction.priority.name.lower(),
             scheduled_at=transaction.scheduled_at,
             attempts=transaction.attempts,
+            **(details or {}),
         )
 
     def _push_ready(self, transaction: Transaction, sequence: int) -> None:

@@ -47,6 +47,7 @@ def test_legacy_demo_runs_without_errors(tmp_path):
     assert "STAGE 3: Bank System" in completed.stdout
     assert "[rejected] register a 16-year-old client: InvalidOperationError" in completed.stdout
     assert "[rejected] Oleg, wrong password #3: ClientBlockedError" in completed.stdout
+    assert re.search(r"Maria logs in: opened session \w{8} of client \w{8}, valid until 09-24 14:30", completed.stdout)
     assert "[rejected] withdraw 5_000 KZT: OperationTimeRestrictedError" in completed.stdout
     assert "(min_balance does not hold money back): payout 300000.00" in completed.stdout
     assert "total balance: 1502100.00 RUB" in completed.stdout
@@ -117,15 +118,27 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "Maria's balance stayed 1107001.00 RUB (was 1107001.00)" in output
     assert "through the bank: The bank sets status of a new account itself." in output
     assert "by the model itself: An account cannot be created closed" in output
-    # the client view and the reports
-    assert "PremiumAccount | Sokolov Oleg | ****" in output
-    assert "| active | -1511.00 USD" in output
+    # the client view: a session, snapshots of the accounts, cash taken by hand, someone else's account refused
+    assert re.search(r"Logged in: session \w{8} of client \w{8}, valid until 09-25 10:30", output)
+    assert re.search(r"PremiumAccount \| \w{8} \| active \| -1511\.00 USD", output)
+    assert "| active | -1511.00 USD | overdraft 3000.00 | fee 2.00" in output
+    cash = re.search(r"Takes 1_000 EUR in cash from InvestmentAccount (\w{8}): balance 11000\.00 EUR", output)
+    assert cash, "the line of the cash taken by hand is missing"
+    assert f"Statement of InvestmentAccount {cash.group(1)}:" in output  # the same account, the same short id
+    assert re.search(r"Tries Maria's account \w{8} with the same session: AccountNotFoundError\n", output)
+    assert "Maria's balance stays 1107001.00 RUB" in output
     # the statement shows the balance and the total value: a portfolio move changes the first only
     assert "investment     -5000.00     11000.00 EUR  total     16000.00" in output
     assert "divestment     +1000.00     12000.00 EUR  total     16000.00" in output
+    assert "withdrawal     -1000.00     11000.00 EUR  total     15000.00" in output
+    assert "Logged out; the session is refused now: InvalidSessionError: Session" in output
+    assert "The audit log names the session in 2 events:" in output
+    moved = output.split("Money moved through the session, as the history holds it:\n")[1].split("\n\n")[0]
+    [line] = moved.splitlines()  # the cash taken by hand, and nothing the bank did
+    assert "withdrawal     -1000.00     11000.00 EUR" in line
     bank_report = output.split("= 5. Reports =")[1].split("  Risk report")[0]
     assert "open_accounts           11" in bank_report  # the closed CNY account is not counted
-    assert "total_balance           4331411.00" in bank_report  # the interest of the last round included
+    assert "total_balance           4231411.00" in bank_report  # the interest and the client's cash included
     assert "transactions            41" in bank_report  # the salary sent twice is a failed one
     assert "failure_rate_percent    22.5" in bank_report
     assert "tariff_fees             450.00" in bank_report
@@ -135,7 +148,7 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "CNY" not in bank_report
     # the balance history starts at the beginning of the day, before the salaries
     assert "2026-09-24 00:00     3940000.00\n    2026-09-24 09:00     4352971.00" in bank_report
-    assert "2026-09-25 10:00     4331411.00" in bank_report  # the interest; the portfolio move changes no value
+    assert "2026-09-25 10:00     4231411.00" in bank_report  # the interest and the cash; a portfolio move adds 0
     risk_report = output.split("  Risk report")[1].split("= 6. Export =")[0]
     assert "suspicious            7" in risk_report
     assert "blocked_by_risk       2" in risk_report
@@ -150,8 +163,14 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
 def test_main_program_writes_both_logs(main_run):
     completed, logs = main_run
     events = read_json_lines(logs / "audit.jsonl")
-    assert f"The audit log holds {len(events)} events of this run" in completed.stdout
     names = [event["event"] for event in events]
+    # the log is counted in section 3, before the client view logs in
+    assert names.count("client_logged_in") == 1
+    assert f"The audit log holds {names.index('client_logged_in')} events of this run" in completed.stdout
+    # the client view logs in and out under one session, which both events name
+    session_events = [event for event in events if event["event"] in ("client_logged_in", "client_logged_out")]
+    assert [event["event"] for event in session_events] == ["client_logged_in", "client_logged_out"]
+    assert len({event["details"]["session_id"] for event in session_events}) == 1
     assert names.count("transaction_queued") >= 40  # a retry comes back through the queue
     assert names.count("transaction_cancelled") == 1
     assert names.count("operation_blocked") == 2
@@ -184,7 +203,7 @@ def test_main_program_exports_the_reports_and_charts(main_run):
 
     stamp = stamps.pop()
     bank = json.loads((folder / f"{stamp}_bank.json").read_text(encoding="utf-8"))
-    assert bank["sections"]["summary"]["total_balance"] == "4331411.00"
+    assert bank["sections"]["summary"]["total_balance"] == "4231411.00"
     assert [row["currency"] for row in bank["sections"]["balance_by_currency"]] == ["EUR", "KZT", "RUB", "USD"]
     client = json.loads((folder / f"{stamp}_client.json").read_text(encoding="utf-8"))
     assert client["title"] == "Client report: Sokolov Oleg"

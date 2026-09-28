@@ -5,6 +5,7 @@ family with a single ``except BankError`` clause when they do not care about
 the exact reason.
 """
 
+from datetime import datetime
 from decimal import Decimal
 
 
@@ -93,6 +94,22 @@ class ClientBlockedError(BankError):
     def __init__(self, client_id: str) -> None:
         self.client_id = client_id
         super().__init__(f"Client {client_id} is blocked; operation rejected.")
+
+
+class InvalidSessionError(BankError):
+    """Raised when a client session is unknown, closed or revoked; the client must log in again."""
+
+    def __init__(self, session_id: str, message: str | None = None) -> None:
+        self.session_id = session_id
+        super().__init__(message or f"Session {session_id} is not valid; log in again.")
+
+
+class SessionExpiredError(InvalidSessionError):
+    """Raised when a client session is used after it expired."""
+
+    def __init__(self, session_id: str, expired_at: datetime) -> None:
+        self.expired_at = expired_at
+        super().__init__(session_id, f"Session {session_id} expired at {expired_at:%Y-%m-%d %H:%M}; log in again.")
 
 
 class OperationTimeRestrictedError(BankError):

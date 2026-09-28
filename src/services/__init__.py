@@ -16,6 +16,7 @@ from services.audit_log import (
 from services.audit_report import AuditReport, ClientRiskProfile, ErrorStatistics, SuspiciousOperationsReport
 from services.bank import Bank
 from services.bank_report import BalanceSummary, BankReport, ClientRanking, TransactionStatistics
+from services.client_portal import ClientPortal
 from services.currency import CurrencyConverter
 from services.fees import FeePolicy
 from services.risk import (
@@ -32,6 +33,7 @@ from services.risk import (
     RiskRule,
 )
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
+from services.session import ClientSession, SessionStore
 from services.transaction_history import BalanceMovement, MovementKind, TransactionHistory
 from services.transaction_processor import ProcessingReport, TransactionErrorRecord, TransactionProcessor
 from services.transaction_queue import TransactionQueue
@@ -51,8 +53,10 @@ __all__ = [
     "Bank",
     "BankReport",
     "ClientEvent",
+    "ClientPortal",
     "ClientRanking",
     "ClientRiskProfile",
+    "ClientSession",
     "CurrencyConverter",
     "ErrorStatistics",
     "FeePolicy",
@@ -71,6 +75,7 @@ __all__ = [
     "RiskLevel",
     "RiskRule",
     "SecurityGuard",
+    "SessionStore",
     "SuspicionReason",
     "SuspiciousActivity",
     "SuspiciousOperationsReport",

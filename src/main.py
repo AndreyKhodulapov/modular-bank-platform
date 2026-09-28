@@ -21,8 +21,11 @@ Sections:
    attempt to open an account that is already closed.
 3. Logging - totals of the audit log and the life cycle of a few
    transactions as the journal holds it.
-4. Client view - a client logs in and sees their accounts, a statement,
-   their transactions and the suspicious operations.
+4. Client view - a client logs in and acts through the client portal:
+   sees their accounts, takes cash, is refused someone else's account,
+   reads the statements and their transactions, then logs out; the bank
+   shows their suspicious operations and what the audit log and the
+   history recorded under the session.
 5. Reports - the bank report (totals, balances, transactions, top clients,
    the total balance over the day) and the risk report (assessments,
    suspicious operations, clients by risk, failures), as text.
@@ -45,8 +48,16 @@ from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError
+from exceptions import (
+    AccountNotFoundError,
+    AuthenticationError,
+    ClientBlockedError,
+    InvalidOperationError,
+    InvalidSessionError,
+)
 from logging_setup import configure_logging
 from models import BankAccount, Client, Transaction
 from reporting import Report, ReportBuilder
@@ -56,6 +67,7 @@ from services import (
     AuditLog,
     AuditReport,
     Bank,
+    ClientPortal,
     RiskEvent,
     SecurityGuard,
     TransactionEvent,
@@ -411,25 +423,54 @@ def show_logging(demo: DemoBank, simulation: Simulation) -> None:
             print(f"    {event}")
 
 
+def describe_account(info: dict[str, Any]) -> str:
+    """One line of an account snapshot, the way the client sees their own account."""
+    line = f"{info['account_type']} | {info['account_id'][:8]} | {info['status']}"
+    line += f" | {info['balance']} {info['currency']}"
+    if "overdraft_limit" in info:
+        line += f" | overdraft {info['overdraft_limit']} | fee {info['withdrawal_fee']}"
+    if "min_balance" in info:
+        line += f" | min {info['min_balance']} | {Decimal(info['monthly_rate']):.2%}/month"
+    if "total_value" in info:
+        line += f" | invested {info['invested_total']} | total {info['total_value']}"
+    return line
+
+
 def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
+    """The client logs in and acts through the portal; the suspicious operations are the bank's view of them."""
     bank, client = demo.bank, demo.clients[key]
     print_section(4, f"Client view: {client.full_name}")
-    bank.authenticate_client(client.client_id, demo.passwords[key])
-    print("  Logged in")
+    session = bank.authenticate_client(client.client_id, demo.passwords[key])
+    portal = ClientPortal(bank)
+    print(f"  Logged in: {session}")
 
-    accounts = bank.search_accounts(client_id=client.client_id)
+    snapshots = portal.accounts(session)
     print("\n  Accounts:")
-    for account in accounts:
-        print(f"    {account}")
+    for info in snapshots:
+        print(f"    {describe_account(info)}")
 
-    for account in accounts:
-        print(f"\n  Statement of {account.account_type} {account.account_id[:8]}:")
-        for movement in bank.history.movements(account.account_id):
+    source = next(info for info in snapshots if info["status"] == "active" and Decimal(info["balance"]) >= 1_000)
+    cash = portal.withdraw(session, source["account_id"], 1_000)
+    print(
+        f"\n  Takes 1_000 {source['currency']} in cash from {source['account_type']} {source['account_id'][:8]}: "
+        f"balance {cash} {source['currency']}"
+    )
+    someone_else = next(account for account in demo.accounts.values() if account.owner != client)
+    name = someone_else.owner.first_name
+    try:
+        portal.withdraw(session, someone_else.account_id, 1_000)
+    except AccountNotFoundError as error:
+        print(f"  Tries {name}'s account {someone_else.account_id[:8]} with the same session: {type(error).__name__}")
+    print(f"  {name}'s balance stays {someone_else.balance} {someone_else.currency.value}")
+
+    for info in snapshots:
+        print(f"\n  Statement of {info['account_type']} {info['account_id'][:8]}:")
+        for movement in portal.statement(session, info["account_id"]):
             total = f"total {movement.total_value_after:>12}"
             print(f"    {movement}  {total}  {simulation.label(movement.transaction_id)}".rstrip())
 
     print("\n  Transactions:")
-    for transaction in bank.history.transactions(account_ids=[account.account_id for account in accounts]):
+    for transaction in portal.transactions(session):
         reason = f" - {transaction.failure_reason}" if transaction.failure_reason else ""
         print(
             f"    {transaction.finished_at:%m-%d %H:%M} {simulation.label(transaction.transaction_id):<24} "
@@ -437,12 +478,26 @@ def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
             f"{transaction.amount} {transaction.currency.value}{reason}"
         )
 
-    print("\n  Suspicious operations:")
+    print("\n  Suspicious operations, as the bank's audit log holds them:")
     for event in bank.audit_log.filter(client_id=client.client_id, min_level=AuditLevel.WARNING):
         if event.category in (AuditCategory.SECURITY, AuditCategory.RISK):
             print(f"    {event}")
     print()
     print_block(AuditReport(bank.audit_log, bank.risk_analyzer).client_risk_profile(client.client_id))
+
+    bank.logout(session)
+    try:
+        portal.accounts(session)
+    except InvalidSessionError as error:
+        print(f"\n  Logged out; the session is refused now: {type(error).__name__}: {error}")
+    events = [event for event in bank.audit_log if event.details.get("session_id") == session.session_id]
+    print(f"  The audit log names the session in {len(events)} events:")
+    for event in events:
+        print(f"    {event}")
+    movements = [movement for movement in bank.history.movements() if movement.session_id == session.session_id]
+    print("  Money moved through the session, as the history holds it:")
+    for movement in movements:
+        print(f"    {movement}")
 
 
 def show_reports(builder: ReportBuilder, since: datetime) -> list[Report]:

@@ -231,18 +231,18 @@ def run_bank_system() -> list[AbstractAccount]:
     attempt("open a 'crypto' account", lambda: bank.open_account(maria.client_id, "crypto", currency="RUB"))
 
     print_step(3, "Authentication and lockout after three failures")
-    attempt("Maria logs in", lambda: bank.authenticate_client(maria.client_id, "maria-pass-1"), label="client")
+    attempt("Maria logs in", lambda: bank.authenticate_client(maria.client_id, "maria-pass-1"), label="opened")
     for number in range(1, 4):
         attempt(
             f"Oleg, wrong password #{number}",
             lambda: bank.authenticate_client(oleg.client_id, "guess-123"),
-            label="client",
+            label="opened",
         )
-    attempt("Oleg, right password", lambda: bank.authenticate_client(oleg.client_id, "oleg-pass-22"), label="client")
+    attempt("Oleg, right password", lambda: bank.authenticate_client(oleg.client_id, "oleg-pass-22"), label="opened")
     attempt("withdraw 100 USD (blocked client)", lambda: bank.withdraw(oleg_premium.account_id, 100))
-    attempt("unknown client logs in", lambda: bank.authenticate_client("no-such-id", "whatever-1"), label="client")
+    attempt("unknown client logs in", lambda: bank.authenticate_client("no-such-id", "whatever-1"), label="opened")
     attempt("unblock Oleg", lambda: bank.unblock_client(oleg.client_id), label="client")
-    attempt("Oleg, right password", lambda: bank.authenticate_client(oleg.client_id, "oleg-pass-22"), label="client")
+    attempt("Oleg, right password", lambda: bank.authenticate_client(oleg.client_id, "oleg-pass-22"), label="opened")
 
     print_step(4, "Freezing and unfreezing")
     attempt("freeze Maria's current account", lambda: bank.freeze_account(maria_current.account_id), "account")
@@ -257,7 +257,7 @@ def run_bank_system() -> list[AbstractAccount]:
     attempt("withdraw 5_000 KZT", lambda: bank.withdraw(alina_current.account_id, 5_000))
     attempt("open a savings account", lambda: bank.open_account(alina.client_id, "savings", currency="KZT"))
     attempt("freeze Alina's account", lambda: bank.freeze_account(alina_current.account_id), "account")
-    attempt("Alina logs in", lambda: bank.authenticate_client(alina.client_id, "alina-pass-333"), label="client")
+    attempt("Alina logs in", lambda: bank.authenticate_client(alina.client_id, "alina-pass-333"), label="opened")
     clock.moment = datetime(2026, 9, 25, 5, 0)
     print(f"  clock: {clock():%Y-%m-%d %H:%M}")
     attempt("unfreeze Alina's account", lambda: bank.unfreeze_account(alina_current.account_id), "account")

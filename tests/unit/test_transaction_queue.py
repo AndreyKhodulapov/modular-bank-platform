@@ -5,7 +5,7 @@ import pytest
 
 from exceptions import InvalidOperationError, InvalidTransactionStateError, TransactionNotFoundError
 from models import Transaction, TransactionPriority, TransactionStatus
-from services import AuditLevel, AuditLog, TransactionQueue
+from services import AuditLevel, AuditLog, ClientSession, TransactionQueue
 
 NOW = datetime(2026, 9, 24, 14, 0)
 
@@ -192,6 +192,24 @@ def test_a_retry_is_recorded_as_queued_again(journaled, audit_log):
     assert [(event.transaction_id, event.details["attempts"]) for event in queued[2:]] == [
         (transaction.transaction_id, 1) for transaction in retries
     ]
+
+
+def test_a_submission_through_a_session_names_it(journaled, audit_log):
+    session = ClientSession.issue("C-1", issued_at=NOW, ttl=timedelta(minutes=30))
+    transaction = journaled.add(deposit("a"), actor=session)
+    journaled.next_ready().start(NOW)
+    transaction.retry("night window", NOW, NOW + timedelta(minutes=5))
+    journaled.requeue([transaction])
+    submitted, retried = audit_log.filter(event="transaction_queued")
+    assert submitted.details["session_id"] == session.session_id
+    assert "session_id" not in retried.details  # the retry is the bank's own
+    assert session.token not in str(submitted.to_dict())
+
+
+def test_add_rejects_an_actor_that_is_not_a_session(journaled, audit_log):
+    with pytest.raises(InvalidOperationError):
+        journaled.add(deposit("a"), actor="C-1")
+    assert (len(journaled), len(audit_log)) == (0, 0)
 
 
 def test_failed_audit_write_does_not_drop_a_retry(journaled, audit_log, monkeypatch):

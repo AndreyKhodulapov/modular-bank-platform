@@ -38,7 +38,10 @@ class BalanceMovement:
     investment account, whose portfolio is added, so moving money between
     its cash and its portfolio changes the balance but not the value.
     ``transaction_id`` links the movement to the transaction that caused
-    it; ``None`` for a back-office operation of the bank.
+    it; ``None`` for an operation made outside a transaction.
+    ``session_id`` names the client session the operation came through;
+    ``None`` for the bank's own operations and for the transactions the
+    processor runs on the bank's behalf.
     """
 
     moment: datetime
@@ -49,6 +52,7 @@ class BalanceMovement:
     balance_after: Decimal
     total_value_after: Decimal
     transaction_id: str | None = None
+    session_id: str | None = None
 
     def __str__(self) -> str:
         return (
@@ -162,6 +166,7 @@ class TransactionHistory:
         balance_after: object,
         total_value_after: object,
         transaction_id: str | None = None,
+        session_id: str | None = None,
     ) -> BalanceMovement:
         if not isinstance(moment, datetime):
             raise InvalidOperationError("moment must be a datetime.")
@@ -177,6 +182,7 @@ class TransactionHistory:
             balance_after=to_money(balance_after, field="balance_after"),
             total_value_after=to_money(total_value_after, field="total_value_after"),
             transaction_id=transaction_id,
+            session_id=session_id,
         )
         self._movements.append(movement)
         return movement

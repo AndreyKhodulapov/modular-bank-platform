@@ -45,9 +45,15 @@ every run prints the same story:
    and by the model).
 3. **Logging** - the events of the audit log by name, and the life cycle
    of six transactions as the journal holds it.
-4. **Client view** - Oleg logs in and sees his accounts, a statement of
-   each (the balance movements, with the balance and the total value after
-   each), his transactions, his suspicious operations and his risk profile.
+4. **Client view** - Oleg logs in and acts through the client portal with
+   his session (see [Client sessions](#client-sessions)): he sees his
+   accounts, takes 1 000 EUR in cash, is refused Maria's account as one
+   that is not found, reads a statement of each account (the balance
+   movements, with the balance and the total value after each) and his
+   transactions. The bank shows his suspicious operations and his risk
+   profile. He logs out, the session is refused from then on, and the
+   program lists the audit events and the balance movements that name the
+   session.
 5. **Reports** - the bank report (totals, balances by currency and account
    type, transactions by status and type, the top three clients, the total
    balance from the start of the day) and the risk report (assessments by
@@ -209,6 +215,8 @@ modular-bank-platform/
 │   ├── services/
 │   │   ├── bank.py         # Bank (facade over clients, accounts, security)
 │   │   ├── security.py     # SecurityGuard, SuspiciousActivity, SuspicionReason
+│   │   ├── session.py      # ClientSession, SessionStore
+│   │   ├── client_portal.py          # ClientPortal: a client's own operations through a session
 │   │   ├── currency.py     # CurrencyConverter, reference rates to RUB
 │   │   ├── fees.py         # FeePolicy
 │   │   ├── transaction_queue.py      # TransactionQueue
@@ -295,23 +303,25 @@ so money never ends up on an account that refuses every operation.
   balance range, and reports `get_total_balance()` and
   `get_clients_ranking()` in roubles. Every balance change it makes goes to
   the [transaction history](#transaction-history).
-- `SecurityGuard` - stores salted password hashes, blocks a client after three
-  failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
-  a log of suspicious activities.
+- `SecurityGuard` - stores salted password hashes, opens a 30-minute
+  `ClientSession` on a successful login, blocks a client after three failed
+  logins in a row (closing their sessions), forbids operations between 00:00
+  and 05:00 and keeps a log of suspicious activities.
 - `CurrencyConverter` - converts amounts into roubles using fixed reference
   rates (replaceable by passing another rate table).
 - Domain exceptions: `ClientNotFoundError`, `AccountNotFoundError`,
   `AuthenticationError` (carries `attempts_left`), `ClientBlockedError`,
+  `InvalidSessionError` and its `SessionExpiredError`,
   `OperationTimeRestrictedError` (all derive from `BankError`).
 
 Security rules applied by the bank:
 
 | Rule | Behaviour |
 | --- | --- |
-| Login lockout | 3 wrong passwords in a row block the client; `unblock_client()` restores access |
-| Blocked client | cannot open, close or unfreeze accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
+| Login lockout | 3 wrong passwords in a row block the client and end their sessions; `unblock_client()` restores access, the client logs in again |
+| Blocked client | cannot open or close accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw, invest, divest and unblock are refused; login, freeze, monthly interest and queries are allowed |
-| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more; kept in the audit log as `security` events |
+| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more, use of an expired session; kept in the audit log as `security` events |
 
 `Bank.invest()` and `Bank.divest()` are client operations with the same
 checks as a deposit or a withdrawal. `Bank.apply_monthly_interest()` is the
@@ -325,6 +335,64 @@ recorded as suspicious. The account types keep the rules (the rate, the
 portfolio), the bank owns the operations: `_apply_monthly_interest()`,
 `_invest()`, `_divest()` and `_refund()` of the models are internal, called
 by the bank only.
+
+### Client sessions
+
+A login opens a session, and a client acts on their own accounts only
+through it; the bank's own API stays open to the back office.
+
+- `Bank.authenticate_client(client_id, password)` returns a
+  `ClientSession` (`session_id`, `client_id`, `issued_at`, `expires_at` and
+  a secret `token`). It lives 30 minutes by the bank's clock, counted from
+  the login and never extended. Each login opens a new session and keeps
+  the others, one per device. `SecurityGuard` keeps only a hash of the
+  token and recognises a session exactly as it was issued.
+- A session ends with `Bank.logout(session)`, when it expires (its use is
+  then recorded as `expired_session`), or when the client is blocked;
+  unblocking does not bring it back, the client logs in again. Logging out
+  after the session expired is not suspicious: a session not used since it
+  expired is closed all the same and `client_logged_out` says `expired`
+  (one used after it expired was already closed by that use, so the logout
+  is refused as `InvalidSessionError`).
+- `ClientPortal(bank)` - what a logged-in client does: `accounts()`,
+  `open_account()`, `close_account()`, `freeze_account()`, `deposit()`,
+  `withdraw()`, `invest()`, `divest()`, `submit()` (a transaction to the
+  queue), `statement()` and `transactions()`. Each method resolves the
+  session to its client first
+  (`InvalidSessionError`, `SessionExpiredError`), then checks that the
+  account is the client's: someone else's account is reported as
+  `AccountNotFoundError`, the same as a missing one, so the portal does not
+  confirm other clients' account numbers. A transaction is accepted when its
+  initiating account is the client's; the recipient of a transfer may be
+  anyone's.
+- The portal hands out snapshots (`get_account_info()`), amounts and history
+  records, never the account objects, whose money methods would move money
+  past the bank and the session.
+- The bank's rules do not change: the night window, a frozen account and
+  the amount review apply to a client with a session as to anyone. The bank
+  checks only that a session given as `actor=` belongs to the account's
+  owner, and names it in the audit log (see [Audit and Risk](#audit-and-risk))
+  and in the balance movements of the history (`session_id`).
+- What stays with the back office: `Bank` does not require a session
+  (`actor=` is optional, for the calls made on a client's behalf). The
+  processor runs a submitted transaction later, on the bank's behalf, when
+  the session may be over; monthly interest, refunds and the reports are
+  the bank's own work. Lifting a freeze is the bank's decision too: a
+  client may freeze their own account, but `unfreeze_account()` takes no
+  session, since the account does not remember who froze it and a client
+  could otherwise lift a freeze the bank imposed. The night window applies
+  to it, as to unblocking; a night attempt is recorded on the account, not
+  on the client, a blocked owner does not stop it, and a refusal by the
+  account (closed, not frozen) is not recorded as suspicious.
+
+```python
+session = bank.authenticate_client(client.client_id, "secret-2026")
+portal = ClientPortal(bank)
+portal.withdraw(session, account_id, 1_000)  # the client's own account
+portal.withdraw(session, maria_account_id, 1_000)  # AccountNotFoundError
+bank.logout(session)
+portal.accounts(session)  # InvalidSessionError
+```
 
 ### Transactions
 
@@ -400,8 +468,10 @@ kept in memory next to the accounts (`bank.history`, or injected with
   through the bank: the moment, the account, the kind (`opening`, `deposit`,
   `withdrawal`, `refund`, `payout`, `interest`, `investment`, `divestment`),
   the signed change in the account's currency, the balance and the total
-  value (`total_value_after`: cash plus portfolio) right after it and the
-  transaction id (`None` for a back-office operation).
+  value (`total_value_after`: cash plus portfolio) right after it, the
+  transaction id (`None` for an operation outside a transaction) and the
+  client session it came through (`session_id`; `None` for the bank's own
+  operations and the transactions the processor runs).
   `movements(account_id, kind=..., transaction_id=..., since=..., until=...)`
   returns them in order.
 
@@ -442,14 +512,18 @@ for movement in bank.history.movements(account.account_id):
   | Writer | Category | Events | Level |
   | --- | --- | --- | --- |
   | `SecurityGuard` | `security` | every suspicious activity (named after `SuspicionReason`) | `WARNING`; a blocked client `CRITICAL` |
-  | `Bank` | `client` | `client_registered`, `client_unblocked` | `INFO` |
+  | `Bank` | `client` | `client_registered`, `client_logged_in`, `client_logged_out` (with `details.session_id`; `details.expired` for a late logout), `client_unblocked` | `INFO` |
   | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed`, `interest_credited` | `INFO` |
   | `Bank.screen()` | `risk` | `risk_assessed`, `operation_blocked` | `INFO` / `WARNING` for a medium risk / `CRITICAL` |
   | `TransactionQueue` | `transaction` | `transaction_queued`, `transaction_cancelled` | `INFO` |
   | `TransactionProcessor` | `transaction` | `transaction_completed`; `transaction_failed` (`details.will_retry` tells a retry from a final failure) | `INFO`; `ERROR`, an unexpected error `CRITICAL` |
 
   Life-cycle events are recorded once the change is made; a refused change
-  appears only as a `security` event. Transaction events name both parties
+  appears only as a `security` event. An operation a client makes through
+  their session (`ClientPortal`, or a bank method given `actor=`) names it
+  in `details.session_id` of every event it records, `transaction_queued`
+  included; the processor's events have none, since it runs the queue on
+  the bank's behalf. Transaction events name both parties
   in `details` (`sender_id`, `recipient_id`). The queue does not know the
   clients, so its events carry the initiating account without a client id.
   `bank.suspicious_activities` is a view of the `security` events.

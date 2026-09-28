@@ -162,6 +162,7 @@ def test_records_movements_and_filters_them_by_account_and_time(history):
         transaction_id="T-1",
     )
     assert history.movements() == [first, other, second]
+    assert second.session_id is None  # an operation outside any client session
     assert history.movements("A") == [first, second]
     assert history.movements("A", since=NOW) == [second]
     assert history.movements(until=NOW) == [first]
@@ -184,6 +185,20 @@ def test_refuses_an_invalid_movement(history, params):
     with pytest.raises(InvalidOperationError):
         movement(history, **params)
     assert history.movements() == []
+
+
+def test_movement_names_the_session_it_came_through(history):
+    moved = history.record_movement(
+        moment=NOW,
+        account_id="A",
+        kind=MovementKind.WITHDRAWAL,
+        amount="-10",
+        currency="RUB",
+        balance_after="90",
+        total_value_after="90",
+        session_id="S-1",
+    )
+    assert (moved.session_id, moved.transaction_id) == ("S-1", None)
 
 
 def test_movement_keeps_the_total_value_apart_from_the_balance(history):
