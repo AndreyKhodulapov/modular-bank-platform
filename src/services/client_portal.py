@@ -34,6 +34,9 @@ class ClientPortal:
     it later on the bank's behalf, when the session may be long gone.
     """
 
+    # the portal passes these to the bank itself: the client and the session come from the session
+    RESERVED_PARAMS = frozenset({"client_id", "actor"})
+
     def __init__(self, bank: Bank) -> None:
         if not isinstance(bank, Bank):
             raise InvalidOperationError("bank must be a Bank instance.")
@@ -55,6 +58,9 @@ class ClientPortal:
 
     def open_account(self, session: ClientSession, account_type: str = "basic", **params: object) -> dict[str, Any]:
         client = self._client(session)
+        reserved = sorted(self.RESERVED_PARAMS & params.keys())
+        if reserved:
+            raise InvalidOperationError(f"The portal sets {', '.join(reserved)} of a new account itself.")
         account = self._bank.open_account(client.client_id, account_type, actor=session, **params)
         return account.get_account_info()
 

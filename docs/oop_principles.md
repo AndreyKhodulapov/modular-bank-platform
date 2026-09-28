@@ -229,7 +229,8 @@ amounts and enum members are values: two equal amounts are interchangeable.
   at submission and executing as the bank is how the rights and the work are
   split. What the bank does check is a session given as `actor=`: it must
   belong to the account's owner, and it is named in the audit log
-  (`details.session_id`), so the log tells who acted, not only whose
+  (`details.session_id`) and in the balance movements of the history
+  (`BalanceMovement.session_id`), so both tell who acted, not only whose
   account it was.
 - **Snapshots, not objects.** The portal returns `get_account_info()`
   dictionaries, amounts and history records. An account object in the

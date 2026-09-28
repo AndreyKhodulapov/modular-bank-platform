@@ -62,11 +62,23 @@ def test_open_account_is_the_clients_and_names_the_session(portal, session, clie
     assert session_ids(bank, "account_opened") == [session.session_id]
 
 
+@pytest.mark.parametrize("name", ["actor", "client_id"])
+def test_open_account_refuses_the_names_the_portal_sets(portal, session, client, name):
+    with pytest.raises(InvalidOperationError, match=name):
+        portal.open_account(session, currency="RUB", **{name: "someone-else"})
+    assert len(client.account_ids) == 0
+
+
 def test_deposit_and_withdraw_move_the_clients_money(portal, session, own):
     assert portal.deposit(session, own.account_id, 500) == Decimal("1500.00")
     assert portal.withdraw(session, own.account_id, 200) == Decimal("1300.00")
-    kinds = [movement.kind for movement in portal.statement(session, own.account_id)]
-    assert kinds == [MovementKind.OPENING, MovementKind.DEPOSIT, MovementKind.WITHDRAWAL]
+    statement = portal.statement(session, own.account_id)
+    assert [movement.kind for movement in statement] == [
+        MovementKind.OPENING,
+        MovementKind.DEPOSIT,
+        MovementKind.WITHDRAWAL,
+    ]
+    assert [movement.session_id for movement in statement] == [None, session.session_id, session.session_id]
 
 
 def test_large_amount_names_the_session(portal, session, own, bank):

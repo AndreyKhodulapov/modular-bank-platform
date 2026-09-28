@@ -52,7 +52,8 @@ every run prints the same story:
    movements, with the balance and the total value after each) and his
    transactions. The bank shows his suspicious operations and his risk
    profile. He logs out, the session is refused from then on, and the
-   program lists the audit events that name the session.
+   program lists the audit events and the balance movements that name the
+   session.
 5. **Reports** - the bank report (totals, balances by currency and account
    type, transactions by status and type, the top three clients, the total
    balance from the start of the day) and the risk report (assessments by
@@ -349,8 +350,10 @@ through it; the bank's own API stays open to the back office.
 - A session ends with `Bank.logout(session)`, when it expires (its use is
   then recorded as `expired_session`), or when the client is blocked;
   unblocking does not bring it back, the client logs in again. Logging out
-  after the session expired is not suspicious: it is closed all the same
-  and `client_logged_out` says `expired`.
+  after the session expired is not suspicious: a session not used since it
+  expired is closed all the same and `client_logged_out` says `expired`
+  (one used after it expired was already closed by that use, so the logout
+  is refused as `InvalidSessionError`).
 - `ClientPortal(bank)` - what a logged-in client does: `accounts()`,
   `open_account()`, `close_account()`, `freeze_account()`,
   `unfreeze_account()`, `deposit()`, `withdraw()`, `invest()`, `divest()`,
@@ -368,7 +371,8 @@ through it; the bank's own API stays open to the back office.
 - The bank's rules do not change: the night window, a frozen account and
   the amount review apply to a client with a session as to anyone. The bank
   checks only that a session given as `actor=` belongs to the account's
-  owner, and names it in the audit log (see [Audit and Risk](#audit-and-risk)).
+  owner, and names it in the audit log (see [Audit and Risk](#audit-and-risk))
+  and in the balance movements of the history (`session_id`).
 - What stays with the back office: `Bank` itself takes no session. The
   processor runs a submitted transaction later, on the bank's behalf, when
   the session may be over; monthly interest, refunds and the reports are
@@ -457,8 +461,10 @@ kept in memory next to the accounts (`bank.history`, or injected with
   through the bank: the moment, the account, the kind (`opening`, `deposit`,
   `withdrawal`, `refund`, `payout`, `interest`, `investment`, `divestment`),
   the signed change in the account's currency, the balance and the total
-  value (`total_value_after`: cash plus portfolio) right after it and the
-  transaction id (`None` for a back-office operation).
+  value (`total_value_after`: cash plus portfolio) right after it, the
+  transaction id (`None` for an operation outside a transaction) and the
+  client session it came through (`session_id`; `None` for the bank's own
+  operations and the transactions the processor runs).
   `movements(account_id, kind=..., transaction_id=..., since=..., until=...)`
   returns them in order.
 

@@ -246,9 +246,17 @@ class Bank:
         )
 
     def _record_movement(
-        self, kind: MovementKind, account: BankAccount, before: Decimal, transaction_id: str | None = None
+        self,
+        kind: MovementKind,
+        account: BankAccount,
+        before: Decimal,
+        transaction_id: str | None = None,
+        actor: ClientSession | None = None,
     ) -> None:
-        """Record the change of ``account``'s balance since ``before``; no change, no movement."""
+        """Record the change of ``account``'s balance since ``before``; no change, no movement.
+
+        ``actor`` is the client session the change came through, if any.
+        """
         change = account.balance - before
         if change == 0:
             return
@@ -261,6 +269,7 @@ class Bank:
             balance_after=account.balance,
             total_value_after=account.total_value,
             transaction_id=transaction_id,
+            session_id=session_details(actor).get("session_id"),
         )
 
     def _review_amount(
@@ -370,7 +379,7 @@ class Bank:
         self._opened_at[account.account_id] = self.now()
         client.add_account_id(account.account_id)
         # the cash only: an investment account opens with an empty portfolio
-        self._record_movement(MovementKind.OPENING, account, Decimal("0.00"))
+        self._record_movement(MovementKind.OPENING, account, Decimal("0.00"), actor=actor)
         self._record_account(
             AccountEvent.OPENED,
             account,
@@ -406,7 +415,7 @@ class Bank:
         self._guard("close_account", account.owner, account, actor=actor)
         before = account.balance
         payout = self._run_on_account("close_account", account, account.close, actor)
-        self._record_movement(MovementKind.PAYOUT, account, before)
+        self._record_movement(MovementKind.PAYOUT, account, before, actor=actor)
         self._record_account(
             AccountEvent.CLOSED,
             account,
@@ -602,7 +611,7 @@ class Bank:
         before = account.balance
         balance = self._run_on_account(action, account, lambda: operation(value), actor)
         # the actual change, so the premium account's own fee is part of a withdrawal
-        self._record_movement(kind, account, before, transaction_id)
+        self._record_movement(kind, account, before, transaction_id, actor)
         self._review_amount(action, account, abs(balance - before), actor)
         return balance
 
@@ -704,7 +713,7 @@ class Bank:
         self._guard(action, account.owner, account, actor=actor)
         before = account.balance
         balance = self._run_on_account(action, account, lambda: operation(account, asset, value), actor)
-        self._record_movement(kind, account, before)
+        self._record_movement(kind, account, before, actor=actor)
         return balance
 
     def search_accounts(

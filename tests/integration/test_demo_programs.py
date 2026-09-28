@@ -132,6 +132,9 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
     assert "withdrawal     -1000.00     11000.00 EUR  total     15000.00" in output
     assert "Logged out; the session is refused now: InvalidSessionError: Session" in output
     assert "The audit log names the session in 2 events:" in output
+    moved = output.split("Money moved through the session, as the history holds it:\n")[1].split("\n\n")[0]
+    [line] = moved.splitlines()  # the cash taken by hand, and nothing the bank did
+    assert "withdrawal     -1000.00     11000.00 EUR" in line
     bank_report = output.split("= 5. Reports =")[1].split("  Risk report")[0]
     assert "open_accounts           11" in bank_report  # the closed CNY account is not counted
     assert "total_balance           4231411.00" in bank_report  # the interest and the client's cash included

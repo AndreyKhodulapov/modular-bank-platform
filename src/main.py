@@ -24,8 +24,8 @@ Sections:
 4. Client view - a client logs in and acts through the client portal:
    sees their accounts, takes cash, is refused someone else's account,
    reads the statements and their transactions, then logs out; the bank
-   shows their suspicious operations and the events the audit log
-   recorded under the session.
+   shows their suspicious operations and what the audit log and the
+   history recorded under the session.
 5. Reports - the bank report (totals, balances, transactions, top clients,
    the total balance over the day) and the risk report (assessments,
    suspicious operations, clients by risk, failures), as text.
@@ -494,6 +494,10 @@ def show_client(demo: DemoBank, simulation: Simulation, key: str) -> None:
     print(f"  The audit log names the session in {len(events)} events:")
     for event in events:
         print(f"    {event}")
+    movements = [movement for movement in bank.history.movements() if movement.session_id == session.session_id]
+    print("  Money moved through the session, as the history holds it:")
+    for movement in movements:
+        print(f"    {movement}")
 
 
 def show_reports(builder: ReportBuilder, since: datetime) -> list[Report]:

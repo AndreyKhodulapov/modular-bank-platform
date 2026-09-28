@@ -424,12 +424,34 @@ def test_an_operation_through_a_session_names_it_in_every_event(bank, client, pa
         "large_operation",
     ]
     assert {event.details["session_id"] for event in events} == {session.session_id}
+    # the money of the opening and the payout is traced to the session in the history too
+    movements = bank.history.movements(account.account_id)
+    assert [movement.kind for movement in movements] == [MovementKind.OPENING, MovementKind.PAYOUT]
+    assert {movement.session_id for movement in movements} == {session.session_id}
     assert dict(events[0].details) == {
         "account_type": "basic",
         "currency": "RUB",
         "initial_balance": "600000.00",
         "session_id": session.session_id,
     }
+
+
+def test_money_moved_through_a_session_is_traced_to_it_and_the_banks_own_is_not(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    account = bank.open_account(client.client_id, "investment", currency="EUR", initial_balance=1_000)
+    bank.deposit(account.account_id, 500, actor=session)
+    bank.withdraw(account.account_id, 200, actor=session)
+    bank.invest(account.account_id, "etf", 300, actor=session)
+    bank.divest(account.account_id, "etf", 100, actor=session)
+    bank.deposit(account.account_id, 50)  # the back office
+    assert [(movement.kind, movement.session_id) for movement in bank.history.movements(account.account_id)] == [
+        (MovementKind.OPENING, None),
+        (MovementKind.DEPOSIT, session.session_id),
+        (MovementKind.WITHDRAWAL, session.session_id),
+        (MovementKind.INVESTMENT, session.session_id),
+        (MovementKind.DIVESTMENT, session.session_id),
+        (MovementKind.DEPOSIT, None),
+    ]
 
 
 def test_a_refusal_names_the_session_it_came_through(bank, client, password, clock):
