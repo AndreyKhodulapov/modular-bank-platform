@@ -457,7 +457,9 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   transactions in one go; scoring those moments would add a night factor
   and a frequency factor the client never earned and could turn a
   `medium` request into a blocked one. `requested_at` is fixed when the
-  transaction is made and a retry does not move it. The model has no
+  transaction is made and a retry does not move it; a schedule earlier
+  than the creation is refused, or the client's schedule would set the
+  moment the portal's stamp is meant to fix. The model has no
   clock, so whoever builds the transaction gives the moment: the programs
   and the client portal stamp it from the bank's clock, which is why the
   portal builds the transaction itself instead of accepting one.

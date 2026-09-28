@@ -164,6 +164,14 @@ def test_submit_keeps_the_clients_priority_and_schedule(portal, session, own, qu
     assert queue.pending() == [withdrawal]
 
 
+def test_submit_cannot_move_the_request_into_the_past(portal, session, own, queue, clock):
+    # the night factor is scored by the schedule when there is one: a schedule in the past would dodge it
+    earlier = clock() - timedelta(minutes=1)
+    with pytest.raises(InvalidOperationError, match="scheduled_at"):
+        portal.submit(session, queue, "withdrawal", 10, "RUB", sender_id=own.account_id, scheduled_at=earlier)
+    assert len(queue) == 0
+
+
 def test_submit_refuses_a_transfer_from_another_account(portal, session, own, foreign, queue):
     with pytest.raises(AccountNotFoundError):
         portal.submit(session, queue, "transfer", 10, "RUB", sender_id=foreign.account_id, recipient_id=own.account_id)

@@ -161,6 +161,12 @@ def test_requested_at_is_the_clients_moment_and_a_retry_does_not_move_it():
     assert (scheduled.scheduled_at, scheduled.requested_at) == (LATER + timedelta(hours=5), LATER)
 
 
+def test_a_schedule_before_the_creation_is_refused():
+    with pytest.raises(InvalidOperationError, match="scheduled_at"):
+        make_transfer(scheduled_at=CREATED - timedelta(minutes=1))
+    assert make_transfer(scheduled_at=CREATED).requested_at == CREATED
+
+
 def test_to_dict_and_str():
     transaction = make_transfer(scheduled_at=LATER, priority="High")
     assert transaction.priority is TransactionPriority.HIGH

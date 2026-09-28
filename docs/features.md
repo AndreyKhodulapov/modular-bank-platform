@@ -136,7 +136,8 @@ through it; the bank's own API stays open to the back office.
   amount, currency, sender_id=..., recipient_id=..., priority=...,
   scheduled_at=...)` stamps `created_at` by the bank's clock and gives it a
   new id, so risk control scores the moment the bank saw the request, not
-  a moment the client wrote in.
+  a moment the client wrote in; a `scheduled_at` earlier than that moment
+  is refused by the transaction itself.
 - The portal hands out snapshots (`get_account_info()`), amounts and history
   records, never the account objects, whose money methods would move money
   past the bank and the session.
@@ -173,7 +174,7 @@ portal.accounts(session)  # InvalidSessionError
   sender and recipient, priority, status, failure reason, attempts, the
   amounts actually debited and credited, and the timestamps `created_at`,
   `requested_at` (`scheduled_at` as the client gave it, else `created_at`;
-  a retry never moves it),
+  never earlier than `created_at`, and a retry never moves it),
   `scheduled_at`, `updated_at`, `finished_at`. The status follows a strict
   state machine:
 

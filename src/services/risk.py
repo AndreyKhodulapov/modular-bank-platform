@@ -164,7 +164,9 @@ class HighFrequencyRule(RiskRule):
     The window ends at the moment the current transaction was requested and
     counts the client's transactions requested within it: a batch the bank
     holds back (the night window) and runs in one go is still spread over
-    the moments the client sent it.
+    the moments the client sent it. The window looks back only, so a
+    transaction run ahead of its turn (a higher priority) does not see the
+    ones requested before it but not assessed yet.
     """
 
     name = "high_frequency"
