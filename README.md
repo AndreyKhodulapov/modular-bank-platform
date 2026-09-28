@@ -209,6 +209,7 @@ modular-bank-platform/
 │   ├── services/
 │   │   ├── bank.py         # Bank (facade over clients, accounts, security)
 │   │   ├── security.py     # SecurityGuard, SuspiciousActivity, SuspicionReason
+│   │   ├── session.py      # ClientSession, SessionStore
 │   │   ├── currency.py     # CurrencyConverter, reference rates to RUB
 │   │   ├── fees.py         # FeePolicy
 │   │   ├── transaction_queue.py      # TransactionQueue
@@ -295,23 +296,25 @@ so money never ends up on an account that refuses every operation.
   balance range, and reports `get_total_balance()` and
   `get_clients_ranking()` in roubles. Every balance change it makes goes to
   the [transaction history](#transaction-history).
-- `SecurityGuard` - stores salted password hashes, blocks a client after three
-  failed logins in a row, forbids operations between 00:00 and 05:00 and keeps
-  a log of suspicious activities.
+- `SecurityGuard` - stores salted password hashes, opens a 30-minute
+  `ClientSession` on a successful login, blocks a client after three failed
+  logins in a row (closing their sessions), forbids operations between 00:00
+  and 05:00 and keeps a log of suspicious activities.
 - `CurrencyConverter` - converts amounts into roubles using fixed reference
   rates (replaceable by passing another rate table).
 - Domain exceptions: `ClientNotFoundError`, `AccountNotFoundError`,
   `AuthenticationError` (carries `attempts_left`), `ClientBlockedError`,
+  `InvalidSessionError` and its `SessionExpiredError`,
   `OperationTimeRestrictedError` (all derive from `BankError`).
 
 Security rules applied by the bank:
 
 | Rule | Behaviour |
 | --- | --- |
-| Login lockout | 3 wrong passwords in a row block the client; `unblock_client()` restores access |
+| Login lockout | 3 wrong passwords in a row block the client and end their sessions; `unblock_client()` restores access, the client logs in again |
 | Blocked client | cannot open, close or unfreeze accounts, move money out or send transactions; deposits and transfers to them still arrive, since anyone can trigger the lockout |
 | Night window 00:00-05:00 | open, close, unfreeze, deposit, withdraw, invest, divest and unblock are refused; login, freeze, monthly interest and queries are allowed |
-| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more; kept in the audit log as `security` events |
+| Suspicious activity log | failed logins, blocking, attempts by a blocked client or for an unknown id, night attempts, operations on frozen or closed accounts, amounts of 500 000 RUB and more, use of an expired session; kept in the audit log as `security` events |
 
 `Bank.invest()` and `Bank.divest()` are client operations with the same
 checks as a deposit or a withdrawal. `Bank.apply_monthly_interest()` is the
@@ -442,7 +445,7 @@ for movement in bank.history.movements(account.account_id):
   | Writer | Category | Events | Level |
   | --- | --- | --- | --- |
   | `SecurityGuard` | `security` | every suspicious activity (named after `SuspicionReason`) | `WARNING`; a blocked client `CRITICAL` |
-  | `Bank` | `client` | `client_registered`, `client_unblocked` | `INFO` |
+  | `Bank` | `client` | `client_registered`, `client_logged_in`, `client_logged_out` (with `details.session_id`), `client_unblocked` | `INFO` |
   | `Bank` | `account` | `account_opened`, `account_frozen`, `account_unfrozen`, `account_closed`, `interest_credited` | `INFO` |
   | `Bank.screen()` | `risk` | `risk_assessed`, `operation_blocked` | `INFO` / `WARNING` for a medium risk / `CRITICAL` |
   | `TransactionQueue` | `transaction` | `transaction_queued`, `transaction_cancelled` | `INFO` |

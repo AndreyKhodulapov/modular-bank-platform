@@ -32,6 +32,7 @@ from services.risk import (
     RiskRule,
 )
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
+from services.session import ClientSession, SessionStore
 from services.transaction_history import BalanceMovement, MovementKind, TransactionHistory
 from services.transaction_processor import ProcessingReport, TransactionErrorRecord, TransactionProcessor
 from services.transaction_queue import TransactionQueue
@@ -53,6 +54,7 @@ __all__ = [
     "ClientEvent",
     "ClientRanking",
     "ClientRiskProfile",
+    "ClientSession",
     "CurrencyConverter",
     "ErrorStatistics",
     "FeePolicy",
@@ -71,6 +73,7 @@ __all__ = [
     "RiskLevel",
     "RiskRule",
     "SecurityGuard",
+    "SessionStore",
     "SuspicionReason",
     "SuspiciousActivity",
     "SuspiciousOperationsReport",

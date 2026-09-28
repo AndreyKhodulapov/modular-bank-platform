@@ -12,8 +12,10 @@ from exceptions import (
     ClientNotFoundError,
     InsufficientFundsError,
     InvalidOperationError,
+    InvalidSessionError,
     OperationTimeRestrictedError,
     RiskBlockedError,
+    SessionExpiredError,
 )
 from models import AccountStatus, AssetType, BankAccount, Client, InvestmentAccount, SavingsAccount, Transaction
 from services import (
@@ -133,8 +135,46 @@ def test_unknown_ids_raise_not_found(bank):
         bank.get_account("nope")
 
 
-def test_authenticate_client_returns_client(bank, client, password):
-    assert bank.authenticate_client(client.client_id, password) is client
+def test_authenticate_client_opens_a_session_of_the_client(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    assert session.client_id == client.client_id
+    assert bank.resolve_session(session) is client
+
+
+def test_login_and_logout_are_recorded_with_the_session_id(bank, client, clock, password):
+    session = bank.authenticate_client(client.client_id, password)
+    clock.moment += timedelta(minutes=5)
+    bank.logout(session)
+    logged_in, logged_out = bank.audit_log.filter(category=AuditCategory.CLIENT)[1:]
+    assert (logged_in.event, logged_in.level, logged_in.client_id) == (
+        "client_logged_in",
+        AuditLevel.INFO,
+        client.client_id,
+    )
+    assert dict(logged_in.details) == {"session_id": session.session_id, "expires_at": session.expires_at.isoformat()}
+    assert (logged_out.event, logged_out.timestamp) == ("client_logged_out", clock.moment)
+    assert dict(logged_out.details) == {"session_id": session.session_id}
+    assert all(session.token not in str(event.to_dict()) for event in bank.audit_log)
+
+
+def test_logged_out_session_is_refused(bank, client, password):
+    session = bank.authenticate_client(client.client_id, password)
+    other = bank.authenticate_client(client.client_id, password)
+    bank.logout(session)
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(session)
+    with pytest.raises(InvalidSessionError):
+        bank.logout(session)
+    assert bank.resolve_session(other) is client  # a new login is another session
+
+
+def test_expired_session_is_flagged_and_not_logged_out(bank, client, clock, password):
+    session = bank.authenticate_client(client.client_id, password)
+    clock.moment = session.expires_at
+    with pytest.raises(SessionExpiredError):
+        bank.logout(session)
+    assert reasons(bank) == [SuspicionReason.EXPIRED_SESSION]
+    assert "client_logged_out" not in lifecycle(bank)
 
 
 def test_login_for_unknown_client_is_flagged(bank, password):
@@ -146,16 +186,19 @@ def test_login_for_unknown_client_is_flagged(bank, password):
 
 def test_login_is_allowed_at_night(bank, client, clock, password):
     clock.moment = NIGHT
-    assert bank.authenticate_client(client.client_id, password) is client
+    assert bank.resolve_session(bank.authenticate_client(client.client_id, password)) is client
 
 
 def test_unblock_client_restores_access(bank, client, password):
+    before = bank.authenticate_client(client.client_id, password)
     for _ in range(3):
         with pytest.raises((AuthenticationError, ClientBlockedError)):
             bank.authenticate_client(client.client_id, "wrong-password")
     bank.unblock_client(client.client_id)
     assert not client.is_blocked
-    assert bank.authenticate_client(client.client_id, password) is client
+    assert bank.resolve_session(bank.authenticate_client(client.client_id, password)) is client
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(before)  # blocking ended it; unblocking does not bring it back
 
 
 @pytest.mark.parametrize(

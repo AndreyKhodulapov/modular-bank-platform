@@ -9,7 +9,9 @@ from exceptions import (
     AccountFrozenError,
     AuthenticationError,
     ClientBlockedError,
+    InvalidSessionError,
     OperationTimeRestrictedError,
+    SessionExpiredError,
 )
 from models import AccountStatus
 from services import SuspicionReason
@@ -27,7 +29,7 @@ def test_bank_day_from_registration_to_ranking(bank, clock, make_client):
     boris_usd = bank.open_account(boris.client_id, "premium", currency="USD", initial_balance=1_000)
     assert anna.account_ids == [anna_rub.account_id, anna_savings.account_id]
 
-    assert bank.authenticate_client(anna.client_id, "anna-password") is anna
+    assert bank.resolve_session(bank.authenticate_client(anna.client_id, "anna-password")) is anna
     for _ in range(2):
         with pytest.raises(AuthenticationError):
             bank.authenticate_client(boris.client_id, "not-his-password")
@@ -89,3 +91,45 @@ def test_account_type_operations_through_the_bank_keep_the_history_whole(bank, c
     bank.withdraw(investment.account_id, 700)
     assert history_gaps(bank) == {}
     assert bank.history.movements(investment.account_id)[-1].total_value_after == investment.total_value
+
+
+def test_a_session_ends_with_its_time_a_logout_or_a_block(bank, clock, make_client):
+    anna = bank.add_client(make_client("Anna"), "anna-password")
+    phone = bank.authenticate_client(anna.client_id, "anna-password")
+    clock.moment += timedelta(minutes=20)
+    laptop = bank.authenticate_client(anna.client_id, "anna-password")
+
+    clock.moment += timedelta(minutes=10)  # the phone's half an hour is over, the laptop's is not
+    with pytest.raises(SessionExpiredError):
+        bank.resolve_session(phone)
+    assert bank.resolve_session(laptop) is anna
+
+    # someone else types wrong passwords for Anna: the block ends the session she has
+    for _ in range(3):
+        with pytest.raises((AuthenticationError, ClientBlockedError)):
+            bank.authenticate_client(anna.client_id, "guessed-password")
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(laptop)
+
+    bank.unblock_client(anna.client_id)
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(laptop)
+    session = bank.authenticate_client(anna.client_id, "anna-password")
+    bank.logout(session)
+    with pytest.raises(InvalidSessionError):
+        bank.resolve_session(session)
+
+    events = [event.event for event in bank.audit_log if event.client_id == anna.client_id]
+    assert events == [
+        "client_registered",
+        "client_logged_in",
+        "client_logged_in",
+        "expired_session",
+        "failed_login",
+        "failed_login",
+        "failed_login",
+        "client_blocked",
+        "client_unblocked",
+        "client_logged_in",
+        "client_logged_out",
+    ]

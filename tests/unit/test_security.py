@@ -1,10 +1,18 @@
-from datetime import datetime, time
+import dataclasses
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
 
-from exceptions import AuthenticationError, ClientBlockedError, InvalidOperationError, OperationTimeRestrictedError
-from services import AuditCategory, AuditLevel, AuditLog, SecurityGuard, SuspicionReason
+from exceptions import (
+    AuthenticationError,
+    ClientBlockedError,
+    InvalidOperationError,
+    InvalidSessionError,
+    OperationTimeRestrictedError,
+    SessionExpiredError,
+)
+from services import AuditCategory, AuditLevel, AuditLog, ClientSession, SecurityGuard, SuspicionReason
 from tests.helpers import reasons
 
 
@@ -182,3 +190,94 @@ def test_suspicious_activities_skip_foreign_security_events(security, clock):
     security.audit_log.record("info", "security", "password_changed", "changed", timestamp=clock.moment)
     activity = security.flag(SuspicionReason.FAILED_LOGIN, "wrong")
     assert security.suspicious_activities == [activity]
+
+
+def test_login_opens_a_session_for_the_ttl(guard, owner, password, clock):
+    session = guard.authenticate(owner, password)
+    assert isinstance(session, ClientSession)
+    assert (session.client_id, session.issued_at) == (owner.client_id, clock.moment)
+    assert session.expires_at == clock.moment + SecurityGuard.SESSION_TTL
+    assert guard.resolve_session(session) is owner
+
+
+def test_a_new_login_keeps_the_other_sessions(guard, owner, password):
+    first = guard.authenticate(owner, password)
+    second = guard.authenticate(owner, password)
+    assert first.session_id != second.session_id
+    assert guard.resolve_session(first) is guard.resolve_session(second) is owner
+
+
+def test_session_works_until_it_expires(guard, owner, password, clock):
+    session = guard.authenticate(owner, password)
+    clock.moment = session.expires_at - timedelta(seconds=1)
+    assert guard.resolve_session(session) is owner
+    clock.moment = session.expires_at
+    with pytest.raises(SessionExpiredError) as info:
+        guard.resolve_session(session)
+    assert (info.value.session_id, info.value.expired_at) == (session.session_id, session.expires_at)
+    [activity] = guard.suspicious_activities
+    assert (activity.reason, activity.client_id) == (SuspicionReason.EXPIRED_SESSION, owner.client_id)
+
+
+def test_expired_session_is_closed_once_used(guard, owner, password, clock):
+    session = guard.authenticate(owner, password)
+    clock.moment = session.expires_at
+    with pytest.raises(SessionExpiredError):
+        guard.resolve_session(session)
+    with pytest.raises(InvalidSessionError) as info:
+        guard.resolve_session(session)
+    assert not isinstance(info.value, SessionExpiredError)
+    assert reasons(guard) == [SuspicionReason.EXPIRED_SESSION]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"token": "guessed-token"}, {"expires_at": datetime(2030, 1, 1)}, {"session_id": "made-up"}],
+)
+def test_changed_session_is_refused(guard, owner, password, change):
+    session = guard.authenticate(owner, password)
+    with pytest.raises(InvalidSessionError):
+        guard.resolve_session(dataclasses.replace(session, **change))
+    assert guard.resolve_session(session) is owner
+
+
+def test_session_of_another_guard_is_refused(guard, owner, password, clock):
+    session = guard.authenticate(owner, password)
+    with pytest.raises(InvalidSessionError):
+        SecurityGuard(clock=clock).resolve_session(session)
+
+
+def test_resolve_rejects_what_is_not_a_session(guard):
+    with pytest.raises(InvalidOperationError):
+        guard.resolve_session("session-id")
+
+
+def test_blocking_closes_every_session_of_the_client(guard, owner, password):
+    sessions = [guard.authenticate(owner, password) for _ in range(2)]
+    for _ in range(3):
+        with pytest.raises((AuthenticationError, ClientBlockedError)):
+            guard.authenticate(owner, "wrong-password")
+    owner.unblock()  # access comes back with a new login, not with the old sessions
+    for session in sessions:
+        with pytest.raises(InvalidSessionError):
+            guard.resolve_session(session)
+    assert guard.resolve_session(guard.authenticate(owner, password)) is owner
+
+
+def test_client_blocked_past_the_guard_loses_the_sessions(guard, owner, password):
+    session = guard.authenticate(owner, password)
+    owner.block()
+    with pytest.raises(InvalidSessionError):
+        guard.resolve_session(session)
+    owner.unblock()
+    with pytest.raises(InvalidSessionError):
+        guard.resolve_session(session)
+
+
+def test_closed_session_is_refused(guard, owner, password):
+    session = guard.authenticate(owner, password)
+    assert guard.close_session(session) is owner
+    with pytest.raises(InvalidSessionError):
+        guard.resolve_session(session)
+    with pytest.raises(InvalidSessionError):
+        guard.close_session(session)

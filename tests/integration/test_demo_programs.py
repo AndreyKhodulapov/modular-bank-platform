@@ -150,8 +150,10 @@ def test_main_program_plays_the_day_and_prints_the_reports(main_run):
 def test_main_program_writes_both_logs(main_run):
     completed, logs = main_run
     events = read_json_lines(logs / "audit.jsonl")
-    assert f"The audit log holds {len(events)} events of this run" in completed.stdout
     names = [event["event"] for event in events]
+    # the log is counted in section 3, before the client view logs in
+    assert names.count("client_logged_in") == 1
+    assert f"The audit log holds {names.index('client_logged_in')} events of this run" in completed.stdout
     assert names.count("transaction_queued") >= 40  # a retry comes back through the queue
     assert names.count("transaction_cancelled") == 1
     assert names.count("operation_blocked") == 2

@@ -25,6 +25,7 @@ from services.audit_log import AccountEvent, AuditCategory, AuditLevel, AuditLog
 from services.currency import CurrencyConverter
 from services.risk import RiskAnalyzer, RiskAssessment, RiskContext, RiskLevel
 from services.security import SecurityGuard, SuspicionReason, SuspiciousActivity
+from services.session import ClientSession
 from services.transaction_history import MovementKind, TransactionHistory
 from utils import next_monthly_date, to_enum, to_money
 
@@ -44,10 +45,13 @@ class Bank:
       and large amounts are recorded as suspicious;
     - ``screen()`` scores a transaction with the risk analyzer before money
       moves and refuses a high-risk one;
-    - the life cycle of clients and accounts (registered, unblocked; opened,
-      frozen, unfrozen, closed) and monthly interest go to the audit log as
-      ``INFO`` once the change is made; a refused change of a client or an
-      account is recorded only as suspicious;
+    - a successful login opens a ``ClientSession``: ``resolve_session()``
+      tells whose it is while it is valid, ``logout()`` closes it, and
+      blocking the client closes all of their sessions;
+    - the life cycle of clients and accounts (registered, logged in, logged
+      out, unblocked; opened, frozen, unfrozen, closed) and monthly interest
+      go to the audit log as ``INFO`` once the change is made; a refused
+      change of a client or an account is recorded only as suspicious;
     - every change of a balance made through the bank goes to the
       transaction history as a ``BalanceMovement`` with the actual change
       (fees included), the balance and the total value after it; the
@@ -249,8 +253,12 @@ class Bank:
         self._record(AuditCategory.CLIENT, ClientEvent.REGISTERED, "client registered", client_id=client.client_id)
         return client
 
-    def authenticate_client(self, client_id: str, password: str) -> Client:
-        """Return the client when ``password`` is right; the third failure in a row blocks them."""
+    def authenticate_client(self, client_id: str, password: str) -> ClientSession:
+        """Log the client in and return a new session; the third wrong password in a row blocks them.
+
+        Allowed at night too, like freezing an account. The session id,
+        not its token, goes to the audit log.
+        """
         if not isinstance(password, str):
             raise InvalidOperationError("password must be a string.")
         client = self._clients.get(client_id)
@@ -259,8 +267,30 @@ class Bank:
                 SuspicionReason.UNKNOWN_CLIENT_LOGIN, "login attempt for an unknown client id", client_id=client_id
             )
             raise ClientNotFoundError(client_id)
-        self._security.authenticate(client, password)
-        return client
+        session = self._security.authenticate(client, password)
+        self._record(
+            AuditCategory.CLIENT,
+            ClientEvent.LOGGED_IN,
+            "client logged in",
+            client_id=client_id,
+            details={"session_id": session.session_id, "expires_at": session.expires_at},
+        )
+        return session
+
+    def resolve_session(self, session: ClientSession) -> Client:
+        """The client of a valid session; an unknown, closed or expired one raises ``InvalidSessionError``."""
+        return self._security.resolve_session(session)
+
+    def logout(self, session: ClientSession) -> None:
+        """Close a valid session; it is checked like any other use of it."""
+        client = self._security.close_session(session)
+        self._record(
+            AuditCategory.CLIENT,
+            ClientEvent.LOGGED_OUT,
+            "client logged out",
+            client_id=client.client_id,
+            details={"session_id": session.session_id},
+        )
 
     def unblock_client(self, client_id: str) -> Client:
         client = self.get_client(client_id)
