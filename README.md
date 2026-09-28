@@ -541,7 +541,7 @@ for movement in bank.history.movements(account.account_id):
   | `large_amount` | the amount is at least 500 000 RUB / at least 2 000 000 RUB | 40 / 70 |
   | `high_frequency` | the client's 5th transaction within 10 minutes (a retry is not a new transaction) | 30 |
   | `new_recipient` | a transfer to an account opened less than 7 days ago, or to a recipient the sender has never paid before (the client's own accounts included) | 20 |
-  | `night_operation` | between 22:00 and 06:00 | 20 |
+  | `night_operation` | the transaction was created between 22:00 and 06:00 (by `created_at`, not by when the bank runs or retries it) | 20 |
 
   Levels: `low` below 40, `medium` from 40, `high` from 70.
 - Blocking: before any money moves, the processor calls

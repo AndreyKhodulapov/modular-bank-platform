@@ -439,6 +439,15 @@ per line: easy to append, to stream and to load into log tools (ELK, Loki,
   goes through, `medium` goes through but is logged as a warning for a
   review, `high` is refused. A blocked transaction fails without retry:
   trying it again would get the same score.
+- **The client's moment, not the bank's.** The night rule reads
+  `created_at`, when the client made the transaction, while the other
+  rules and the assessment itself use the moment of the attempt. The bank
+  retries a transaction refused by the night ban at 05:00, inside the
+  analyzer's wider night; scoring that moment would add a night factor the
+  client never earned and could turn a `medium` submission into a blocked
+  one. `created_at` is given by whoever creates the transaction (there is
+  no clock in the model), so a client channel that trusts its input trusts
+  that moment too; here the programs stamp it from the bank's clock.
 - **State for behavioural rules.** Frequency and "new recipient" depend on
   history, so the analyzer keeps a small `RiskHistory`: when each
   transaction was first seen (a retry does not count as a new operation)

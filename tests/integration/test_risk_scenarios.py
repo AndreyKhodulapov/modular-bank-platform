@@ -56,14 +56,14 @@ def run(queue, processor, clock, moment, *transactions):
     return processor.process_queue(queue)
 
 
-def make(kind, amount, currency, sender=None, recipient=None):
+def make(kind, amount, currency, sender=None, recipient=None, at=NOON):
     return Transaction(
         kind,
         amount,
         currency,
         sender_id=sender.account_id if sender is not None else None,
         recipient_id=recipient if isinstance(recipient, str) or recipient is None else recipient.account_id,
-        created_at=NOON,
+        created_at=at,
     )
 
 
@@ -97,14 +97,16 @@ def test_ordinary_and_suspicious_transactions(world, tmp_path):
     assert all(transaction.status is TransactionStatus.COMPLETED for transaction in rapid)
 
     # late evening: a small transfer to a known recipient passes, a large one to the new account is refused
-    evening = make("transfer", 1_000, "RUB", maria, alina_rub)
-    late_large = make("transfer", 7_000, "USD", oleg, fresh)  # large 40 + new 20 + night 20
-    run(queue, processor, clock, NOON.replace(hour=23, minute=30), evening, late_large)
+    late = NOON.replace(hour=23, minute=30)
+    evening = make("transfer", 1_000, "RUB", maria, alina_rub, at=late)
+    late_large = make("transfer", 7_000, "USD", oleg, fresh, at=late)  # large 40 + new 20 + night 20
+    run(queue, processor, clock, late, evening, late_large)
     assert (evening.status, late_large.status) == (TransactionStatus.COMPLETED, TransactionStatus.FAILED)
 
     # the hard night ban comes before risk scoring: refused, retried later, not assessed
-    night = make("transfer", 1_000, "RUB", maria, alina_rub)
-    run(queue, processor, clock, datetime(2026, 9, 25, 2, 0), night)
+    deep_night = datetime(2026, 9, 25, 2, 0)
+    night = make("transfer", 1_000, "RUB", maria, alina_rub, at=deep_night)
+    run(queue, processor, clock, deep_night, night)
     assert night.status is TransactionStatus.PENDING
 
     levels = {item.transaction_id: item.level for item in bank.risk_analyzer.assessments}

@@ -63,9 +63,10 @@ def test_suspicious_operations_lists_medium_and_high_and_security_events(report,
 
 
 def test_retried_transaction_is_reported_by_its_latest_assessment(report, analyzer):
-    transaction = Transaction("transfer", 100, "RUB", sender_id="S", recipient_id="R", created_at=NOW)
-    assess(analyzer, "A", 500_000, transaction=transaction)
-    last = assess(analyzer, "A", 500_000, transaction=transaction, moment=NOW.replace(hour=23))
+    late = NOW.replace(hour=23)
+    transaction = Transaction("transfer", 100, "RUB", sender_id="S", recipient_id="R", created_at=late)
+    assess(analyzer, "A", 100, transaction=transaction, moment=late)  # new recipient + night: medium
+    last = assess(analyzer, "A", 500_000, transaction=transaction, moment=late.replace(hour=23, minute=5))
     assert report.suspicious_operations().operations == (last,)
     assert last.blocked
 

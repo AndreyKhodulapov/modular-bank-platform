@@ -31,6 +31,7 @@ from services import (
 )
 from tests.helpers import history_gaps, lifecycle, reasons
 
+NOW = datetime(2026, 9, 24, 14, 0)
 NIGHT = datetime(2026, 9, 25, 2, 30)
 MONTH_LATER = datetime(2026, 10, 24, 14, 0)  # the day monthly interest is due on an account opened at the start
 
@@ -736,8 +737,8 @@ def pair(bank, client, clock):
     return sender, recipient
 
 
-def transfer(sender, recipient, amount, kind="transfer") -> Transaction:
-    return Transaction(kind, amount, "RUB", sender_id=sender.account_id, recipient_id=recipient, created_at=NIGHT)
+def transfer(sender, recipient, amount, kind="transfer", created_at=NOW) -> Transaction:
+    return Transaction(kind, amount, "RUB", sender_id=sender.account_id, recipient_id=recipient, created_at=created_at)
 
 
 def test_bank_remembers_when_an_account_was_opened(bank, client, clock):
@@ -775,7 +776,7 @@ def test_screen_medium_risk_is_a_warning_and_goes_on(bank, pair):
 def test_screen_refuses_high_risk(bank, pair, clock):
     sender, recipient = pair
     clock.moment = clock.moment.replace(hour=23)
-    transaction = transfer(sender, recipient.account_id, 500_000)
+    transaction = transfer(sender, recipient.account_id, 500_000, created_at=clock.moment)
     with pytest.raises(RiskBlockedError) as info:
         bank.screen(transaction)
     assert (info.value.score, info.value.factors) == (80, ("large_amount", "new_recipient", "night_operation"))

@@ -208,10 +208,14 @@ class NewRecipientRule(RiskRule):
 
 
 class NightOperationRule(RiskRule):
-    """An operation late in the evening or at night; the window may cross midnight.
+    """A transaction created late in the evening or at night; the window may cross midnight.
 
     It is wider than the bank's hard ban (00:00-05:00): at its edges an
-    operation is still allowed, but looks riskier.
+    operation is still allowed, but looks riskier. The rule looks at
+    ``created_at``, the moment the client acted, not at the moment of the
+    assessment: the bank retries a transaction refused in the night window
+    when the window ends, and a retry the bank scheduled must not make the
+    client look worse than the submission did.
     """
 
     name = "night_operation"
@@ -229,9 +233,10 @@ class NightOperationRule(RiskRule):
         return moment >= self.start or moment < self.end
 
     def evaluate(self, context: RiskContext, history: RiskHistory) -> RiskFactor | None:
-        if not self._is_night(context.moment.time()):
+        created_at = context.transaction.created_at
+        if not self._is_night(created_at.time()):
             return None
-        return RiskFactor(self.name, self.score, f"at {context.moment:%H:%M}")
+        return RiskFactor(self.name, self.score, f"created at {created_at:%H:%M}")
 
 
 def default_rules() -> list[RiskRule]:

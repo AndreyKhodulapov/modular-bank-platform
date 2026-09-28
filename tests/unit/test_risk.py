@@ -21,8 +21,8 @@ from services import (
 NOW = datetime(2026, 9, 24, 14, 0)
 
 
-def transfer(sender="S", recipient="R", amount=1_000, kind="transfer") -> Transaction:
-    return Transaction(kind, amount, "RUB", sender_id=sender, recipient_id=recipient, created_at=NOW)
+def transfer(sender="S", recipient="R", amount=1_000, kind="transfer", created_at=NOW) -> Transaction:
+    return Transaction(kind, amount, "RUB", sender_id=sender, recipient_id=recipient, created_at=created_at)
 
 
 def context(
@@ -164,14 +164,24 @@ def test_new_recipient_applies_to_transfers_only(transaction):
     [(time(21, 59), False), (time(22, 0), True), (time(0, 0), True), (time(5, 59), True), (time(6, 0), False)],
 )
 def test_night_window_crosses_midnight(moment, night):
-    factor = NightOperationRule().evaluate(context(moment=datetime.combine(NOW.date(), moment)), RiskHistory())
+    created = transfer(created_at=datetime.combine(NOW.date(), moment))
+    factor = NightOperationRule().evaluate(context(created), RiskHistory())
     assert (factor is not None) is night
 
 
 def test_night_window_within_one_day():
     rule = NightOperationRule(start=time(1, 0), end=time(3, 0))
-    assert rule.evaluate(context(moment=NOW.replace(hour=2)), RiskHistory()) is not None
-    assert rule.evaluate(context(moment=NOW.replace(hour=23)), RiskHistory()) is None
+    assert rule.evaluate(context(transfer(created_at=NOW.replace(hour=2))), RiskHistory()) is not None
+    assert rule.evaluate(context(transfer(created_at=NOW.replace(hour=23))), RiskHistory()) is None
+
+
+def test_night_is_when_the_client_acted_not_when_the_bank_assesses():
+    rule = NightOperationRule()
+    # created in the afternoon, assessed at night (a retry the bank scheduled): not the client's night
+    assert rule.evaluate(context(transfer(created_at=NOW), moment=NOW.replace(hour=23)), RiskHistory()) is None
+    # created at night, assessed in the morning (the retry after the night window): still the client's night
+    factor = rule.evaluate(context(transfer(created_at=NOW.replace(hour=1)), moment=NOW.replace(hour=5)), RiskHistory())
+    assert factor is not None and factor.description == "created at 01:00"
 
 
 def test_night_rejects_an_empty_window():
@@ -195,7 +205,7 @@ def test_score_thresholds(score, level):
 def test_scores_of_fired_rules_add_up():
     analyzer = RiskAnalyzer()
     # large (40) + first transfer to this recipient (20) + night (20)
-    assessment = analyzer.assess(context(amount="600000", moment=NOW.replace(hour=23)))
+    assessment = analyzer.assess(context(transfer(created_at=NOW.replace(hour=23)), amount="600000"))
     assert assessment.rules == ("large_amount", "new_recipient", "night_operation")
     assert (assessment.score, assessment.level) == (80, RiskLevel.HIGH)
 
