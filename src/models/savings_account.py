@@ -14,10 +14,11 @@ class SavingsAccount(BankAccount):
     """A deposit account that keeps ``min_balance`` locked and earns interest.
 
     ``monthly_rate`` is a fraction (``0.01`` means 1% per month). Interest is
-    credited explicitly through ``_apply_monthly_interest()``; the account has
-    no clock, so the bank keeps the calendar and decides when a month has
-    passed. The account keeps the rule (the rate, the locked minimum), the
-    bank owns the operation: only ``Bank.apply_monthly_interest()`` calls it.
+    credited explicitly through ``apply_monthly_interest()``; the account has
+    no clock, so it credits a month whenever it is called. The account keeps
+    the rule (the rate, the locked minimum, an active status);
+    ``Bank.apply_monthly_interest()`` adds the calendar and records the
+    movement, so interest paid past the bank is missing from the history.
     """
 
     def __init__(
@@ -54,11 +55,8 @@ class SavingsAccount(BankAccount):
         """Amount that can leave the account without breaking ``min_balance``, never negative."""
         return max(self._balance - self._min_balance, Decimal("0.00"))
 
-    def _apply_monthly_interest(self) -> Decimal:
-        """Credit one month of interest and return the credited amount.
-
-        Internal: the bank calls it, checks the calendar and records the movement.
-        """
+    def apply_monthly_interest(self) -> Decimal:
+        """Credit one month of interest and return the credited amount."""
         self.ensure_operational()
         interest = to_money(self._balance * self._monthly_rate, field="interest")
         self._balance += interest

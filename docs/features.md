@@ -94,9 +94,11 @@ was opened (the last day of a shorter month), and an earlier call is refused
 with the date of the next one. It is the only money the bank creates itself,
 so it goes to the audit log as `interest_credited` and a large one is
 recorded as suspicious. The account types keep the rules (the rate, the
-portfolio), the bank owns the operations: `_apply_monthly_interest()`,
-`_invest()`, `_divest()` and `_refund()` of the models are internal, called
-by the bank only.
+portfolio), the bank owns the operations: `_invest()`, `_divest()` and
+`_refund()` of the models are internal, called by the bank only.
+`SavingsAccount.apply_monthly_interest()` is public: it credits a month by
+the account's rate and status, and the bank calls it after checking the
+calendar.
 
 ## Client sessions
 
@@ -263,9 +265,10 @@ no loss, and the statement of a client report prints both columns. The
 change is measured as the balance after minus the balance before, so a
 premium account's own withdrawal fee is part of the withdrawal. A refused
 operation leaves no movement. As a result the movements of every account add
-up to its balance, unless `deposit()`, `withdraw()` or `close()` of the
-account itself are called past the bank: they are the account's own
-interface (the first two are the abstract methods of `AbstractAccount`) and
+up to its balance, unless `deposit()`, `withdraw()`, `close()` or
+`apply_monthly_interest()` of the account itself are called past the bank:
+they are the account's own interface (the first two are the abstract methods
+of `AbstractAccount`, the last one the interest of a savings account) and
 stay public.
 
 ```python
