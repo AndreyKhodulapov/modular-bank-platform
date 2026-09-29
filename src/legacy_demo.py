@@ -110,8 +110,8 @@ def run_accounts_basic(owner: Client) -> list[AbstractAccount]:
 def run_accounts_advanced(owner: Client) -> list[AbstractAccount]:
     print_stage(2, "Accounts Advanced")
 
-    # the models as they were before the bank: interest and portfolio moves are internal to the bank now,
-    # which checks and records them; the tour calls the models directly to show their own rules
+    # the models as they were before the bank: interest paid here skips the bank's calendar and history,
+    # and portfolio moves are internal to the bank now; the tour calls the models directly to show their own rules
     print_step(1, "Savings accounts: minimum balance and monthly interest")
     savings = SavingsAccount(
         owner=owner, currency="RUB", initial_balance=10_000, min_balance=1_000, monthly_rate="0.015"
@@ -126,8 +126,8 @@ def run_accounts_advanced(owner: Client) -> list[AbstractAccount]:
     )
     print(f"  {savings}")
     print(f"  {savings_frozen}")
-    attempt("apply monthly interest", savings._apply_monthly_interest, label="interest")
-    attempt("apply monthly interest (frozen)", savings_frozen._apply_monthly_interest, label="interest")
+    attempt("apply monthly interest", savings.apply_monthly_interest, label="interest")
+    attempt("apply monthly interest (frozen)", savings_frozen.apply_monthly_interest, label="interest")
     attempt("withdraw 9_000 RUB (keeps min balance)", lambda: savings.withdraw(9_000))
     attempt("withdraw 200 RUB (breaks min balance)", lambda: savings.withdraw(200))
 

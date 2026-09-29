@@ -688,7 +688,7 @@ class Bank:
         if self.now().date() < due:
             raise InvalidOperationError(f"Interest on account {account_id} is paid once a month; next on {due}.")
         before = account.balance
-        interest = account._apply_monthly_interest()
+        interest = account.apply_monthly_interest()
         self._interest_paid_at[account_id] = self.now()
         self._record_movement(MovementKind.INTEREST, account, before)
         if interest != 0:

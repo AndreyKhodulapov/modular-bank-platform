@@ -14,10 +14,12 @@ protected attributes and exposes them through read-only properties. The
 balance changes through `deposit()` / `withdraw()`, which enforce every
 business rule, and through the operations the bank owns: the model keeps the
 rule (the minimum balance, the interest rate, the portfolio, a refund that
-skips every limit), the bank runs the operation. `_refund()`,
-`_apply_monthly_interest()`, `_invest()` and `_divest()` are internal, called
-only by `Bank`, which checks each call and records the movement; a refund
-that skips every rule cannot be called by anyone else. `Client` validates its personal data once and exposes it only
+skips every limit), the bank runs the operation. `_refund()`, `_invest()`
+and `_divest()` are internal, called only by `Bank`, which checks each call
+and records the movement; a refund that skips every rule cannot be called by
+anyone else. `SavingsAccount.apply_monthly_interest()` stays public, like
+`deposit()` / `withdraw()`: the account credits a month by its own rate,
+while `Bank.apply_monthly_interest()` adds the calendar and the record. `Client` validates its personal data once and exposes it only
 through read-only properties; its status changes only through `block()` /
 `unblock()`, and `account_ids` returns a copy of the internal list. `Portfolio.holdings` returns a copy, so the allocation can only
 change through `add()` / `remove()`, and `InvestmentAccount` never hands out
@@ -107,7 +109,7 @@ numbers).
   `BankError`" - is never broken, and the shared checks always run first and
   in the same order.
 - **I - Interface Segregation:** the abstract interface is minimal (three
-  methods); type-specific operations (`_apply_monthly_interest`, `_invest`,
+  methods); type-specific operations (`apply_monthly_interest`, `_invest`,
   `_divest`, `project_yearly_growth`) live only on the classes that need them.
 - **D - Dependency Inversion:** high-level modules depend on abstractions,
   not on concrete implementations. Partly applied: `SecurityGuard` depends on
@@ -332,10 +334,12 @@ amounts and enum members are values: two equal amounts are interchangeable.
   the logs point at it by transaction id.
 - **One writer.** Only `Bank` records movements, in the same methods that
   change balances, so a movement cannot be forgotten or written twice, and
-  a refused operation leaves none. That is why the operations of the account
-  types (`apply_monthly_interest`, `invest`, `divest`) are offered by `Bank`
-  only: the models keep them internal and change the balance, the bank
-  checks and records it. The processor
+  a refused operation leaves none. That is why the portfolio operations
+  (`invest`, `divest`) are offered by `Bank` only: the model keeps them
+  internal and changes the balance, the bank checks and records it. Monthly
+  interest is recorded by `Bank.apply_monthly_interest()`; the public method
+  of the savings account called past the bank leaves no movement, like
+  `deposit()` / `withdraw()` of the model. The processor
   passes the transaction id through `deposit()` / `withdraw()` / `refund()`
   and adds the finished transaction itself - once, after its last attempt.
 - **The actual change.** A movement stores the balance after minus the
